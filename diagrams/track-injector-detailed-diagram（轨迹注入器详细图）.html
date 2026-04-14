@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>track_injector Detailed Diagram（轨迹注入器详细图）</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #0d1117; color: #c9d1d9; padding: 28px 18px 80px; }
+  .container { max-width: 1320px; margin: 0 auto; }
+  h1 { color: #58a6ff; font-size: 30px; margin-bottom: 8px; }
+  .subtitle { color: #8b949e; font-size: 14px; line-height: 1.8; margin-bottom: 24px; max-width: 1080px; }
+  .section { background: #11161d; border: 1px solid #21262d; border-radius: 18px; padding: 18px; margin-bottom: 22px; }
+  .label { color: #58a6ff; font-size: 12px; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase; margin-bottom: 12px; }
+  .title { font-size: 22px; margin-bottom: 8px; }
+  .desc { color: #8b949e; font-size: 13px; line-height: 1.75; margin-bottom: 14px; }
+  .flow { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; margin-bottom: 12px; }
+  .arrow { align-self: center; color: #3fb950; font-size: 26px; font-weight: 700; }
+  .box { flex: 1 1 185px; min-width: 175px; background: #161b22; border: 1px solid #21262d; border-radius: 14px; padding: 14px; }
+  .box b { display: block; color: #58a6ff; font-size: 14px; margin-bottom: 6px; }
+  .box p { color: #b7c0ca; font-size: 12px; line-height: 1.7; }
+  .box.good { background: #102318; border-color: #1f6b3b; }
+  .box.good b { color: #86efac; }
+  .box.warn { background: #2a1f10; border-color: #6f4f12; }
+  .box.warn b { color: #fbbf24; }
+  .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  .card { background: #161b22; border: 1px solid #21262d; border-radius: 14px; padding: 14px; }
+  .card h3 { color: #fbbf24; font-size: 13px; margin-bottom: 10px; }
+  .card ul { padding-left: 18px; color: #b7c0ca; font-size: 12px; line-height: 1.75; }
+  .card li { margin-bottom: 5px; }
+  .code { font-family: "JetBrains Mono", monospace; background: #0b1016; border: 1px solid #202a35; border-radius: 6px; padding: 1px 6px; font-size: 11px; color: #e6edf3; }
+  .copy-btn { position: fixed; top: 16px; right: 16px; border: none; background: #238636; color: #fff; border-radius: 999px; padding: 11px 16px; cursor: pointer; font-weight: 700; }
+  .copy-btn:hover { background: #2ea043; }
+  .copy-btn.copied { background: #1a7f37; }
+  @media (max-width: 1100px) { .grid4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 960px) { .grid2, .grid3, .grid4 { grid-template-columns: 1fr; } .arrow { width: 100%; text-align: center; } }
+</style>
+</head>
+<body>
+<button class="copy-btn" onclick="copyAsImage(this)">Copy as image</button>
+<div class="container" id="diagram">
+  <h1>`track_injector` 详细功能逻辑图</h1>
+  <div class="subtitle">
+    这张图专门对应 <span class="code">tools/track_injector_轨迹注入器.py</span>。它不是画轨迹的 GUI，而是把
+    <span class="code">track_scenarios.json</span> 里的离散点，按时间顺序通过串口发给 Node A。
+    你可以把它理解成“测试场景播放器 + 会话状态记录器”。图里把 <span class="code">main()</span>、<span class="code">run_scenario()</span>、
+    参数、session 字段、发点循环、输出文件都拆成了源码可对照的块。
+  </div>
+
+  <div class="section">
+    <div class="label">Role</div>
+    <div class="title">1. 这个脚本在整条链路里负责什么</div>
+    <div class="desc">它负责“制造测试输入”。Node A 不会自己凭空出现测试轨迹，而是由这个脚本发 <span class="code">TRACK,x,y</span> 和可选的 <span class="code">RID,...</span> 命令把目标轨迹喂给设备。</div>
+    <div class="flow">
+      <div class="box"><b>输入</b><p><span class="code">track_scenarios.json</span><br>场景名、描述、点列表</p></div>
+      <div class="arrow">→</div>
+      <div class="box warn"><b>主处理</b><p><span class="code">main()</span> 负责准备串口与参数<br><span class="code">run_scenario()</span> 负责逐点注入</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>对设备输出</b><p><span class="code">STATUS</span><br><span class="code">RID,OK/MISSING/SUSPICIOUS</span><br><span class="code">TRACK,x,y</span><br><span class="code">TRACK,CLEAR</span><br><span class="code">RESET</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>对本地输出</b><p><span class="code">latest_test_session.json</span><br><span class="code">session_logs/*.jsonl</span></p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Main Function</div>
+    <div class="title">2. `main()` 的完整流程</div>
+    <div class="desc">`main()` 的职责不是发每一个点，而是完成启动、参数解析、串口连接、后台读串口、场景遍历和最后收尾。</div>
+    <div class="flow">
+      <div class="box"><b>load_scenarios()</b><p>从 <span class="code">SCENARIO_FILE</span> 读取所有场景<br>每个场景至少包含 <span class="code">description</span> 和 <span class="code">points</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>argparse</b><p>定义串口参数、节奏参数、RID 参数、输出文件参数</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>resolve_path()</b><p>把相对路径转成相对于项目根目录的绝对路径<br>避免从不同工作目录运行时写错地方</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>write_session_json()</b><p>先写一份 <span class="code">IDLE</span> 初始状态<br>告诉别的工具“当前还没有开始测试”</p></div>
+      <div class="arrow">→</div>
+      <div class="box warn"><b>serial.Serial()</b><p>按 <span class="code">--port</span> 和 <span class="code">--baud</span> 打开串口<br>失败就打印错误并 <span class="code">return 1</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>read_serial_background()</b><p>起一个后台线程持续读 ESP32 返回<br>纯粹用于终端观察，不参与业务判定</p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>遍历场景</b><p>根据 <span class="code">--scenario</span> 选择单场景或全部场景<br>逐个调用 <span class="code">run_scenario()</span></p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Main Parameters</div>
+    <div class="title">3. `main()` 参数图</div>
+    <div class="desc">这些参数决定“往哪个设备发”“以什么节奏发”“把过程记到哪里”。</div>
+    <div class="grid3">
+      <div class="card">
+        <h3>串口连接参数</h3>
+        <ul>
+          <li><span class="code">--port</span>：必填。串口号，例如 <span class="code">COM4</span>。</li>
+          <li><span class="code">--baud</span>：波特率，默认 <span class="code">115200</span>。</li>
+          <li><span class="code">--boot-wait</span>：串口打开后，给 ESP32 预留启动时间，默认 <span class="code">3.5</span> 秒。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>轨迹执行参数</h3>
+        <ul>
+          <li><span class="code">--scenario</span>：跑哪个场景。可选某个场景名或 <span class="code">all</span>。</li>
+          <li><span class="code">--interval</span>：两次 <span class="code">TRACK</span> 命令之间的间隔秒数，默认 <span class="code">0.18</span>。</li>
+          <li><span class="code">--hold-repeat</span>：同一个点重复发多少次，默认 <span class="code">2</span>。这个参数会直接影响“停留感”。</li>
+          <li><span class="code">--settle</span>：发完 <span class="code">TRACK,CLEAR</span> 后等待多久，默认 <span class="code">1.5</span> 秒。</li>
+          <li><span class="code">--rid</span>：可选。先发一条 <span class="code">RID,OK</span>、<span class="code">RID,MISSING</span> 或 <span class="code">RID,SUSPICIOUS</span>。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>文件输出参数</h3>
+        <ul>
+          <li><span class="code">--session-file</span>：当前会话快照 JSON，默认 <span class="code">captures/latest_test_session.json</span>。</li>
+          <li><span class="code">--session-log-dir</span>：时间线目录，默认 <span class="code">captures/session_logs</span>。</li>
+          <li>这两个路径都会经过 <span class="code">resolve_path()</span> 处理，支持相对路径。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Function Map</div>
+    <div class="title">4. 每个函数到底负责什么</div>
+    <div class="grid4">
+      <div class="card">
+        <h3>路径与配置</h3>
+        <ul>
+          <li><span class="code">resolve_path()</span>：把相对路径拼到项目根目录。</li>
+          <li><span class="code">load_scenarios()</span>：读取场景 JSON 文件。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>状态写入</h3>
+        <ul>
+          <li><span class="code">build_session_payload()</span>：统一构建会话状态字典。</li>
+          <li><span class="code">write_session_json()</span>：先写临时文件再替换，防止半写入。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>串口通信</h3>
+        <ul>
+          <li><span class="code">send_line()</span>：发送一行命令，附加换行并立刻 flush。</li>
+          <li><span class="code">read_serial_background()</span>：读设备回显并打印成 <span class="code">[ESP32] ...</span>。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>场景执行</h3>
+        <ul>
+          <li><span class="code">run_scenario()</span>：执行单个场景，是整份脚本的核心。</li>
+          <li><span class="code">main()</span>：负责把上面所有零件串起来。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Scenario Execution</div>
+    <div class="title">5. `run_scenario()` 的完整逻辑</div>
+    <div class="desc">这里是真正“发轨迹”的地方。代码先把整个场景标记成 RUNNING，再进入双层循环发送点，最后清轨并进入 DONE。</div>
+    <div class="flow">
+      <div class="box warn"><b>可选发送 RID</b><p>如果 <span class="code">rid</span> 不是空值<br>先发 <span class="code">RID,&lt;状态&gt;</span><br>然后固定等待 <span class="code">0.3s</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>准备场景信息</b><p>取出 <span class="code">description</span> 和 <span class="code">points</span><br>记录 <span class="code">started_ms</span><br>计算 <span class="code">rid_mode = rid or \"UNCHANGED\"</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>写 RUNNING 状态</b><p>将场景名、场景总数、点总数、repeat 总数写入 session JSON</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>append_session_event()</b><p>追加 <span class="code">session_started</span><br>让时间线知道这一轮测试开始了</p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>进入双层循环</b><p>外层遍历点序号<br>内层按 <span class="code">hold_repeat</span> 重发同一点</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Point Loop</div>
+    <div class="title">6. 单个点如何被发送和记录</div>
+    <div class="desc">这是最关键的一段。每发一个点，不只是发串口命令，还会同步刷新当前进度快照和 timeline 事件。</div>
+    <div class="flow">
+      <div class="box"><b>取当前点</b><p>从 <span class="code">points</span> 拿到 <span class="code">(x_mm, y_mm)</span><br>外层索引是 <span class="code">point_index</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>重复发送</b><p>内层从 <span class="code">1..hold_repeat</span><br>得到 <span class="code">repeat_index</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box warn"><b>send_line()</b><p>实际发出 <span class="code">TRACK,{x:.1f},{y:.1f}</span><br>比如 <span class="code">TRACK,-600.0,1800.0</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>更新累计计数</b><p><span class="code">points_sent += 1</span><br>这个计数是“命令次数”，不是唯一点数</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>build_session_payload()</b><p>刷新 <span class="code">point_index</span>、<span class="code">repeat_index</span>、<span class="code">points_sent</span>、<span class="code">current_x_mm</span>、<span class="code">current_y_mm</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>write_session_json()</b><p>覆盖写入当前快照<br>别的脚本可实时看到当前位置</p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>append_session_event()</b><p>追加 <span class="code">track_point_sent</span><br>并写入本次点的坐标、索引、累计发送次数</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>time.sleep(interval_s)</b><p>控制相邻两次 TRACK 的时间间隔</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Finish Logic</div>
+    <div class="title">7. 场景结束时做了什么</div>
+    <div class="flow">
+      <div class="box"><b>TRACK,CLEAR</b><p>告诉设备“模拟轨迹结束，清掉当前轨迹”</p></div>
+      <div class="arrow">→</div>
+      <div class="box warn"><b>SETTLING</b><p>把 session 状态改成 <span class="code">SETTLING</span><br>写入 <span class="code">session_settling</span><br>等待 <span class="code">settle_s</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>DONE</b><p>写入最终 <span class="code">finished_ms</span><br>写一条 <span class="code">session_finished</span></p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Session Fields</div>
+    <div class="title">8. `build_session_payload()` 里的字段说明</div>
+    <div class="grid3">
+      <div class="card">
+        <h3>场景标识字段</h3>
+        <ul>
+          <li><span class="code">scenario_name</span>：当前正在跑的场景名。</li>
+          <li><span class="code">scenario_description</span>：场景说明文字。</li>
+          <li><span class="code">scenario_index</span>：当前是第几个场景。</li>
+          <li><span class="code">scenario_total</span>：本次总共会跑多少个场景。</li>
+          <li><span class="code">rid_mode</span>：本轮 RID 模式，若没指定就是 <span class="code">UNCHANGED</span>。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>进度字段</h3>
+        <ul>
+          <li><span class="code">point_total</span>：场景中唯一点的数量。</li>
+          <li><span class="code">repeat_total</span>：每个点要重复发多少次。</li>
+          <li><span class="code">point_index</span>：当前走到第几个点。</li>
+          <li><span class="code">repeat_index</span>：当前点的第几次重复。</li>
+          <li><span class="code">points_sent</span>：累计发了多少条 TRACK 命令。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>状态与时间字段</h3>
+        <ul>
+          <li><span class="code">status</span>：<span class="code">IDLE / RUNNING / SETTLING / DONE / ALL_DONE</span>。</li>
+          <li><span class="code">available</span>：只要不是 <span class="code">IDLE</span> 就是 true。</li>
+          <li><span class="code">current_x_mm / current_y_mm</span>：当前正在发送的点坐标。</li>
+          <li><span class="code">started_ms</span>：本场景开始时间。</li>
+          <li><span class="code">updated_ms</span>：这次 payload 生成时刻。</li>
+          <li><span class="code">finished_ms</span>：本场景或所有场景结束时间。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Scenario Geometry</div>
+    <div class="title">9. 场景里的“轨迹逻辑”到底是什么</div>
+    <div class="desc">这里不是连续曲线求解，而是离散点序列播放。轨迹看起来在动，是因为设备接收到一串按时间排序的点。</div>
+    <div class="grid3">
+      <div class="card">
+        <h3>`left_to_right`</h3>
+        <ul>
+          <li>固定 <span class="code">y=1800</span>。</li>
+          <li><span class="code">x</span> 从负到正递增。</li>
+          <li>含义：目标从左向右横穿。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>`right_to_left`</h3>
+        <ul>
+          <li>固定 <span class="code">y=1800</span>。</li>
+          <li><span class="code">x</span> 从正到负递减。</li>
+          <li>含义：目标从右向左横穿。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>`enter_hold_leave`</h3>
+        <ul>
+          <li>通常固定 <span class="code">x=0</span>。</li>
+          <li><span class="code">y</span> 先接近，再在近点重复，再离开。</li>
+          <li>含义：目标进入中心区域、短暂停留、再退出。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">File Relationship</div>
+    <div class="title">10. 它和别的文件是什么关系</div>
+    <div class="flow">
+      <div class="box"><b>track_scenarios.json</b><p>提供场景点和场景说明</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>track_injector</b><p>读取场景并发送串口命令</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>src/main.cpp</b><p>在设备端接收 <span class="code">TRACK</span> / <span class="code">RID</span> / <span class="code">RESET</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>node_a_serial_bridge</b><p>再把设备输出转成结构化 JSON</p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>session_log_utils</b><p>为注入过程补充统一 timeline 事件</p></div>
+    </div>
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" integrity="sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H" crossorigin="anonymous"></script>
+<script>
+async function copyAsImage(btn) {
+  btn.textContent = "Rendering...";
+  try {
+    const canvas = await html2canvas(document.getElementById("diagram"), { backgroundColor: "#0d1117", scale: 2, useCORS: true });
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+    if (!blob) throw new Error("Canvas toBlob returned null");
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    btn.textContent = "Copied!";
+    btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = "Copy as image"; btn.classList.remove("copied"); }, 1800);
+  } catch (err) {
+    console.error(err);
+    btn.textContent = "Failed";
+    setTimeout(() => { btn.textContent = "Copy as image"; btn.classList.remove("copied"); }, 2200);
+  }
+}
+</script>
+</body>
+</html>

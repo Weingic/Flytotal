@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flytotal Beginner Logic Map（小白版总逻辑图）</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel2: #11161d;
+    --line: #30363d;
+    --text: #c9d1d9;
+    --muted: #8b949e;
+    --blue: #58a6ff;
+    --green: #3fb950;
+    --yellow: #fbbf24;
+    --purple: #bc8cff;
+    --red: #f85149;
+  }
+  body {
+    background: radial-gradient(circle at top, #172131 0%, var(--bg) 35%);
+    color: var(--text);
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    padding: 28px 18px 80px;
+  }
+  .container { max-width: 1320px; margin: 0 auto; }
+  h1 { color: var(--blue); font-size: 32px; margin-bottom: 10px; }
+  .subtitle { color: var(--muted); font-size: 15px; line-height: 1.8; margin-bottom: 28px; max-width: 1000px; }
+  .section {
+    background: rgba(13, 17, 23, 0.72);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 20px;
+    padding: 20px;
+    margin-bottom: 24px;
+  }
+  .section-label {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px; font-weight: 800; letter-spacing: 1.5px;
+    text-transform: uppercase; margin-bottom: 14px;
+  }
+  .section-label .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .blue { color: var(--blue); } .blue .dot { background: var(--blue); }
+  .green { color: var(--green); } .green .dot { background: var(--green); }
+  .yellow { color: var(--yellow); } .yellow .dot { background: var(--yellow); }
+  .purple { color: var(--purple); } .purple .dot { background: var(--purple); }
+  .title { font-size: 24px; margin-bottom: 8px; }
+  .desc { color: var(--muted); font-size: 13px; line-height: 1.8; margin-bottom: 16px; }
+  .flow { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; margin-bottom: 12px; }
+  .arrow { align-self: center; color: #5b6675; font-size: 26px; font-weight: 700; }
+  .arrow.blue { color: var(--blue); }
+  .arrow.green { color: var(--green); }
+  .arrow.yellow { color: var(--yellow); }
+  .box {
+    flex: 1 1 190px;
+    min-width: 180px;
+    background: var(--panel);
+    border: 1px solid #21262d;
+    border-radius: 14px;
+    padding: 14px;
+  }
+  .box b { display: block; font-size: 14px; margin-bottom: 6px; }
+  .box p { color: #b7c0ca; font-size: 12px; line-height: 1.7; }
+  .box.client { background: #1a1f2e; border-color: #2d3548; }
+  .box.client b { color: #93c5fd; }
+  .box.good { background: #102318; border-color: rgba(63,185,80,0.45); }
+  .box.good b { color: #86efac; }
+  .box.warn { background: #2a1f10; border-color: rgba(210,153,34,0.45); }
+  .box.warn b { color: var(--yellow); }
+  .box.special { background: #1c1730; border-color: rgba(188,140,255,0.35); }
+  .box.special b { color: var(--purple); }
+  .grid2, .grid3, .grid4 { display: grid; gap: 12px; }
+  .grid2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .grid4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .card {
+    background: var(--panel2);
+    border: 1px solid #21262d;
+    border-radius: 14px;
+    padding: 14px;
+  }
+  .card h3 { color: var(--yellow); font-size: 13px; margin-bottom: 10px; }
+  .card ul { padding-left: 18px; color: #b7c0ca; font-size: 12px; line-height: 1.75; }
+  .card li { margin-bottom: 5px; }
+  .banner {
+    border-radius: 14px;
+    padding: 16px 18px;
+    margin-bottom: 16px;
+  }
+  .banner.problem { background: linear-gradient(135deg, #2d1215, #1c1012); border: 1px solid rgba(248,81,73,0.35); }
+  .banner.solution { background: linear-gradient(135deg, #0c2d1a, #0d1117); border: 1px solid rgba(63,185,80,0.35); }
+  .banner h2 { font-size: 15px; margin-bottom: 6px; }
+  .banner.problem h2 { color: var(--red); }
+  .banner.solution h2 { color: var(--green); }
+  .banner p { color: #b1bac4; font-size: 13px; line-height: 1.7; }
+  .guard { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 10px; }
+  .guard-icon {
+    width: 22px; height: 22px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: #064e3b; color: #6ee7b7; font-size: 11px; font-weight: 800; flex-shrink: 0;
+  }
+  .guard-text { color: #b7c0ca; font-size: 13px; line-height: 1.7; }
+  .code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    background: #0b1016; border: 1px solid #202a35;
+    color: #e6edf3; border-radius: 6px; padding: 1px 6px; font-size: 11px;
+  }
+  .copy-btn {
+    position: fixed; top: 16px; right: 16px;
+    border: none; background: #238636; color: #fff; border-radius: 999px;
+    padding: 11px 16px; cursor: pointer; font-weight: 700;
+  }
+  .copy-btn:hover { background: #2ea043; }
+  .copy-btn.copied { background: #1a7f37; }
+  @media (max-width: 1100px) { .grid4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 960px) { .grid2, .grid3, .grid4 { grid-template-columns: 1fr; } .arrow { width: 100%; text-align: center; } }
+</style>
+</head>
+<body>
+<button class="copy-btn" onclick="copyAsImage(this)">Copy as image</button>
+<div class="container" id="diagram">
+  <h1>Flytotal 小白版总逻辑图</h1>
+  <div class="subtitle">
+    这不是“高手速读版”，而是“第一次看也能跟上”的版本。你可以把整个项目想成一条流水线：
+    先有人把测试目标喂给设备，再由设备自己处理，再把结果吐回来，最后再由 Python 脚本整理成你能看的 JSON、图片和日志。
+  </div>
+
+  <div class="banner problem">
+    <h2>为什么你之前会看不懂</h2>
+    <p>因为原来的图更像“给已经懂串口、任务、tracker、session 的人看的工程图”。如果你还不熟这些词，光看函数名很难把一整条链串起来。</p>
+  </div>
+  <div class="banner solution">
+    <h2>这张图怎么读</h2>
+    <p>先只看“5 个角色”，再看“一轮测试从头到尾怎么走”，最后再看“参数到底是什么意思”。不要一开始就钻到某个函数里。</p>
+  </div>
+
+  <div class="section">
+    <div class="section-label blue"><span class="dot"></span> FIVE ROLES</div>
+    <div class="title">1. 先记住 5 个角色</div>
+    <div class="desc">你先把它们理解成人类分工，而不是代码文件。</div>
+    <div class="flow">
+      <div class="box client"><b>角色 1：出题的人</b><p><span class="code">track_scenarios.json</span><br>里面写着“目标要怎么移动”，比如从左到右，或者靠近后停一下。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box warn"><b>角色 2：发题的人</b><p><span class="code">track_injector</span><br>把场景里的点一个一个发给设备。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box good"><b>角色 3：真正干活的人</b><p><span class="code">src/main.cpp</span><br>设备端主程序。它决定风险、云台、事件、上行消息。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box special"><b>角色 4：翻译员</b><p><span class="code">node_a_serial_bridge</span><br>把设备吐出来的文本翻译成结构化 JSON。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box client"><b>角色 5：摄像头记录员</b><p><span class="code">vision_bridge</span><br>负责视觉锁定、抓拍、保存图片和视觉状态。</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label green"><span class="dot"></span> ONE FULL TEST</div>
+    <div class="title">2. 一轮测试从开始到结束怎么走</div>
+    <div class="desc">如果你只想知道“我一按运行，到底发生了什么”，就看这一段。</div>
+    <div class="flow">
+      <div class="box client"><b>第 1 步</b><p><span class="code">track_injector</span> 读取一个测试场景。<br>比如：先发点 <span class="code">(-600, 1800)</span>，再发点 <span class="code">(-450, 1800)</span>……</p></div>
+      <div class="arrow green">→</div>
+      <div class="box warn"><b>第 2 步</b><p>它通过串口给设备发命令。<br>最常见的是 <span class="code">TRACK,x,y</span>。</p></div>
+      <div class="arrow green">→</div>
+      <div class="box good"><b>第 3 步</b><p><span class="code">main.cpp</span> 收到命令后，更新内部“目标位置、风险状态、事件状态、云台状态”。</p></div>
+      <div class="arrow green">→</div>
+      <div class="box special"><b>第 4 步</b><p>设备再把自己的状态打印出来。<br>比如：<span class="code">STATUS,...</span>、<span class="code">SELFTEST,...</span>、<span class="code">UPLINK,EVENT,...</span>。</p></div>
+      <div class="arrow green">→</div>
+      <div class="box client"><b>第 5 步</b><p><span class="code">node_a_serial_bridge</span> 把这些文本整理成 JSON。<br>这样网页和其他脚本就不用自己解析文本了。</p></div>
+    </div>
+    <div class="flow">
+      <div class="box client"><b>第 6 步</b><p>如果同时开着 <span class="code">vision_bridge</span>，它会看摄像头画面、框选目标、锁定并抓拍。</p></div>
+      <div class="arrow yellow">→</div>
+      <div class="box good"><b>第 7 步</b><p>最终你会得到 4 类结果：<br>设备状态 JSON、测试结论 JSON、抓拍图片、统一时间线日志。</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label blue"><span class="dot"></span> MAIN PIPELINE</div>
+    <div class="title">3. 用最人话的方式看文件关系</div>
+    <div class="flow">
+      <div class="box client"><b>场景文件</b><p>只负责存“测试题目”。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box warn"><b>track_injector</b><p>只负责“把题目发给设备”。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box good"><b>main.cpp</b><p>只负责“设备收到后到底怎么反应”。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box special"><b>node_a_serial_bridge</b><p>只负责“把设备反应翻译成 JSON”。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box client"><b>网页 / 你自己</b><p>最后只需要看结果，不用懂串口原始文本。</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label yellow"><span class="dot"></span> WHAT EACH FILE DOES</div>
+    <div class="title">4. 每个关键文件到底是干什么的</div>
+    <div class="grid4">
+      <div class="card">
+        <h3>`track_injector_轨迹注入器.py`</h3>
+        <ul>
+          <li>读取测试场景。</li>
+          <li>按顺序发 <span class="code">TRACK</span> 点。</li>
+          <li>写当前测试进度到 <span class="code">latest_test_session.json</span>。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>`src/main.cpp`</h3>
+        <ul>
+          <li>设备端主程序。</li>
+          <li>处理主机命令。</li>
+          <li>计算风险、事件、云台状态。</li>
+          <li>把状态打印成上行文本。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>`node_a_serial_bridge.py`</h3>
+        <ul>
+          <li>自动轮询设备状态。</li>
+          <li>解析设备文本。</li>
+          <li>输出统一 JSON。</li>
+          <li>在测试结束时给出 PASS / WARN / FAIL。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>`vision_bridge.py`</h3>
+        <ul>
+          <li>打开摄像头或视频。</li>
+          <li>人工选框后跟踪目标。</li>
+          <li>自动或手动抓拍。</li>
+          <li>输出视觉状态 JSON 和图片。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label yellow"><span class="dot"></span> BEGINNER PARAMS</div>
+    <div class="title">5. 你最常见的参数，直接翻成人话</div>
+    <div class="grid3">
+      <div class="card">
+        <h3>`track_injector` 参数</h3>
+        <ul>
+          <li><span class="code">--port</span>：连的是哪个串口。</li>
+          <li><span class="code">--baud</span>：串口传输速度。通常保持默认就行。</li>
+          <li><span class="code">--scenario</span>：跑哪个测试场景。</li>
+          <li><span class="code">--interval</span>：两次发点之间隔多久。</li>
+          <li><span class="code">--hold-repeat</span>：同一个点重复发几次。越大越像“停留”。</li>
+          <li><span class="code">--settle</span>：发完清轨命令后再等多久。</li>
+          <li><span class="code">--rid</span>：先给设备一个 RID 状态。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>`node_a_serial_bridge` 参数</h3>
+        <ul>
+          <li><span class="code">--status-interval</span>：多久问一次设备“你现在状态怎样”。</li>
+          <li><span class="code">--selftest-interval</span>：多久问一次设备“你的配置和健康状态怎样”。</li>
+          <li><span class="code">--summary-interval</span>：多久问一次设备“统计汇总怎样”。</li>
+          <li><span class="code">--offline-timeout</span>：多久没更新就认为设备离线。</li>
+          <li><span class="code">--events-limit</span>：最多保留多少条事件。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>`vision_bridge` 参数</h3>
+        <ul>
+          <li><span class="code">--source</span>：摄像头编号或视频文件路径。</li>
+          <li><span class="code">--tracker</span>：跟踪器类型，简单理解成“框选后怎么继续跟住目标”。</li>
+          <li><span class="code">--capture-cooldown</span>：两次自动抓拍之间至少隔多久。</li>
+          <li><span class="code">--event-id</span>：给抓拍文件名加一个标签。</li>
+          <li><span class="code">--status-file</span>：把最新视觉状态写到哪个 JSON 文件。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label purple"><span class="dot"></span> TERMS</div>
+    <div class="title">6. 你现在最容易卡住的名词解释</div>
+    <div class="grid4">
+      <div class="card">
+        <h3>串口 `port`</h3>
+        <ul>
+          <li>就是电脑和设备通信的“门牌号”。</li>
+          <li>Windows 下常见是 <span class="code">COM3</span>、<span class="code">COM4</span> 这种。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>波特率 `baud`</h3>
+        <ul>
+          <li>可以简单理解成“串口说话速度”。</li>
+          <li>两边必须一致，不一致就会乱码。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>`session`</h3>
+        <ul>
+          <li>就是“当前这轮测试”的状态记录。</li>
+          <li>例如：正在跑哪个场景、跑到第几个点、现在是 RUNNING 还是 DONE。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>`tracker`</h3>
+        <ul>
+          <li>不是检测器。</li>
+          <li>它更像“你先框一个目标，后面程序尽量继续跟住这个框”。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label green"><span class="dot"></span> IF YOU ONLY REMEMBER 3 THINGS</div>
+    <div class="title">7. 你先记住这 3 件事就够了</div>
+    <div class="guard"><div class="guard-icon">1</div><div class="guard-text"><span class="code">track_injector</span> 是“喂测试数据的人”，不是处理结果的人。</div></div>
+    <div class="guard"><div class="guard-icon">2</div><div class="guard-text"><span class="code">main.cpp</span> 才是设备端真正做判断、做状态变化的地方。</div></div>
+    <div class="guard"><div class="guard-icon">3</div><div class="guard-text"><span class="code">node_a_serial_bridge</span> 和 <span class="code">vision_bridge</span> 都更像“记录员”，一个记设备状态，一个记视觉状态。</div></div>
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" integrity="sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H" crossorigin="anonymous"></script>
+<script>
+async function copyAsImage(btn) {
+  btn.textContent = "Rendering...";
+  try {
+    const canvas = await html2canvas(document.getElementById("diagram"), { backgroundColor: "#0d1117", scale: 2, useCORS: true });
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+    if (!blob) throw new Error("Canvas toBlob returned null");
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    btn.textContent = "Copied!";
+    btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = "Copy as image"; btn.classList.remove("copied"); }, 1800);
+  } catch (err) {
+    console.error(err);
+    btn.textContent = "Failed";
+    setTimeout(() => { btn.textContent = "Copy as image"; btn.classList.remove("copied"); }, 2200);
+  }
+}
+</script>
+</body>
+</html>

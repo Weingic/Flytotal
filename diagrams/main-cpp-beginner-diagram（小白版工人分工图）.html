@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Main.cpp Beginner Diagram（小白版工人分工图）</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel2: #11161d;
+    --text: #c9d1d9;
+    --muted: #8b949e;
+    --blue: #58a6ff;
+    --green: #3fb950;
+    --yellow: #fbbf24;
+    --purple: #bc8cff;
+  }
+  body {
+    background: radial-gradient(circle at top, #172131 0%, var(--bg) 35%);
+    color: var(--text);
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    padding: 28px 18px 80px;
+  }
+  .container { max-width: 1280px; margin: 0 auto; }
+  h1 { color: var(--blue); font-size: 32px; margin-bottom: 10px; }
+  .subtitle { color: var(--muted); font-size: 15px; line-height: 1.8; margin-bottom: 26px; max-width: 980px; }
+  .section {
+    background: rgba(13, 17, 23, 0.72);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 20px;
+    padding: 20px;
+    margin-bottom: 24px;
+  }
+  .section-label {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px; font-weight: 800; letter-spacing: 1.5px;
+    text-transform: uppercase; margin-bottom: 14px;
+  }
+  .section-label .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .blue { color: var(--blue); } .blue .dot { background: var(--blue); }
+  .green { color: var(--green); } .green .dot { background: var(--green); }
+  .yellow { color: var(--yellow); } .yellow .dot { background: var(--yellow); }
+  .purple { color: var(--purple); } .purple .dot { background: var(--purple); }
+  .title { font-size: 24px; margin-bottom: 8px; }
+  .desc { color: var(--muted); font-size: 13px; line-height: 1.8; margin-bottom: 16px; }
+  .flow { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; margin-bottom: 12px; }
+  .arrow { align-self: center; color: #5b6675; font-size: 26px; font-weight: 700; }
+  .arrow.blue { color: var(--blue); }
+  .arrow.green { color: var(--green); }
+  .box {
+    flex: 1 1 190px;
+    min-width: 180px;
+    background: var(--panel);
+    border: 1px solid #21262d;
+    border-radius: 14px;
+    padding: 14px;
+  }
+  .box b { display: block; font-size: 14px; margin-bottom: 6px; }
+  .box p { color: #b7c0ca; font-size: 12px; line-height: 1.7; }
+  .box.client { background: #1a1f2e; border-color: #2d3548; }
+  .box.client b { color: #93c5fd; }
+  .box.good { background: #102318; border-color: rgba(63,185,80,0.45); }
+  .box.good b { color: #86efac; }
+  .box.warn { background: #2a1f10; border-color: rgba(210,153,34,0.45); }
+  .box.warn b { color: var(--yellow); }
+  .box.special { background: #1c1730; border-color: rgba(188,140,255,0.35); }
+  .box.special b { color: var(--purple); }
+  .grid2, .grid3 { display: grid; gap: 12px; }
+  .grid2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .card { background: var(--panel2); border: 1px solid #21262d; border-radius: 14px; padding: 14px; }
+  .card h3 { color: var(--yellow); font-size: 14px; margin-bottom: 10px; }
+  .card ul { padding-left: 18px; color: #b7c0ca; font-size: 12px; line-height: 1.75; }
+  .card li { margin-bottom: 5px; }
+  .guard { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 10px; }
+  .guard-icon {
+    width: 22px; height: 22px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: #064e3b; color: #6ee7b7; font-size: 11px; font-weight: 800; flex-shrink: 0;
+  }
+  .guard-text { color: #b7c0ca; font-size: 13px; line-height: 1.75; }
+  .code { font-family: "JetBrains Mono", monospace; background: #0b1016; border: 1px solid #202a35; border-radius: 6px; padding: 1px 6px; font-size: 11px; color: #e6edf3; }
+  .copy-btn { position: fixed; top: 16px; right: 16px; border: none; background: #238636; color: #fff; border-radius: 999px; padding: 11px 16px; cursor: pointer; font-weight: 700; }
+  .copy-btn:hover { background: #2ea043; }
+  .copy-btn.copied { background: #1a7f37; }
+  @media (max-width: 960px) { .grid2, .grid3 { grid-template-columns: 1fr; } .arrow { width: 100%; text-align: center; } }
+</style>
+</head>
+<body>
+<button class="copy-btn" onclick="copyAsImage(this)">Copy as image</button>
+<div class="container" id="diagram">
+  <h1>`main.cpp` 小白版工人分工图</h1>
+  <div class="subtitle">
+    如果你一看到 <span class="code">RadarTask</span>、<span class="code">TrackingTask</span>、<span class="code">CloudTask</span> 就头大，
+    可以先别把它们当“任务”看，而是把它们当成设备里的 3 个工人。一个工人负责“看目标”，一个工人负责“做判断和控制”，一个工人负责“往外汇报”。
+  </div>
+
+  <div class="section">
+    <div class="section-label blue"><span class="dot"></span> ENTRY</div>
+    <div class="title">1. 设备一上电，先发生什么</div>
+    <div class="desc">Arduino/ESP32 里没有你平时常见的业务 `main()`。这里你可以把 <span class="code">setup()</span> 理解成“开工前准备”，把 <span class="code">loop()</span> 理解成“主线程自己退场”。</div>
+    <div class="flow">
+      <div class="box client"><b>setup()</b><p>先打开监视串口，等待一点时间，让设备稳定启动。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box warn"><b>清空旧状态</b><p>把统计、handover、last event、runtime event 这些运行时状态先重置掉。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box good"><b>创建 3 个工人</b><p><span class="code">RadarTask</span>、<span class="code">TrackingTask</span>、<span class="code">CloudTask</span> 开始工作。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box special"><b>loop()</b><p>主线程不再自己干业务，真正的事情都交给这 3 个工人。</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label green"><span class="dot"></span> THREE WORKERS</div>
+    <div class="title">2. 设备里的 3 个工人分别干什么</div>
+    <div class="flow">
+      <div class="box client"><b>工人 1：RadarTask</b><p>负责“看见目标在哪里”。<br>来源可以是真实雷达，也可以是电脑发来的模拟轨迹。</p></div>
+      <div class="arrow green">→</div>
+      <div class="box warn"><b>工人 2：TrackingTask</b><p>负责“想一想现在该怎么办”。<br>包括风险判断、视觉状态推导、云台控制、处理主机命令。</p></div>
+      <div class="arrow green">→</div>
+      <div class="box good"><b>工人 3：CloudTask</b><p>负责“把结果往外说”。<br>把当前状态、轨迹、事件打包成串口上行文本。</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label yellow"><span class="dot"></span> WORKER 1</div>
+    <div class="title">3. 工人 1：`RadarTask` 做什么</div>
+    <div class="desc">你可以把它理解成“目标位置采集员”。它的工作不是下判断，而是把“目标现在在哪”这件事弄清楚。</div>
+    <div class="flow">
+      <div class="box client"><b>看来源</b><p>先看现在有没有“模拟轨迹”。<br>如果电脑正在发 <span class="code">TRACK,x,y</span>，它会优先用这个。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box"><b>看真实雷达</b><p>如果没有有效模拟轨迹，就继续读真实雷达串口数据。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box warn"><b>整理成统一轨迹</b><p>把位置送进 <span class="code">TrackManager</span>，判断是不是 active、是不是 confirmed、是不是丢了。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box good"><b>写到共享区</b><p>把结果写进 <span class="code">globalData.radar_track</span>，后面的工人就能直接用。</p></div>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <h3>它最关心的输入</h3>
+        <ul>
+          <li>真实雷达字节流。</li>
+          <li>模拟轨迹状态。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>它最重要的输出</h3>
+        <ul>
+          <li>当前目标坐标。</li>
+          <li>轨迹是否 active。</li>
+          <li>轨迹是否 confirmed。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label yellow"><span class="dot"></span> WORKER 2</div>
+    <div class="title">4. 工人 2：`TrackingTask` 做什么</div>
+    <div class="desc">这是整个设备最核心的工人。你可以把它理解成“决策员 + 控制员”。前面的工人只负责告诉它目标在哪，它负责决定接下来该怎么做。</div>
+    <div class="flow">
+      <div class="box client"><b>先收命令</b><p>每轮都先检查电脑有没有发新命令。<br>例如：<span class="code">TRACK</span>、<span class="code">RID</span>、<span class="code">STATUS</span>、<span class="code">RESET</span>。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box"><b>读共享轨迹</b><p>拿到工人 1 写好的轨迹快照和当前 RID 状态。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box warn"><b>做风险判断</b><p>调用 <span class="code">myHunter.update()</span>，决定当前风险分数、风险等级，以及要不要 alert / capture / guardian。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box"><b>推导视觉状态</b><p>根据轨迹活跃情况和触发状态，推导 <span class="code">VISION_IDLE / SEARCHING / LOCKED / LOST</span>。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box"><b>算云台动作</b><p>调用 <span class="code">myGimbalController.update()</span>，决定云台现在该往哪里转。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box good"><b>写回共享区</b><p>把 hunter、risk、vision、capture_ready、gimbal_state 等结果都写回去。</p></div>
+    </div>
+    <div class="grid3">
+      <div class="card">
+        <h3>它最关心的输入</h3>
+        <ul>
+          <li>轨迹是否存在。</li>
+          <li>轨迹坐标和确认状态。</li>
+          <li>RID 状态。</li>
+          <li>主机命令。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>它做出的主要判断</h3>
+        <ul>
+          <li>风险高不高。</li>
+          <li>是否需要触发事件。</li>
+          <li>视觉状态是什么。</li>
+          <li>云台该怎么动。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>你最常看到的结果</h3>
+        <ul>
+          <li><span class="code">risk_score</span></li>
+          <li><span class="code">risk_level</span></li>
+          <li><span class="code">vision_state</span></li>
+          <li><span class="code">gimbal_state</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label yellow"><span class="dot"></span> WORKER 3</div>
+    <div class="title">5. 工人 3：`CloudTask` 做什么</div>
+    <div class="desc">前两个工人都更像在设备内部干活，这个工人负责“把设备内部结果说出去”。所以它最像播报员。</div>
+    <div class="flow">
+      <div class="box client"><b>读共享区</b><p>拿工人 1 和工人 2 已经整理好的统一状态。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box"><b>发心跳</b><p>定期发 <span class="code">UPLINK,HB</span>，相当于“我还活着”。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box"><b>发轨迹快照</b><p>定期发 <span class="code">UPLINK,TRACK</span>，告诉外面当前轨迹情况。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box warn"><b>发事件</b><p>当轨迹变了、事件开了、RID 变了、handover 状态变了时，发 <span class="code">UPLINK,EVENT</span>。</p></div>
+      <div class="arrow blue">→</div>
+      <div class="box good"><b>外部脚本接收</b><p><span class="code">node_a_serial_bridge</span> 就是靠它这些输出，才能整理成 JSON。</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label purple"><span class="dot"></span> HOST COMMANDS</div>
+    <div class="title">6. 电脑发命令进来后，为什么会影响设备</div>
+    <div class="desc">因为这些命令不是“记在日志里就结束了”，而是真的会改设备的内部状态。</div>
+    <div class="grid3">
+      <div class="card">
+        <h3><span class="code">TRACK,x,y</span></h3>
+        <ul>
+          <li>给设备一个模拟目标坐标。</li>
+          <li>工人 1 会优先把它当成当前目标。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="code">RID,...</span></h3>
+        <ul>
+          <li>改当前 RID 模拟状态。</li>
+          <li>会影响风险判断和事件结果。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="code">STATUS / SELFTEST / SUMMARY</span></h3>
+        <ul>
+          <li>不是改状态，而是让设备把当前状态打印出来。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="code">KP / KD</span></h3>
+        <ul>
+          <li>改预测器参数。</li>
+          <li>会影响云台控制感觉。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="code">RESET</span></h3>
+        <ul>
+          <li>清理很多运行时状态。</li>
+          <li>方便开始下一轮干净测试。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>其它命令</h3>
+        <ul>
+          <li><span class="code">SAFE</span>、<span class="code">DEBUG</span>、<span class="code">UPLINK</span> 等，会改变诊断和输出行为。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label green"><span class="dot"></span> REMEMBER</div>
+    <div class="title">7. 你只要先记住这 4 句</div>
+    <div class="guard"><div class="guard-icon">1</div><div class="guard-text"><span class="code">RadarTask</span> 只负责把“目标在哪”这件事弄清楚。</div></div>
+    <div class="guard"><div class="guard-icon">2</div><div class="guard-text"><span class="code">TrackingTask</span> 才是设备里真正做判断和控制的核心。</div></div>
+    <div class="guard"><div class="guard-icon">3</div><div class="guard-text"><span class="code">CloudTask</span> 不做核心判断，它更像播报员。</div></div>
+    <div class="guard"><div class="guard-icon">4</div><div class="guard-text">电脑发进来的命令，最终几乎都会通过 <span class="code">handleHostCommand()</span> 改变这 3 个工人的后续行为。</div></div>
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" integrity="sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H" crossorigin="anonymous"></script>
+<script>
+async function copyAsImage(btn) {
+  btn.textContent = "Rendering...";
+  try {
+    const canvas = await html2canvas(document.getElementById("diagram"), { backgroundColor: "#0d1117", scale: 2, useCORS: true });
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+    if (!blob) throw new Error("Canvas toBlob returned null");
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    btn.textContent = "Copied!";
+    btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = "Copy as image"; btn.classList.remove("copied"); }, 1800);
+  } catch (err) {
+    console.error(err);
+    btn.textContent = "Failed";
+    setTimeout(() => { btn.textContent = "Copy as image"; btn.classList.remove("copied"); }, 2200);
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Main Host Command Map（主机命令影响图）</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #0d1117; color: #c9d1d9; padding: 28px 18px 80px; }
+  .container { max-width: 1260px; margin: 0 auto; }
+  h1 { color: #58a6ff; font-size: 30px; margin-bottom: 8px; }
+  .subtitle { color: #8b949e; font-size: 14px; line-height: 1.8; margin-bottom: 24px; max-width: 980px; }
+  .section { background: #11161d; border: 1px solid #21262d; border-radius: 18px; padding: 18px; margin-bottom: 22px; }
+  .label { color: #58a6ff; font-size: 12px; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase; margin-bottom: 12px; }
+  .title { font-size: 22px; margin-bottom: 8px; }
+  .desc { color: #8b949e; font-size: 13px; line-height: 1.8; margin-bottom: 14px; }
+  .flow { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; margin-bottom: 12px; }
+  .arrow { align-self: center; color: #58a6ff; font-size: 26px; font-weight: 700; }
+  .box { flex: 1 1 200px; min-width: 190px; background: #161b22; border: 1px solid #21262d; border-radius: 14px; padding: 14px; }
+  .box b { display: block; color: #58a6ff; font-size: 14px; margin-bottom: 6px; }
+  .box p { color: #b7c0ca; font-size: 12px; line-height: 1.7; }
+  .box.good { background: #102318; border-color: #1f6b3b; }
+  .box.good b { color: #86efac; }
+  .box.warn { background: #2a1f10; border-color: #6f4f12; }
+  .box.warn b { color: #fbbf24; }
+  .grid2, .grid3 { display: grid; gap: 12px; }
+  .grid2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .card { background: #161b22; border: 1px solid #21262d; border-radius: 14px; padding: 14px; }
+  .card h3 { color: #fbbf24; font-size: 13px; margin-bottom: 10px; }
+  .card ul { padding-left: 18px; color: #b7c0ca; font-size: 12px; line-height: 1.8; }
+  .card li { margin-bottom: 5px; }
+  .code { font-family: "JetBrains Mono", monospace; background: #0b1016; border: 1px solid #202a35; border-radius: 6px; padding: 1px 6px; font-size: 11px; color: #e6edf3; }
+  .copy-btn { position: fixed; top: 16px; right: 16px; border: none; background: #238636; color: #fff; border-radius: 999px; padding: 11px 16px; cursor: pointer; font-weight: 700; }
+  .copy-btn:hover { background: #2ea043; }
+  .copy-btn.copied { background: #1a7f37; }
+  @media (max-width: 960px) { .grid2, .grid3 { grid-template-columns: 1fr; } .arrow { width: 100%; text-align: center; } }
+</style>
+</head>
+<body>
+<button class="copy-btn" onclick="copyAsImage(this)">Copy as image</button>
+<div class="container" id="diagram">
+  <h1>`main.cpp` 主机命令影响图</h1>
+  <div class="subtitle">
+    这张图专门回答一个最实际的问题：电脑发给设备的命令，进入 <span class="code">main.cpp</span> 后，到底会改什么、会触发什么、会输出什么。
+    如果你之前总觉得“命令进去了，但不知道设备里发生了什么”，这张图就是给这个问题用的。
+  </div>
+
+  <div class="section">
+    <div class="label">Entry</div>
+    <div class="title">1. 所有命令先走同一个入口</div>
+    <div class="flow">
+      <div class="box"><b>USB 串口收到字符</b><p>命令是一行一行进来的。</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>pollHostCommands()</b><p>把字符拼成一整行命令。</p></div>
+      <div class="arrow">→</div>
+      <div class="box warn"><b>handleHostCommand()</b><p>根据命令名进入不同分支。</p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>修改内部状态</b><p>然后影响 RadarTask、TrackingTask、CloudTask 后续行为。</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Track Commands</div>
+    <div class="title">2. `TRACK` 命令会影响什么</div>
+    <div class="flow">
+      <div class="box"><b><span class="code">TRACK,x,y</span></b><p>告诉设备：“现在有一个模拟目标，在这个坐标上。”</p></div>
+      <div class="arrow">→</div>
+      <div class="box warn"><b>setSimTrack()</b><p>把模拟轨迹写进设备内部状态。</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>RadarTask</b><p>后面优先读取这个模拟轨迹，而不是只看真实雷达。</p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>连锁影响</b><p>轨迹状态、风险计算、云台控制、事件上报都会跟着变。</p></div>
+    </div>
+    <div class="flow">
+      <div class="box"><b><span class="code">TRACK,CLEAR</span></b><p>告诉设备：“模拟目标结束了，清掉它。”</p></div>
+      <div class="arrow">→</div>
+      <div class="box warn"><b>clearSimTrack()</b><p>清除模拟轨迹。</p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>结果</b><p>设备后续就会回到无模拟目标或只看真实雷达的状态。</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Rid Commands</div>
+    <div class="title">3. `RID` 命令会影响什么</div>
+    <div class="flow">
+      <div class="box"><b><span class="code">RID,OK</span> / <span class="code">RID,MISSING</span> / <span class="code">RID,SUSPICIOUS</span></b><p>告诉设备：“把当前 RID 状态模拟成这个值。”</p></div>
+      <div class="arrow">→</div>
+      <div class="box warn"><b>内部 RID 状态改变</b><p>TrackingTask 每次循环都会读这个状态。</p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>结果</b><p>风险等级、事件判断、上行事件内容都可能变化。</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Status Commands</div>
+    <div class="title">4. `STATUS` / `SELFTEST` / `SUMMARY` 是查什么的</div>
+    <div class="grid3">
+      <div class="card">
+        <h3><span class="code">STATUS</span></h3>
+        <ul>
+          <li>查询“现在这一刻”的即时状态。</li>
+          <li>比如主状态、风险、轨迹是否 active、事件 ID 等。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="code">SELFTEST</span></h3>
+        <ul>
+          <li>查询“设备配置和健康状态”。</li>
+          <li>比如串口波特率、KP/KD、test mode、servo 状态等。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="code">SUMMARY</span></h3>
+        <ul>
+          <li>查询“从开始到现在的累计统计”。</li>
+          <li>比如 track_active_count、event_opened_count、max_risk_score。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Predictor Commands</div>
+    <div class="title">5. `KP` / `KD` 会影响什么</div>
+    <div class="flow">
+      <div class="box"><b><span class="code">KP,value</span></b><p>改预测器的 KP 参数。</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b><span class="code">KD,value</span></b><p>改预测器的 KD 参数。</p></div>
+      <div class="arrow">→</div>
+      <div class="box warn"><b>GimbalPredictor / GimbalController</b><p>后面的云台预测和控制会用到这两个值。</p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>结果</b><p>会影响云台跟踪时的响应速度和阻尼感。</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Reset Command</div>
+    <div class="title">6. `RESET` 会影响什么</div>
+    <div class="flow">
+      <div class="box"><b><span class="code">RESET</span></b><p>告诉设备“把很多运行时状态清掉”。</p></div>
+      <div class="arrow">→</div>
+      <div class="box warn"><b>清理内容</b><p>模拟轨迹、RID、handover、last event、runtime event、部分统计状态都会被重置。</p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>结果</b><p>设备回到更接近初始的干净状态，方便开始下一轮测试。</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Other Useful Commands</div>
+    <div class="title">7. 其他你会见到的命令</div>
+    <div class="grid2">
+      <div class="card">
+        <h3>控制与诊断类</h3>
+        <ul>
+          <li><span class="code">SAFE</span>：安全模式开关。</li>
+          <li><span class="code">DEBUG</span>：调试输出开关。</li>
+          <li><span class="code">QUIET</span>：减少输出。</li>
+          <li><span class="code">UPLINK</span>：上行输出开关。</li>
+          <li><span class="code">DIAG,SERVO</span> / <span class="code">DIAG,STOP</span>：舵机诊断。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>手动动作类</h3>
+        <ul>
+          <li><span class="code">SERVO</span>：手动设置舵机角度。</li>
+          <li><span class="code">CENTER</span>：回中。</li>
+          <li><span class="code">PAN</span> / <span class="code">TILT</span>：单独调横向或纵向。</li>
+          <li><span class="code">HANDOVER,...</span>：处理交接请求或查看交接状态。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" integrity="sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H" crossorigin="anonymous"></script>
+<script>
+async function copyAsImage(btn) {
+  btn.textContent = "Rendering...";
+  try {
+    const canvas = await html2canvas(document.getElementById("diagram"), { backgroundColor: "#0d1117", scale: 2, useCORS: true });
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+    if (!blob) throw new Error("Canvas toBlob returned null");
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    btn.textContent = "Copied!";
+    btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = "Copy as image"; btn.classList.remove("copied"); }, 1800);
+  } catch (err) {
+    console.error(err);
+    btn.textContent = "Failed";
+    setTimeout(() => { btn.textContent = "Copy as image"; btn.classList.remove("copied"); }, 2200);
+  }
+}
+</script>
+</body>
+</html>

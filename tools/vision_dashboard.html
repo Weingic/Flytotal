@@ -1,0 +1,3638 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flytotal 本地联调看板</title>
+  <style>
+    :root {
+      --bg: #f4efe6;
+      --panel: rgba(255, 248, 239, 0.88);
+      --panel-strong: rgba(255, 244, 230, 0.96);
+      --ink: #202020;
+      --muted: #6d665e;
+      --line: rgba(91, 76, 59, 0.18);
+      --accent: #d85a2a;
+      --ok: #1d7a5a;
+      --warn: #b77a00;
+      --danger: #b23a2f;
+      --offline: #6f6761;
+      --shadow: 0 18px 50px rgba(61, 42, 18, 0.12);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top right, rgba(216, 90, 42, 0.18), transparent 32%),
+        radial-gradient(circle at bottom left, rgba(29, 122, 90, 0.16), transparent 30%),
+        linear-gradient(180deg, #fbf6ef 0%, #f1e6d9 100%);
+      min-height: 100vh;
+    }
+
+    .page {
+      width: min(1280px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 28px 0 40px;
+    }
+
+    .hero,
+    .status-grid,
+    .content-grid {
+      display: grid;
+      gap: 18px;
+    }
+
+    .hero {
+      grid-template-columns: 1fr;
+      margin-bottom: 18px;
+    }
+
+    .status-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-bottom: 18px;
+    }
+
+    .content-grid {
+      grid-template-columns: 1.1fr 0.9fr;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+      transition: border-color 160ms ease, box-shadow 160ms ease, opacity 160ms ease;
+    }
+
+    .hero-card {
+      padding: 24px;
+      background: linear-gradient(140deg, rgba(255, 250, 244, 0.95), rgba(255, 238, 220, 0.92));
+    }
+
+    .hero-title {
+      margin: 0 0 8px;
+      font-size: clamp(30px, 4vw, 48px);
+      line-height: 0.96;
+      letter-spacing: -0.04em;
+    }
+
+    .hero-text,
+    .section-subtitle,
+    .status-subtitle,
+    .refresh-note {
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .hero-text {
+      margin: 0;
+      max-width: 64ch;
+    }
+
+    .source-mode-bar {
+      margin-top: 14px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .source-mode-title {
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .mock-mode-banner {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border: 1px solid rgba(183, 122, 0, 0.28);
+      border-radius: 14px;
+      background: rgba(255, 248, 235, 0.92);
+      color: var(--warn);
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.5;
+      display: none;
+    }
+
+    .status-card {
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      background: linear-gradient(150deg, rgba(255, 244, 230, 0.96), rgba(244, 255, 250, 0.92));
+    }
+
+    .status-card.stale {
+      border-color: rgba(111, 103, 97, 0.35);
+      box-shadow: 0 18px 50px rgba(111, 103, 97, 0.14);
+      opacity: 0.85;
+    }
+
+    .status-card.live {
+      border-color: rgba(29, 122, 90, 0.28);
+    }
+
+    .status-title,
+    .section-title {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+
+    .status-subtitle,
+    .section-subtitle {
+      margin: 4px 0 8px;
+      font-size: 14px;
+    }
+
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      padding-bottom: 10px;
+      border-bottom: 1px dashed var(--line);
+      align-items: center;
+    }
+
+    .status-row:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .value {
+      font-size: 16px;
+      font-weight: 700;
+      text-align: right;
+      word-break: break-word;
+    }
+
+    .capture-header,
+    .table-header {
+      padding: 18px 20px 0;
+    }
+
+    .capture-frame {
+      aspect-ratio: 16 / 9;
+      margin: 16px 20px 12px;
+      border-radius: 20px;
+      overflow: hidden;
+      background: linear-gradient(145deg, rgba(32, 32, 32, 0.92), rgba(66, 56, 46, 0.96));
+      position: relative;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .capture-frame img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: none;
+      background: #171717;
+    }
+
+    .capture-empty {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      color: rgba(255, 255, 255, 0.72);
+      font-size: 15px;
+      text-align: center;
+      padding: 20px;
+    }
+
+    .facts {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      padding: 0 20px 20px;
+    }
+
+    .fact {
+      padding: 14px 14px 12px;
+      border-radius: 18px;
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+    }
+
+    .fact .label {
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    .fact .value {
+      text-align: left;
+      font-size: 15px;
+    }
+
+    .records-panel { padding-bottom: 16px; }
+
+    .summary-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 0 20px 12px;
+      align-items: center;
+    }
+
+    .summary-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .reliability-legend {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+    }
+
+    .reliability-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .result-overview {
+      margin: 0 20px 10px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(255, 248, 239, 0.86);
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .result-overview.ok {
+      border-color: rgba(29, 122, 90, 0.28);
+      color: var(--ok);
+      background: rgba(244, 255, 250, 0.9);
+    }
+
+    .result-overview.warn {
+      border-color: rgba(183, 122, 0, 0.28);
+      color: var(--warn);
+      background: rgba(255, 248, 235, 0.92);
+    }
+
+    .result-concepts {
+      margin: 0 20px 12px;
+      padding: 12px;
+      border-radius: 16px;
+      border: 1px solid var(--line);
+      background: rgba(255, 248, 239, 0.9);
+    }
+
+    .concept-row {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .concept-title {
+      font-size: 14px;
+      font-weight: 800;
+      color: var(--ink);
+    }
+
+    .concept-action {
+      margin-top: 10px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .concept-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .concept-item {
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(255, 248, 239, 0.95);
+    }
+
+    .concept-item strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .concept-item span {
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.5;
+      color: var(--ink);
+      word-break: break-word;
+    }
+
+    .filter-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 0 20px 6px;
+    }
+
+    .filter-btn {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: rgba(255, 248, 239, 0.9);
+      color: var(--ink);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+    }
+
+    .filter-btn:hover {
+      border-color: rgba(216, 90, 42, 0.28);
+    }
+
+    .filter-btn.active {
+      background: rgba(216, 90, 42, 0.14);
+      border-color: rgba(216, 90, 42, 0.28);
+      color: var(--accent);
+    }
+
+    .mini-btn {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: rgba(255, 248, 239, 0.9);
+      color: var(--ink);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .mini-btn:hover {
+      border-color: rgba(216, 90, 42, 0.28);
+      color: var(--accent);
+    }
+
+    .detail-row td {
+      background: rgba(255, 244, 230, 0.65);
+      padding-top: 0;
+    }
+
+    .detail-card {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      padding: 12px 0 2px;
+    }
+
+    .detail-item {
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: rgba(255, 248, 239, 0.92);
+      border: 1px solid var(--line);
+    }
+
+    .detail-item strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .detail-item span {
+      font-size: 14px;
+      font-weight: 700;
+      word-break: break-word;
+    }
+
+    .detail-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .timeline-check-panel {
+      padding: 0 20px 12px;
+    }
+
+    .suite-gate-panel {
+      padding: 0 20px 12px;
+    }
+
+    .suite-gate-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .suite-gate-card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 248, 239, 0.92);
+      padding: 10px 12px;
+      cursor: pointer;
+      transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+    }
+
+    .suite-gate-card:hover {
+      border-color: rgba(216, 90, 42, 0.25);
+      box-shadow: 0 8px 16px rgba(61, 42, 18, 0.08);
+    }
+
+    .suite-gate-card:focus-visible {
+      outline: 2px solid rgba(216, 90, 42, 0.35);
+      outline-offset: 2px;
+    }
+
+    .suite-gate-card.pass {
+      border-color: rgba(29, 122, 90, 0.28);
+      background: rgba(244, 255, 250, 0.92);
+    }
+
+    .suite-gate-card.fail {
+      border-color: rgba(178, 58, 47, 0.24);
+      background: rgba(255, 242, 238, 0.92);
+    }
+
+    .suite-gate-card.running {
+      border-color: rgba(183, 122, 0, 0.26);
+      background: rgba(255, 248, 235, 0.92);
+    }
+
+    .suite-gate-title-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .suite-gate-title {
+      font-size: 14px;
+      font-weight: 800;
+      color: var(--ink);
+    }
+
+    .suite-gate-desc {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+      margin-bottom: 8px;
+    }
+
+    .suite-gate-meta {
+      font-size: 12px;
+      color: var(--ink);
+      line-height: 1.5;
+      margin-bottom: 4px;
+      word-break: break-word;
+    }
+
+    .suite-gate-meta:last-child {
+      margin-bottom: 0;
+    }
+
+    .suite-gate-action {
+      margin-top: 10px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .suite-gate-action-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .suite-gate-coach {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 248, 239, 0.94);
+    }
+
+    .suite-gate-coach-status {
+      margin-bottom: 8px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .suite-gate-coach-status strong {
+      color: var(--ink);
+    }
+
+    .coach-port-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin: 8px 0;
+    }
+
+    .coach-port-row label {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .coach-port-row input {
+      width: 110px;
+      padding: 6px 8px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.8);
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .coach-command-preview {
+      font-family: "IBM Plex Mono", "Consolas", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--ink);
+      background: rgba(255, 248, 239, 0.98);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 6px 8px;
+      word-break: break-all;
+      margin-bottom: 6px;
+    }
+
+    .timeline-check-panel .detail-card {
+      padding: 0;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .timeline-check-line-item {
+      grid-column: 1 / -1;
+    }
+
+    .timeline-check-line-item .raw-line {
+      font-family: "IBM Plex Mono", "Consolas", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .timeline-check-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      padding: 8px 0 0;
+    }
+
+    .timeline-check-action-text {
+      font-size: 13px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .replay-state-text {
+      font-size: 13px;
+      color: #1f7a5a;
+      font-weight: 800;
+    }
+
+    .event-export-row-active {
+      outline: 2px solid rgba(200, 128, 42, 0.45);
+      outline-offset: -2px;
+      background: rgba(239, 207, 169, 0.22);
+    }
+
+    .table-wrap {
+      padding: 14px 14px 0;
+      overflow: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 680px;
+    }
+
+    thead th {
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-weight: 700;
+      padding: 10px 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--line);
+      position: sticky;
+      top: 0;
+      background: rgba(255, 248, 239, 0.98);
+    }
+
+    tbody td {
+      padding: 12px;
+      border-bottom: 1px solid rgba(91, 76, 59, 0.1);
+      font-size: 14px;
+      vertical-align: top;
+    }
+
+    tbody tr:hover {
+      background: rgba(255, 237, 222, 0.42);
+    }
+
+    tbody tr.event-row-warn {
+      background: rgba(183, 122, 0, 0.07);
+    }
+
+    tbody tr.event-row-danger {
+      background: rgba(178, 58, 47, 0.08);
+    }
+
+    tbody tr.event-row-handover {
+      background: rgba(216, 90, 42, 0.07);
+    }
+
+    tbody tr.event-row-selected {
+      outline: 2px solid rgba(216, 90, 42, 0.4);
+      box-shadow: inset 0 0 0 9999px rgba(216, 90, 42, 0.09);
+    }
+
+    tbody tr.timeline-row-node {
+      background: rgba(29, 122, 90, 0.06);
+    }
+
+    tbody tr.timeline-row-vision {
+      background: rgba(216, 90, 42, 0.06);
+    }
+
+    tbody tr.timeline-row-capture {
+      background: rgba(178, 58, 47, 0.08);
+    }
+
+    tbody tr.timeline-row-result {
+      background: rgba(183, 122, 0, 0.08);
+    }
+
+    tbody tr.result-row-formal {
+      box-shadow: inset 4px 0 0 rgba(29, 122, 90, 0.28);
+    }
+
+    tbody tr.result-row-history {
+      box-shadow: inset 4px 0 0 rgba(109, 102, 94, 0.22);
+    }
+
+    tbody tr.result-row-fallback {
+      box-shadow: inset 4px 0 0 rgba(183, 122, 0, 0.28);
+    }
+
+    tbody tr.timeline-row-focus {
+      outline: 2px solid rgba(216, 90, 42, 0.35);
+      box-shadow: inset 0 0 0 9999px rgba(216, 90, 42, 0.08);
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 88px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      border: 1px solid transparent;
+    }
+
+    .pill.locked { background: rgba(29, 122, 90, 0.12); color: var(--ok); }
+    .pill.manual { background: rgba(216, 90, 42, 0.14); color: var(--accent); }
+    .pill.auto { background: rgba(183, 122, 0, 0.15); color: var(--warn); }
+    .pill.unlocked { background: rgba(109, 102, 94, 0.14); color: var(--muted); }
+    .pill.ok { background: rgba(29, 122, 90, 0.12); color: var(--ok); border-color: rgba(29, 122, 90, 0.18); }
+    .pill.warn { background: rgba(183, 122, 0, 0.15); color: var(--warn); border-color: rgba(183, 122, 0, 0.18); }
+    .pill.danger { background: rgba(178, 58, 47, 0.12); color: var(--danger); border-color: rgba(178, 58, 47, 0.18); }
+    .pill.offline { background: rgba(111, 103, 97, 0.14); color: var(--offline); border-color: rgba(111, 103, 97, 0.16); }
+    .pill.handover { background: rgba(216, 90, 42, 0.14); color: var(--accent); border-color: rgba(216, 90, 42, 0.18); }
+    .pill.normal { background: rgba(109, 102, 94, 0.12); color: var(--muted); border-color: rgba(109, 102, 94, 0.15); }
+
+    .source-pill-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .source-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(109, 102, 94, 0.24);
+      flex: 0 0 10px;
+    }
+
+    .source-dot.formal {
+      background: rgba(29, 122, 90, 0.82);
+      border-color: rgba(29, 122, 90, 0.55);
+    }
+
+    .source-dot.history {
+      background: rgba(109, 102, 94, 0.72);
+      border-color: rgba(109, 102, 94, 0.42);
+    }
+
+    .source-dot.fallback {
+      background: rgba(183, 122, 0, 0.82);
+      border-color: rgba(183, 122, 0, 0.52);
+    }
+
+    a.file-link {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 700;
+    }
+
+    a.file-link:hover { text-decoration: underline; }
+
+    @media (max-width: 1080px) {
+      .status-grid,
+      .content-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 720px) {
+      .page {
+        width: min(100vw - 20px, 100%);
+        padding-top: 14px;
+      }
+
+      .hero-card,
+      .status-card { padding: 18px; }
+
+      .facts { grid-template-columns: 1fr; }
+      .concept-grid { grid-template-columns: 1fr; }
+      .suite-gate-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <div class="panel hero-card">
+        <h1 class="hero-title">Flytotal 本地联调看板</h1>
+        <p class="hero-text">
+          这块页面现在同时展示三条信息链：视觉实时状态、Node A 主链状态、抓拍证据记录。
+          目的不是做炫技大屏，而是让你在本地联调时一眼看清系统现在在干什么、刚刚抓到了什么、主链此刻处于什么状态。
+        </p>
+        <div class="source-mode-bar">
+          <span class="source-mode-title">数据源模式</span>
+          <button class="filter-btn active" type="button" id="dataModeLiveBtn">真实链路</button>
+          <button class="filter-btn" type="button" id="dataModeMockBtn">模拟链路</button>
+          <span id="dataModeStatusValue"><span class="pill normal">当前：真实链路</span></span>
+        </div>
+        <div class="mock-mode-banner" id="mockModeBanner">
+          当前为模拟链路模式：页面状态来自服务端 mock 数据，不代表实时硬件状态。
+        </div>
+      </div>
+    </section>
+
+    <section class="status-grid">
+      <div class="panel status-card" id="visionCard">
+        <h2 class="status-title">视觉实时状态</h2>
+        <p class="status-subtitle">先看这里，确认视觉链是否已经锁定目标以及当前框的位置。</p>
+        <div class="status-row"><div class="label">视觉状态</div><div class="value" id="runtimeStateValue">NONE</div></div>
+        <div class="status-row"><div class="label">锁定状态</div><div class="value" id="runtimeLockedValue">0</div></div>
+        <div class="status-row"><div class="label">视觉链就绪</div><div class="value" id="runtimeReadyValue"><span class="pill warn">NOT_READY</span></div></div>
+        <div class="status-row"><div class="label">跟踪器</div><div class="value" id="runtimeTrackerValue">NONE</div></div>
+        <div class="status-row"><div class="label">跟踪策略</div><div class="value" id="runtimeTrackerPlanValue">NONE</div></div>
+        <div class="status-row"><div class="label">可用跟踪器</div><div class="value" id="runtimeTrackerAvailableValue">NONE</div></div>
+        <div class="status-row"><div class="label">当前帧</div><div class="value" id="runtimeFrameValue">0</div></div>
+        <div class="status-row"><div class="label">目标框</div><div class="value" id="runtimeBboxValue">0, 0, 0, 0</div></div>
+        <div class="status-row"><div class="label">中心点</div><div class="value" id="runtimeCenterValue">0, 0</div></div>
+        <div class="status-row"><div class="label">最近抓拍</div><div class="value" id="runtimeCaptureValue">NONE</div></div>
+        <div class="status-row"><div class="label">事件绑定来源</div><div class="value" id="runtimeEventBindSourceValue">NONE</div></div>
+        <div class="status-row"><div class="label">最近更新时间</div><div class="value" id="runtimeTimeValue">--</div></div>
+      </div>
+
+      <div class="panel status-card stale" id="nodeCard">
+        <h2 class="status-title">Node A 主链状态</h2>
+        <p class="status-subtitle">这里汇总来自 ESP32 串口的主链状态，方便把视觉链和节点链放在同一页看。</p>
+        <div class="status-row"><div class="label">在线状态</div><div class="value" id="nodeOnlineValue">OFFLINE</div></div>
+        <div class="status-row"><div class="label">节点</div><div class="value" id="nodeIdValue">NONE</div></div>
+        <div class="status-row"><div class="label">主状态</div><div class="value" id="nodeMainStateValue">UNKNOWN</div></div>
+        <div class="status-row"><div class="label">Hunter</div><div class="value" id="nodeHunterValue">UNKNOWN</div></div>
+        <div class="status-row"><div class="label">云台</div><div class="value" id="nodeGimbalValue">UNKNOWN</div></div>
+        <div class="status-row"><div class="label">RID</div><div class="value" id="nodeRidValue">UNKNOWN</div></div>
+        <div class="status-row"><div class="label">RID 白名单</div><div class="value" id="nodeRidWhitelistValue">0</div></div>
+        <div class="status-row"><div class="label">RID 最近更新</div><div class="value" id="nodeRidUpdateValue">--</div></div>
+        <div class="status-row"><div class="label">风险</div><div class="value" id="nodeRiskValue">0.0 / NONE</div></div>
+        <div class="status-row"><div class="label">链路一致性</div><div class="value" id="nodeConsistencyValue">UNKNOWN</div></div>
+        <div class="status-row"><div class="label">映射告警</div><div class="value" id="nodeConsistencyWarnValue">NONE</div></div>
+        <div class="status-row"><div class="label">事件</div><div class="value" id="nodeEventValue">0 / NONE</div></div>
+        <div class="status-row"><div class="label">最近事件</div><div class="value" id="nodeLastEventValue">NONE</div></div>
+        <div class="status-row"><div class="label">事件语义</div><div class="value" id="nodeLastReasonValue">NONE / NONE / NONE</div></div>
+        <div class="status-row"><div class="label">最近接力</div><div class="value" id="nodeHandoverValue">NONE / NONE</div></div>
+        <div class="status-row"><div class="label">轨迹</div><div class="value" id="nodeTrackValue">0 / 0 / 0</div></div>
+        <div class="status-row"><div class="label">坐标</div><div class="value" id="nodePositionValue">0.0, 0.0</div></div>
+        <div class="status-row"><div class="label">累计轨迹</div><div class="value" id="nodeSummaryTrackValue">0 / 0 / 0</div></div>
+        <div class="status-row"><div class="label">累计事件</div><div class="value" id="nodeSummaryEventValue">0 / 0</div></div>
+        <div class="status-row"><div class="label">累计接力</div><div class="value" id="nodeSummaryHandoverValue">0 / 0 / 0</div></div>
+        <div class="status-row"><div class="label">最近来源</div><div class="value" id="nodeMessageValue">NONE</div></div>
+        <div class="status-row"><div class="label">最近更新时间</div><div class="value" id="nodeTimeValue">--</div></div>
+      </div>
+
+      <div class="panel status-card" id="parameterCard">
+        <h2 class="status-title">参数观察</h2>
+        <p class="status-subtitle">先展示当前已经能从 SELFTEST 里稳定读到的参数和值，便于后面真实联调时对照调参。</p>
+        <div class="status-row"><div class="label">KP / KD</div><div class="value" id="paramPredictorValue">0.000 / 0.000</div></div>
+        <div class="status-row"><div class="label">心跳 / 事件上报</div><div class="value" id="paramCloudValue">0 / 0</div></div>
+        <div class="status-row"><div class="label">仿真保持</div><div class="value" id="paramSimHoldValue">0</div></div>
+        <div class="status-row"><div class="label">串口波特率</div><div class="value" id="paramBaudValue">0 / 0</div></div>
+        <div class="status-row"><div class="label">测试 / 舵机</div><div class="value" id="paramServoValue">0 / 0 / 0</div></div>
+        <div class="status-row"><div class="label">安全 / 诊断</div><div class="value" id="paramSafetyValue">0 / 0</div></div>
+        <div class="status-row"><div class="label">调试 / 静默 / 上行</div><div class="value" id="paramOutputValue">0 / 0 / 0</div></div>
+        <div class="status-row"><div class="label">当前主状态</div><div class="value" id="paramMainStateValue">UNKNOWN</div></div>
+        <div class="status-row"><div class="label">当前云台状态</div><div class="value" id="paramGimbalStateValue">UNKNOWN</div></div>
+        <div class="status-row"><div class="label">当前风险分数</div><div class="value" id="paramRiskScoreValue">0.0</div></div>
+        <div class="status-row"><div class="label">Idle Ready</div><div class="value" id="paramIdleReadyValue">0</div></div>
+        <div class="status-row"><div class="label">说明</div><div class="value" id="paramNoteValue">ConfirmFrames / LostTimeoutMs 暂未输出</div></div>
+      </div>
+
+      <div class="panel status-card" id="testCard">
+        <h2 class="status-title">测试场景</h2>
+        <p class="status-subtitle">这里显示当前由 track_injector_轨迹注入器.py 正在执行的测试上下文。</p>
+        <div class="status-row"><div class="label">运行状态</div><div class="value" id="testStatusValue">IDLE</div></div>
+        <div class="status-row"><div class="label">场景名称</div><div class="value" id="testScenarioNameValue">NONE</div></div>
+        <div class="status-row"><div class="label">套件名称</div><div class="value" id="testSuiteNameValue">NONE</div></div>
+        <div class="status-row"><div class="label">场景序号</div><div class="value" id="testScenarioIndexValue">0 / 0</div></div>
+        <div class="status-row"><div class="label">RID</div><div class="value" id="testRidValue">UNCHANGED</div></div>
+        <div class="status-row"><div class="label">当前进度</div><div class="value" id="testProgressValue">0 / 0</div></div>
+        <div class="status-row"><div class="label">套件步骤</div><div class="value" id="testSuiteStepValue">0 / 0</div></div>
+        <div class="status-row"><div class="label">发送点数</div><div class="value" id="testSentValue">0</div></div>
+        <div class="status-row"><div class="label">套件检查</div><div class="value" id="testSuiteChecksValue">0 / 0</div></div>
+        <div class="status-row"><div class="label">失败项</div><div class="value" id="testSuiteFailuresValue">NONE</div></div>
+        <div class="status-row"><div class="label">当前位置</div><div class="value" id="testPositionValue">0.0, 0.0</div></div>
+        <div class="status-row"><div class="label">开始时间</div><div class="value" id="testStartValue">--</div></div>
+        <div class="status-row"><div class="label">结束时间</div><div class="value" id="testFinishValue">--</div></div>
+      </div>
+
+      <div class="panel status-card" id="testResultCard">
+        <h2 class="status-title">测试结果简报</h2>
+        <p class="status-subtitle">这里收口一轮场景结束后的简化结论，方便快速判断结果。</p>
+        <div class="status-row"><div class="label">结果</div><div class="value" id="testResultLabelValue">NONE</div></div>
+        <div class="status-row"><div class="label">来源</div><div class="value" id="testResultSourceValue">NONE</div></div>
+        <div class="status-row"><div class="label">一句话</div><div class="value" id="testResultSummaryValue">还没有结果</div></div>
+        <div class="status-row"><div class="label">场景</div><div class="value" id="testResultScenarioValue">NONE</div></div>
+        <div class="status-row"><div class="label">RID</div><div class="value" id="testResultRidValue">UNCHANGED</div></div>
+        <div class="status-row"><div class="label">最终状态</div><div class="value" id="testResultStateValue">UNKNOWN / NONE</div></div>
+        <div class="status-row"><div class="label">最后事件</div><div class="value" id="testResultEventValue">NONE</div></div>
+        <div class="status-row"><div class="label">事件/接力</div><div class="value" id="testResultFlagsValue">0 / 0</div></div>
+        <div class="status-row"><div class="label">轨迹变化</div><div class="value" id="testResultTrackValue">0 / 0</div></div>
+        <div class="status-row"><div class="label">事件变化</div><div class="value" id="testResultEventDeltaValue">0 / 0</div></div>
+        <div class="status-row"><div class="label">接力变化</div><div class="value" id="testResultHandoverDeltaValue">0 / 0 / 0</div></div>
+        <div class="status-row"><div class="label">最大风险</div><div class="value" id="testResultRiskValue">0.0</div></div>
+        <div class="status-row"><div class="label">开始时间</div><div class="value" id="testResultStartValue">--</div></div>
+        <div class="status-row"><div class="label">结束时间</div><div class="value" id="testResultFinishValue">--</div></div>
+      </div>
+    </section>
+
+    <section class="content-grid">
+      <article class="panel capture-panel">
+        <div class="capture-header">
+          <h2 class="section-title">最新抓拍</h2>
+          <p class="section-subtitle">最新一条结构化抓拍记录和它对应的图片证据。</p>
+        </div>
+        <div class="capture-frame">
+          <img id="latestImage" alt="最新抓拍图">
+          <div class="capture-empty" id="emptyState">当前还没有抓拍记录。先运行 vision_bridge_视觉桥接.py 并锁定目标。</div>
+        </div>
+        <div class="facts">
+          <div class="fact"><span class="label">抓拍原因</span><div class="value" id="reasonValue">--</div></div>
+          <div class="fact"><span class="label">事件编号</span><div class="value" id="eventValue">--</div></div>
+          <div class="fact"><span class="label">跟踪器</span><div class="value" id="trackerValue">--</div></div>
+          <div class="fact"><span class="label">视觉状态</span><div class="value" id="visionValue">--</div></div>
+          <div class="fact"><span class="label">目标框</span><div class="value" id="bboxValue">--</div></div>
+          <div class="fact"><span class="label">中心点</span><div class="value" id="centerValue">--</div></div>
+        </div>
+        <div class="refresh-note">图片地址会自动带时间戳，避免浏览器一直缓存旧图。</div>
+      </article>
+
+      <article class="panel records-panel">
+        <div class="table-header">
+          <h2 class="section-title">最近抓拍记录</h2>
+          <p class="section-subtitle">默认显示最近 10 条，可直接打开原图。</p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>原因</th>
+                <th>状态</th>
+                <th>跟踪器</th>
+                <th>事件</th>
+                <th>目标框</th>
+                <th>图片</th>
+              </tr>
+            </thead>
+            <tbody id="recordsBody">
+              <tr><td colspan="7">当前还没有抓拍记录。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <section style="margin-top: 18px;">
+      <article class="panel records-panel">
+        <div class="table-header">
+          <h2 class="section-title">Node A 最近事件</h2>
+          <p class="section-subtitle">这里记录最近几条来自 Node A 的事件语义，便于快速回看刚刚发生了什么。</p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>来源</th>
+                <th>事件号</th>
+                <th>原因</th>
+                <th>等级</th>
+                <th>状态</th>
+                <th>轨迹</th>
+                <th>风险</th>
+                <th>接力</th>
+              </tr>
+            </thead>
+            <tbody id="nodeEventsBody">
+              <tr><td colspan="9">当前还没有 Node A 事件记录。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <section style="margin-top: 18px;">
+      <article class="panel capture-panel">
+        <div class="capture-header">
+          <h2 class="section-title">事件详情（最小回放）</h2>
+          <p class="section-subtitle">点选上方事件行后，这里显示事件编号、时间、风险、坐标、RID 和抓拍证据。</p>
+          <div class="timeline-check-actions">
+            <button class="mini-btn" type="button" id="eventDetailExportBtn" disabled>导出当前事件证据 JSON</button>
+            <button class="mini-btn" type="button" id="eventMatchModeBtn">匹配模式：兜底</button>
+            <button class="mini-btn" type="button" id="eventReplayExitBtn" style="display:none;">结束回放</button>
+            <span class="replay-state-text" id="eventReplayStateValue">实时模式</span>
+            <span class="timeline-check-action-text" id="eventDetailActionValue">选择事件后可导出证据。</span>
+          </div>
+        </div>
+        <div class="capture-frame">
+          <img id="eventDetailImage" alt="事件抓拍图">
+          <div class="capture-empty" id="eventDetailEmpty">当前还没有可回放的事件证据。先运行 Node A 串口桥接和 vision_bridge 抓拍。</div>
+        </div>
+        <div class="facts">
+          <div class="fact"><span class="label">事件编号</span><div class="value" id="eventDetailIdValue">NONE</div></div>
+          <div class="fact"><span class="label">触发时间</span><div class="value" id="eventDetailTimeValue">--</div></div>
+          <div class="fact"><span class="label">风险等级</span><div class="value" id="eventDetailRiskValue">NONE</div></div>
+          <div class="fact"><span class="label">节点编号</span><div class="value" id="eventDetailNodeValue">NONE</div></div>
+          <div class="fact"><span class="label">坐标</span><div class="value" id="eventDetailPositionValue">0.0, 0.0</div></div>
+          <div class="fact"><span class="label">RID 状态</span><div class="value" id="eventDetailRidValue">UNKNOWN</div></div>
+          <div class="fact"><span class="label">触发原因</span><div class="value" id="eventDetailReasonValue">NONE</div></div>
+          <div class="fact"><span class="label">详情来源</span><div class="value" id="eventDetailSourceValue">实时</div></div>
+          <div class="fact"><span class="label">抓拍绑定方式</span><div class="value" id="eventDetailBindingValue">NONE</div></div>
+          <div class="fact"><span class="label">抓拍路径</span><div class="value"><a class="file-link" id="eventDetailPathLink" href="#" target="_blank" rel="noreferrer">--</a></div></div>
+        </div>
+        <div class="table-header" style="margin-top: 12px;">
+          <h2 class="section-title">最近证据导出</h2>
+          <p class="section-subtitle">显示本地已落盘的导出 JSON，可直接打开。</p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>导出时间</th>
+                <th>事件号</th>
+                <th>抓拍数</th>
+                <th>文件</th>
+              </tr>
+            </thead>
+            <tbody id="eventExportHistoryBody">
+              <tr><td colspan="4">当前还没有证据导出记录。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <section style="margin-top: 18px;">
+      <article class="panel records-panel">
+        <div class="table-header">
+          <h2 class="section-title">测试结果历史</h2>
+          <p class="section-subtitle">这里保留最近几轮场景的简报结果，方便连续联调后统一回看。</p>
+        </div>
+        <div class="summary-strip" id="testResultsSummary">
+          <div class="summary-chip" id="summaryPassChip">PASS 0</div>
+          <div class="summary-chip" id="summaryWarnChip">WARN 0</div>
+          <div class="summary-chip" id="summaryFailChip">FAIL 0</div>
+          <div class="summary-chip" id="summaryEventChip">事件 0</div>
+          <div class="summary-chip" id="summaryHandoverChip">接力 0</div>
+          <div class="summary-chip" id="summaryFormalChip">正式 0</div>
+          <div class="summary-chip" id="summaryFallbackChip">兜底 0</div>
+          <div class="reliability-legend" id="testResultsReliabilityLegend">
+            <span>可靠性图例</span>
+            <span class="reliability-item"><span class="source-dot formal"></span>正式</span>
+            <span class="reliability-item"><span class="source-dot history"></span>历史</span>
+            <span class="reliability-item"><span class="source-dot fallback"></span>兜底</span>
+          </div>
+        </div>
+        <div class="result-overview" id="testResultsOverviewHint">总览：还没有结果记录。</div>
+        <div class="result-concepts" id="testResultConcepts">
+          <div class="concept-row">
+            <div class="concept-title">术语速读</div>
+            <div id="conceptFallbackStateValue"><span class="pill normal">暂无判定</span></div>
+          </div>
+          <div class="concept-grid">
+            <div class="concept-item">
+              <strong>套件 (Suite)</strong>
+              <span>一组固定检查项，例如 standard_acceptance 的 7 项 PASS/FAIL 判定。</span>
+            </div>
+            <div class="concept-item">
+              <strong>Bridge</strong>
+              <span>串口桥接进程，把 Node A 串口输出写成看板 JSON，让页面实时有正式链路数据。</span>
+            </div>
+            <div class="concept-item">
+              <strong>有兜底</strong>
+              <span>来源显示“套件兜底”，说明当前主要来自 session_logs 回填，不是 bridge 正式 test_result。</span>
+            </div>
+            <div class="concept-item">
+              <strong>无兜底</strong>
+              <span>来源来自“正式结果/历史结果”，可直接作为回归结论，不需要额外语义转换。</span>
+            </div>
+          </div>
+          <div class="concept-action" id="conceptActionValue">当前还没有结果记录。</div>
+        </div>
+        <div class="filter-bar" id="testResultsFilters">
+          <button class="filter-btn active" type="button" data-filter="all">全部</button>
+          <button class="filter-btn" type="button" data-filter="attention">WARN/FAIL</button>
+          <button class="filter-btn" type="button" data-filter="event">有事件</button>
+          <button class="filter-btn" type="button" data-filter="handover">有接力</button>
+          <button class="filter-btn" type="button" data-filter="fallback">只看兜底</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>开始时间</th>
+                <th>场景</th>
+                <th>RID</th>
+                <th>结果</th>
+                <th>来源</th>
+                <th>最终风险</th>
+                <th>事件/接力</th>
+                <th>最后事件</th>
+                <th>轨迹变化</th>
+                <th>结束时间</th>
+                <th>详情</th>
+              </tr>
+            </thead>
+            <tbody id="testResultsBody">
+              <tr><td colspan="11">当前还没有测试结果历史。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <section style="margin-top: 18px;">
+      <article class="panel records-panel">
+        <div class="table-header">
+          <h2 class="section-title">联调时间线</h2>
+          <p class="section-subtitle">这里回看最近一轮会话中的关键过程，按时间顺序显示测试、主链、视觉和抓拍事件。</p>
+        </div>
+        <div class="summary-strip" id="sessionTimelineSummary">
+          <div class="summary-chip" id="timelineScenarioChip">场景 NONE</div>
+          <div class="summary-chip" id="timelineStartChip">开始 --</div>
+          <div class="summary-chip" id="timelineEventCountChip">事件数 0</div>
+          <div class="summary-chip" id="timelineCaptureChip">抓拍 0</div>
+          <div class="summary-chip" id="timelineNodeEventChip">主链事件 0</div>
+          <div class="summary-chip" id="timelineSuiteChip">套件 NONE</div>
+          <div class="summary-chip" id="timelineResultChip">结果 NONE</div>
+        </div>
+        <div class="filter-bar" id="sessionTimelineSessions">
+          <button class="filter-btn active" type="button">最近一轮</button>
+        </div>
+        <div class="filter-bar" id="sessionTimelineFilters">
+          <button class="filter-btn active" type="button" data-filter="all">全部</button>
+          <button class="filter-btn" type="button" data-filter="node">只看主链</button>
+          <button class="filter-btn" type="button" data-filter="vision">只看视觉</button>
+          <button class="filter-btn" type="button" data-filter="key">只看抓拍/结果</button>
+        </div>
+        <div class="suite-gate-panel" id="suiteGatePanel">
+          <div class="suite-gate-grid" id="suiteGateBody">
+            <div class="suite-gate-card">
+              <div class="suite-gate-title-row">
+                <div class="suite-gate-title">逐项陪跑判定</div>
+                <span class="pill normal">等待数据</span>
+              </div>
+              <div class="suite-gate-desc">这里会把 suite 的检查项翻译成可读关卡。</div>
+              <div class="suite-gate-meta">进度 0/0</div>
+              <div class="suite-gate-meta">失败项 NONE</div>
+              <div class="suite-gate-meta">待执行 NONE</div>
+            </div>
+          </div>
+          <div class="suite-gate-action">
+            <div class="suite-gate-action-row">
+              <span id="suiteGateActionValue">等待会话数据。</span>
+              <span id="suiteGateNextCommandValue"><span class="pill normal">命令 NONE</span></span>
+              <button class="mini-btn" type="button" id="suiteGateCopyCommandBtn" disabled>复制下一步命令</button>
+            </div>
+          </div>
+          <div class="suite-gate-coach" id="operationCoachPanel">
+            <div class="suite-gate-title-row">
+              <div class="suite-gate-title">下一步操作清单</div>
+              <span id="operationCoachStateValue"><span class="pill normal">等待判定</span></span>
+            </div>
+            <div class="suite-gate-coach-status" id="operationCoachStatusText"><strong>状态：</strong>等待数据。</div>
+            <div class="suite-gate-action" id="operationCoachActionValue">动作：等待会话数据。</div>
+            <div class="coach-port-row">
+              <label for="coachPortInput">串口</label>
+              <input id="coachPortInput" type="text" value="COM4" autocomplete="off">
+            </div>
+            <div class="coach-command-preview" id="coachBridgeCommandPreview">python tools/node_a_serial_bridge_NodeA串口桥接.py --port COM4 --echo</div>
+            <div class="coach-command-preview" id="coachSuiteCommandPreview">python tools/track_injector_轨迹注入器.py --port COM4 --suite standard_acceptance</div>
+            <div class="timeline-check-actions">
+              <button class="mini-btn" type="button" id="coachCopyBridgeBtn">复制启动 Bridge 命令</button>
+              <button class="mini-btn" type="button" id="coachCopySuiteBtn">复制当前套件命令</button>
+            </div>
+          </div>
+        </div>
+        <div class="timeline-check-panel">
+          <div class="detail-card">
+            <div class="detail-item"><strong>选中检查</strong><span id="suiteCheckNameValue">NONE</span></div>
+            <div class="detail-item"><strong>检查结果</strong><span id="suiteCheckResultValue"><span class="pill normal">NONE</span></span></div>
+            <div class="detail-item"><strong>检查时间</strong><span id="suiteCheckTimeValue">--</span></div>
+            <div class="detail-item"><strong>触发命令</strong><span id="suiteCheckCommandValue">NONE</span></div>
+            <div class="detail-item"><strong>失败原因</strong><span id="suiteCheckReasonValue">NONE</span></div>
+            <div class="detail-item"><strong>备注</strong><span id="suiteCheckNoteValue">NONE</span></div>
+            <div class="detail-item timeline-check-line-item"><strong>原始串口行</strong><span class="raw-line" id="suiteCheckLineValue">--</span></div>
+          </div>
+          <div class="timeline-check-actions">
+            <button class="mini-btn" type="button" id="suiteCheckCopyBtn" disabled>复制选中检查</button>
+            <button class="mini-btn" type="button" id="suiteCheckCopyFailedBtn" disabled>复制本轮失败清单</button>
+            <button class="mini-btn" type="button" id="suiteCheckExportBtn" disabled>导出本轮失败摘要</button>
+            <button class="mini-btn" type="button" id="suiteCheckExportFullBtn" disabled>导出本轮完整验收报告</button>
+            <span class="timeline-check-action-text" id="suiteCheckActionValue">等待选择检查项</span>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>来源</th>
+                <th>事件类型</th>
+                <th>场景</th>
+                <th>摘要</th>
+              </tr>
+            </thead>
+            <tbody id="sessionTimelineBody">
+              <tr><td colspan="5">当前还没有联调时间线记录。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <section style="margin-top: 18px;">
+      <article class="panel records-panel">
+        <div class="table-header">
+          <h2 class="section-title">本轮抓拍证据</h2>
+          <p class="section-subtitle">跟随当前选中的会话切换，用来直接查看这一轮留下了哪些抓拍图和事件关联。</p>
+        </div>
+        <div class="summary-strip" id="sessionCaptureSummary">
+          <div class="summary-chip" id="sessionCaptureScenarioChip">场景 NONE</div>
+          <div class="summary-chip" id="sessionCaptureCountChip">抓拍数 0</div>
+          <div class="summary-chip" id="sessionCaptureEventChip">事件 NONE</div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>原因</th>
+                <th>状态</th>
+                <th>事件</th>
+                <th>图片</th>
+              </tr>
+            </thead>
+            <tbody id="sessionCapturesBody">
+              <tr><td colspan="5">当前会话还没有抓拍证据。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+  </div>
+
+  <script>
+    const CAPTURES_API_URL = "/api/captures?limit=10";
+    const STATUS_API_URL = "/api/status";
+    const NODE_STATUS_API_URL = "/api/node-status";
+    const NODE_EVENTS_API_URL = "/api/node-events?limit=10";
+    const NODE_EVENT_DETAIL_API_URL = "/api/node-event-detail";
+    const NODE_EVENT_EXPORT_API_URL = "/api/node-event-export";
+    const NODE_EVENT_EXPORTS_API_URL = "/api/node-event-exports?limit=8";
+    const NODE_EVENT_EXPORT_DETAIL_API_URL = "/api/node-event-export-detail";
+    const ACTIVE_EVENT_API_URL = "/api/active-event";
+    const EVENT_MATCH_MODE_STORAGE_KEY = "flytotal_event_match_mode";
+    const TEST_SESSION_API_URL = "/api/test-session";
+    const TEST_RESULT_API_URL = "/api/test-result";
+    const TEST_RESULTS_API_URL = "/api/test-results?limit=10";
+    const SESSION_TIMELINE_API_URL = "/api/session-timeline?limit=40";
+    const SESSION_TIMELINE_SESSIONS_API_URL = "/api/session-timeline-sessions?limit=8";
+    const SESSION_CAPTURES_API_URL = "/api/session-captures?limit=12";
+    const DATA_SOURCE_API_URL = "/api/data-source";
+    const DATA_MODE_STORAGE_KEY = "flytotal_data_mode";
+    let testResultsFilter = "all";
+    let dataMode = "live";
+    const expandedTestResults = new Set();
+    let selectedTimelineSession = "";
+    let sessionTimelineFilter = "all";
+    let highlightedTimelineCheck = "";
+    let selectedSuiteCheckRecord = null;
+    let latestSessionTimelineRecords = [];
+    let latestSessionTimelineSessions = [];
+    let latestNodeEventRecords = [];
+    let selectedNodeEventId = "";
+    let lastSyncedActiveEventId = "NONE";
+    let currentNodeEventDetail = null;
+    let eventMatchMode = "fallback";
+    let eventReplayMode = false;
+    let eventReplayFileName = "";
+    let eventReplayEventId = "";
+    let eventDetailSourceLabel = "实时链路";
+    let latestNodeEventExportRecords = [];
+    let latestNodeEventExportEventId = "";
+    let currentSuiteGateCommand = "NONE";
+    let latestSuiteGateView = null;
+    let latestNodeOnline = false;
+    let latestCoachSuiteName = "standard_acceptance";
+    let latestTestResultsSummary = {
+      pass: 0,
+      warn: 0,
+      fail: 0,
+      event: 0,
+      handover: 0,
+      formal: 0,
+      fallback: 0,
+      total: 0,
+    };
+    const SUITE_GATE_DEFINITIONS_BY_SUITE = {
+      standard_acceptance: [
+        {
+          id: "gate_idle",
+          label: "1 基线回归",
+          description: "复位后回到空闲基线。",
+          checks: ["idle_baseline"],
+        },
+        {
+          id: "gate_open",
+          label: "2 事件开启",
+          description: "目标激活、风险升级、事件进入 OPEN。",
+          checks: ["event_open_brief", "event_open_risk", "event_open_status"],
+        },
+        {
+          id: "gate_downgrade",
+          label: "3 风险回落闭环",
+          description: "RID 恢复后事件闭环，并留下 RISK_DOWNGRADE。",
+          checks: ["risk_downgrade_event_status", "risk_downgrade_last_event"],
+        },
+        {
+          id: "gate_track_lost",
+          label: "4 丢轨闭环",
+          description: "清轨后最近事件应出现 TRACK_LOST。",
+          checks: ["track_lost_last_event"],
+        },
+      ],
+      single_node_realtime_v1: [
+        {
+          id: "realtime_gate_idle",
+          label: "1 基线回归",
+          description: "复位后先确认主链回到空闲基线。",
+          checks: ["scenario1_idle_baseline"],
+        },
+        {
+          id: "realtime_gate_open",
+          label: "2 实时主链开启",
+          description: "目标建立后应看到 TRACKING + 事件 OPEN + 风险升级。",
+          checks: ["scenario1_tracking_open_brief", "scenario1_tracking_open_event", "scenario1_tracking_open_risk"],
+        },
+        {
+          id: "realtime_gate_coarse",
+          label: "3 粗转向入口",
+          description: "COARSEAIM 生效后应进入 test_mode=1 且 servo_enabled=1。",
+          checks: ["scenario1_coarse_aim_status"],
+        },
+        {
+          id: "realtime_gate_close",
+          label: "4 风险回落 + 丢轨",
+          description: "RID 回落关闭事件，清轨后留痕 TRACK_LOST。",
+          checks: ["scenario2_risk_recover_event_closed", "scenario2_track_lost_last_event"],
+        },
+      ],
+    };
+    const SUITE_CHECK_COMMAND_MAP = {
+      idle_baseline: "BRIEF",
+      event_open_brief: "BRIEF",
+      event_open_risk: "RISK,STATUS",
+      event_open_status: "EVENT,STATUS",
+      risk_downgrade_event_status: "EVENT,STATUS",
+      risk_downgrade_last_event: "LASTEVENT",
+      track_lost_last_event: "LASTEVENT",
+      scenario1_idle_baseline: "BRIEF",
+      scenario1_tracking_open_brief: "BRIEF",
+      scenario1_tracking_open_event: "EVENT,STATUS",
+      scenario1_tracking_open_risk: "RISK,STATUS",
+      scenario1_coarse_aim_status: "STATUS",
+      scenario2_risk_recover_event_closed: "EVENT,STATUS",
+      scenario2_track_lost_last_event: "LASTEVENT",
+    };
+
+    function normalizeCoachSuiteName(value) {
+      const suiteName = String(value || "").trim();
+      return suiteName === "single_node_realtime_v1" ? "single_node_realtime_v1" : "standard_acceptance";
+    }
+
+    function formatTime(timestampMs) {
+      if (!timestampMs) return "--";
+      const date = new Date(Number(timestampMs));
+      return date.toLocaleString("zh-CN", { hour12: false });
+    }
+
+    function formatBBox(record) {
+      return `${record.bbox_x}, ${record.bbox_y}, ${record.bbox_w}, ${record.bbox_h}`;
+    }
+
+    function formatFixed(value, digits = 1) {
+      const numeric = Number(value ?? 0);
+      if (!Number.isFinite(numeric)) return Number(0).toFixed(digits);
+      return numeric.toFixed(digits);
+    }
+
+    function normalizeDataMode(mode) {
+      const value = String(mode || "").trim().toLowerCase();
+      return value === "mock" ? "mock" : "live";
+    }
+
+    function readDataMode() {
+      try {
+        const stored = localStorage.getItem(DATA_MODE_STORAGE_KEY);
+        return normalizeDataMode(stored);
+      } catch {
+        return "live";
+      }
+    }
+
+    function writeDataMode(mode) {
+      try {
+        localStorage.setItem(DATA_MODE_STORAGE_KEY, normalizeDataMode(mode));
+      } catch {
+        return;
+      }
+    }
+
+    function apiUrlWithMode(url) {
+      const separator = url.includes("?") ? "&" : "?";
+      return `${url}${separator}mode=${encodeURIComponent(dataMode)}`;
+    }
+
+    function refreshDataModeUI() {
+      const liveBtn = document.getElementById("dataModeLiveBtn");
+      const mockBtn = document.getElementById("dataModeMockBtn");
+      const statusNode = document.getElementById("dataModeStatusValue");
+      const banner = document.getElementById("mockModeBanner");
+      if (!liveBtn || !mockBtn || !statusNode || !banner) return;
+      const liveMode = dataMode === "live";
+      liveBtn.classList.toggle("active", liveMode);
+      mockBtn.classList.toggle("active", !liveMode);
+      statusNode.innerHTML = liveMode
+        ? semanticPill("当前：真实链路", "ok")
+        : semanticPill("当前：模拟链路", "warn");
+      banner.style.display = liveMode ? "none" : "block";
+    }
+
+    function setDataMode(mode, shouldReload = true) {
+      dataMode = normalizeDataMode(mode);
+      writeDataMode(dataMode);
+      refreshDataModeUI();
+      if (shouldReload) {
+        loadData();
+      }
+    }
+
+    function reasonPill(reason) {
+      const lower = String(reason || "").toLowerCase();
+      const className = lower.includes("auto") ? "auto" : "manual";
+      return `<span class="pill ${className}">${reason || "NONE"}</span>`;
+    }
+
+    function statePill(state, locked) {
+      const className = Number(locked) === 1 ? "locked" : "unlocked";
+      return `<span class="pill ${className}">${state || "NONE"}</span>`;
+    }
+
+    function semanticPill(text, kind) {
+      return `<span class="pill ${kind}">${text || "NONE"}</span>`;
+    }
+
+    function riskLevelPill(level) {
+      const value = String(level || "NONE").toUpperCase();
+      if (value === "EVENT") return semanticPill(value, "danger");
+      if (value === "HIGH_RISK") return semanticPill(value, "danger");
+      if (value === "SUSPICIOUS" || value === "WARN") return semanticPill(value, "warn");
+      if (value === "NORMAL") return semanticPill(value, "ok");
+      return semanticPill(value, "normal");
+    }
+
+    function eventStatusPill(status) {
+      const value = String(status || "NONE").toUpperCase();
+      if (value === "OPEN") return semanticPill(value, "danger");
+      if (value === "CLOSED") return semanticPill(value, "ok");
+      return semanticPill(value, "normal");
+    }
+
+    function onlinePill(online, staleAgeMs) {
+      const seconds = Math.round((staleAgeMs ?? 0) / 1000);
+      if (Number(online) === 1) {
+        return semanticPill(`ONLINE ${seconds}s`, "ok");
+      }
+      return semanticPill(`OFFLINE ${seconds}s`, "offline");
+    }
+
+    function mainStatePill(state) {
+      const value = String(state || "UNKNOWN").toUpperCase();
+      if (value === "EVENT" || value === "HIGH_RISK") return semanticPill(value, "danger");
+      if (value === "SUSPICIOUS" || value === "DETECTING") return semanticPill(value, "warn");
+      if (value === "TRACKING") return semanticPill(value, "ok");
+      return semanticPill(value, "normal");
+    }
+
+    function hunterPolicyPill(status) {
+      const hunterState = String(status?.hunter_state || "UNKNOWN").toUpperCase();
+      const ridStatus = String(status?.rid_status || "UNKNOWN").toUpperCase();
+      const wlStatus = String(status?.wl_status || "WL_UNKNOWN").toUpperCase();
+      const riskLevel = String(status?.risk_level || "NONE").toUpperCase();
+      const mainState = String(status?.main_state || "UNKNOWN").toUpperCase();
+
+      if (riskLevel === "EVENT" || riskLevel === "HIGH_RISK" || mainState === "EVENT" || mainState === "HIGH_RISK") {
+        return semanticPill(`${hunterState} / HIGH_RISK`, "danger");
+      }
+      if (wlStatus === "WL_ALLOWED" && (ridStatus === "MATCHED" || ridStatus === "RECEIVED" || hunterState === "RID_MATCHED")) {
+        return semanticPill(`${hunterState} / LEGAL`, "ok");
+      }
+      if (wlStatus === "WL_DENIED" || ridStatus === "INVALID") {
+        return semanticPill(`${hunterState} / DENIED`, "warn");
+      }
+      if (wlStatus === "WL_EXPIRED" || ridStatus === "EXPIRED") {
+        return semanticPill(`${hunterState} / RID_EXPIRED`, "warn");
+      }
+      if (ridStatus === "NONE" || ridStatus === "UNKNOWN" || wlStatus === "WL_UNKNOWN") {
+        return semanticPill(`${hunterState} / UNKNOWN_ID`, "warn");
+      }
+      return semanticPill(hunterState, "normal");
+    }
+
+    function whitelistPill(status) {
+      const wlStatus = String(status?.wl_status || "WL_UNKNOWN").toUpperCase();
+      const wlLabel = String(status?.wl_label || "NONE");
+      const whitelistHit = Number(status?.rid_whitelist_hit ?? 0) === 1;
+
+      if (wlStatus === "WL_ALLOWED" || whitelistHit) {
+        const suffix = wlLabel && wlLabel !== "NONE" ? `/${wlLabel}` : "";
+        return semanticPill(`ALLOWED${suffix}`, "ok");
+      }
+      if (wlStatus === "WL_DENIED") return semanticPill("DENIED", "warn");
+      if (wlStatus === "WL_EXPIRED") return semanticPill("EXPIRED", "warn");
+      return semanticPill("UNKNOWN", "normal");
+    }
+
+    function consistencyStatusPill(status) {
+      const value = String(status || "UNKNOWN").toUpperCase();
+      if (value === "OK") return semanticPill("OK", "ok");
+      if (value === "WARN") return semanticPill("WARN", "warn");
+      return semanticPill("UNKNOWN", "normal");
+    }
+
+    function consistencyWarningText(status) {
+      const warnings = Array.isArray(status?.consistency_warnings) ? status.consistency_warnings : [];
+      if (!warnings.length) return "NONE";
+      return warnings.slice(0, 2).map((item) => String(item || "NONE")).join(" | ");
+    }
+
+    function handoverPill(text) {
+      const value = String(text || "NONE").toUpperCase();
+      if (value.includes("HANDOVER") || value === "EMITTED" || value === "QUEUED") {
+        return semanticPill(text || "NONE", "handover");
+      }
+      if (value === "IGNORED_NO_TRACK") {
+        return semanticPill(text || "NONE", "warn");
+      }
+      return semanticPill(text || "NONE", "normal");
+    }
+
+    function testStatusPill(status) {
+      const value = String(status || "IDLE").toUpperCase();
+      if (value === "RUNNING" || value === "SETTLING") return semanticPill(value, "warn");
+      if (value === "DONE" || value === "ALL_DONE") return semanticPill(value, "ok");
+      if (value === "FAILED") return semanticPill(value, "danger");
+      return semanticPill(value, "normal");
+    }
+
+    function testResultPill(result) {
+      const value = String(result || "NONE").toUpperCase();
+      if (value === "PASS") return semanticPill(value, "ok");
+      if (value === "WARN") return semanticPill(value, "warn");
+      if (value === "FAIL") return semanticPill(value, "danger");
+      return semanticPill(value, "normal");
+    }
+
+    function testResultSourcePill(source) {
+      const value = String(source || "none").toLowerCase();
+      if (value === "formal_test_result" || value === "test_result") return semanticPill("正式结果", "ok");
+      if (value === "history_file" || value === "timeline_test_result") return semanticPill("历史结果", "normal");
+      if (value === "session_log_fallback" || value === "session_suite_fallback") return semanticPill("套件兜底", "warn");
+      return semanticPill("NONE", "normal");
+    }
+
+    function testResultReliabilityKind(source) {
+      const value = String(source || "none").toLowerCase();
+      if (value === "formal_test_result" || value === "test_result") return "formal";
+      if (value === "history_file" || value === "timeline_test_result") return "history";
+      if (value === "session_log_fallback" || value === "session_suite_fallback") return "fallback";
+      return "history";
+    }
+
+    function testResultSourceDisplay(source) {
+      const kind = testResultReliabilityKind(source);
+      const sourcePill = testResultSourcePill(source);
+      return `<span class="source-pill-wrap"><span class="source-dot ${kind}"></span>${sourcePill}</span>`;
+    }
+
+    function isFallbackResultSource(source) {
+      return testResultReliabilityKind(source) === "fallback";
+    }
+
+    function isFormalResultSource(source) {
+      return testResultReliabilityKind(source) === "formal";
+    }
+
+    function testResultSourceText(source) {
+      const value = String(source || "none").toLowerCase();
+      if (value === "formal_test_result" || value === "test_result") return "正式结果";
+      if (value === "history_file" || value === "timeline_test_result") return "历史结果";
+      if (value === "session_log_fallback" || value === "session_suite_fallback") return "套件兜底";
+      return "NONE";
+    }
+
+    function buildResultSummaryText(result) {
+      if (!result || !result.available) return "还没有结果";
+      const scenario = String(result.scenario_name || "当前会话");
+      const label = String(result.result_label || "NONE").toUpperCase();
+      const sourceText = testResultSourceText(result.result_source || "none");
+      const passed = Number(result.suite_passed ?? 0);
+      const failed = Number(result.suite_failed ?? 0);
+      const total = passed + failed;
+      if (total > 0) {
+        return `${scenario}：${label}（套件 ${passed}/${total}，来源：${sourceText}）`;
+      }
+      return `${scenario}：${label}（来源：${sourceText}）`;
+    }
+
+    function setResultConceptGuide(summary, totalRecords) {
+      const stateNode = document.getElementById("conceptFallbackStateValue");
+      const actionNode = document.getElementById("conceptActionValue");
+      if (!stateNode || !actionNode) return;
+
+      if (!totalRecords) {
+        stateNode.innerHTML = semanticPill("暂无判定", "normal");
+        actionNode.textContent = "当前还没有结果记录。跑一轮套件后，这里会自动告诉你是否进入兜底状态。";
+        return;
+      }
+
+      if (summary.fallback > 0) {
+        stateNode.innerHTML = semanticPill(`有兜底 ${summary.fallback} 条`, "warn");
+        actionNode.textContent = "建议动作：先启动 node_a_serial_bridge，再跑一轮当前套件，把结果补齐到正式链路。";
+        return;
+      }
+
+      stateNode.innerHTML = semanticPill("无兜底（正式/历史）", "ok");
+      actionNode.textContent = "当前可直接用于回归结论；如果后续改了主链逻辑，再跑一轮当前套件即可。";
+    }
+
+    function getCoachPortValue() {
+      const input = document.getElementById("coachPortInput");
+      const raw = String(input?.value || "COM4").trim();
+      return raw || "COM4";
+    }
+
+    function buildBridgeCommand(portName) {
+      return `python tools/node_a_serial_bridge_NodeA串口桥接.py --port ${portName} --echo`;
+    }
+
+    function buildSuiteCommand(portName) {
+      const suiteName = String(latestCoachSuiteName || "standard_acceptance");
+      return `python tools/track_injector_轨迹注入器.py --port ${portName} --suite ${suiteName}`;
+    }
+
+    function updateOperationCoach() {
+      const stateNode = document.getElementById("operationCoachStateValue");
+      const statusNode = document.getElementById("operationCoachStatusText");
+      const actionNode = document.getElementById("operationCoachActionValue");
+      const bridgePreviewNode = document.getElementById("coachBridgeCommandPreview");
+      const suitePreviewNode = document.getElementById("coachSuiteCommandPreview");
+      if (!stateNode || !statusNode || !actionNode || !bridgePreviewNode || !suitePreviewNode) return;
+
+      const portName = getCoachPortValue();
+      const bridgeCommand = buildBridgeCommand(portName);
+      const suiteCommand = buildSuiteCommand(portName);
+      bridgePreviewNode.textContent = bridgeCommand;
+      suitePreviewNode.textContent = suiteCommand;
+
+      const gateView = latestSuiteGateView;
+      const fallbackCount = Number(latestTestResultsSummary.fallback ?? 0);
+      const formalCount = Number(latestTestResultsSummary.formal ?? 0);
+      const totalCount = Number(latestTestResultsSummary.total ?? 0);
+
+      const gateCount = Array.isArray(gateView?.gates) ? gateView.gates.length : 0;
+      const failedGate = gateView?.gates?.find((gate) => gate.status === "FAIL") || null;
+      const pendingGate = gateView?.gates?.find((gate) => gate.status === "PENDING" || gate.status === "RUNNING") || null;
+      const allPass = Array.isArray(gateView?.gates) && gateView.gates.length > 0
+        ? gateView.gates.every((gate) => gate.status === "PASS")
+        : false;
+
+      if (!latestNodeOnline) {
+        stateNode.innerHTML = semanticPill("Bridge 离线", "danger");
+        statusNode.innerHTML = `<strong>状态：</strong>主链实时桥接未在线。`;
+        actionNode.textContent = `动作：先执行“启动 Bridge 命令”，确认 Node A 在线后再跑套件。`;
+        return;
+      }
+
+      if (!gateView || !Array.isArray(gateView.gates) || gateView.gates.length === 0) {
+        stateNode.innerHTML = semanticPill("等待套件", "warn");
+        statusNode.innerHTML = `<strong>状态：</strong>Bridge 在线，尚未发现 suite_check。`;
+        actionNode.textContent = `动作：执行“当前套件命令”开始验收。`;
+        return;
+      }
+
+      if (failedGate) {
+        const failedName = failedGate.failedChecks?.[0]?.name || "UNKNOWN";
+        stateNode.innerHTML = semanticPill("存在失败关卡", "danger");
+        statusNode.innerHTML = `<strong>状态：</strong>当前关卡失败，优先回看 ${failedName}。`;
+        actionNode.textContent = `动作：先定位失败检查，再按页面“下一步命令”复测。`;
+        return;
+      }
+
+      if (pendingGate) {
+        stateNode.innerHTML = semanticPill("套件进行中", "warn");
+        statusNode.innerHTML = `<strong>状态：</strong>关卡未跑完，继续推进当前待执行项。`;
+        actionNode.textContent = `动作：按“下一步命令”继续，直到 ${gateCount || "全部"} 个关卡全部 PASS。`;
+        return;
+      }
+
+      if (allPass && fallbackCount > 0) {
+        stateNode.innerHTML = semanticPill("通过但含兜底", "warn");
+        statusNode.innerHTML = `<strong>状态：</strong>当前记录 ${totalCount} 条，正式 ${formalCount}，兜底 ${fallbackCount}。`;
+        actionNode.textContent = `动作：保持 Bridge 在线再跑一轮当前套件，补齐正式链路。`;
+        return;
+      }
+
+      if (allPass) {
+        stateNode.innerHTML = semanticPill("正式可回归", "ok");
+        statusNode.innerHTML = `<strong>状态：</strong>关卡已通过，当前记录 ${totalCount} 条，正式 ${formalCount}，兜底 ${fallbackCount}。`;
+        actionNode.textContent = "动作：可进入下一计划；改主链逻辑后再回归一轮当前套件。";
+        return;
+      }
+
+      stateNode.innerHTML = semanticPill("等待判定", "normal");
+      statusNode.innerHTML = `<strong>状态：</strong>数据加载中。`;
+      actionNode.textContent = "动作：等待页面自动刷新判定。";
+    }
+
+    function suiteGateStatusPill(status) {
+      const value = String(status || "PENDING").toUpperCase();
+      if (value === "PASS") return semanticPill("PASS", "ok");
+      if (value === "FAIL") return semanticPill("FAIL", "danger");
+      if (value === "RUNNING") return semanticPill("进行中", "warn");
+      return semanticPill("待执行", "normal");
+    }
+
+    function suiteCheckCommandHint(checkName) {
+      return SUITE_CHECK_COMMAND_MAP[String(checkName || "")] || "NONE";
+    }
+
+    function buildSuiteGateView(records) {
+      const safeRecords = Array.isArray(records) ? records : [];
+      const activeDefinitions = SUITE_GATE_DEFINITIONS_BY_SUITE[normalizeCoachSuiteName(latestCoachSuiteName)]
+        || SUITE_GATE_DEFINITIONS_BY_SUITE.standard_acceptance;
+      const latestCheckMap = new Map();
+
+      safeRecords.forEach((record) => {
+        const checkName = suiteCheckNameFromRecord(record);
+        if (!checkName) return;
+        const previous = latestCheckMap.get(checkName);
+        if (!previous || Number(record.ts_ms || 0) >= Number(previous.ts_ms || 0)) {
+          latestCheckMap.set(checkName, record);
+        }
+      });
+
+      const gates = activeDefinitions.map((definition) => {
+        const checkRecords = definition.checks.map((name) => ({
+          name,
+          record: latestCheckMap.get(name) || null,
+        }));
+        const passedChecks = checkRecords.filter((item) => item.record && isSuiteCheckPassed(item.record));
+        const failedChecks = checkRecords.filter((item) => item.record && !isSuiteCheckPassed(item.record));
+        const pendingChecks = checkRecords.filter((item) => !item.record);
+        let status = "PENDING";
+        if (failedChecks.length > 0) {
+          status = "FAIL";
+        } else if (pendingChecks.length === 0 && checkRecords.length > 0) {
+          status = "PASS";
+        } else if (passedChecks.length > 0) {
+          status = "RUNNING";
+        }
+
+        return {
+          id: definition.id,
+          label: definition.label,
+          description: definition.description,
+          checks: definition.checks.slice(),
+          status,
+          total: definition.checks.length,
+          passedCount: passedChecks.length,
+          failedChecks,
+          pendingChecks,
+        };
+      });
+
+      const firstFailedGate = gates.find((gate) => gate.status === "FAIL");
+      if (firstFailedGate) {
+        const failItem = firstFailedGate.failedChecks[0];
+        const failName = failItem?.name || "UNKNOWN";
+        const command = suiteCheckCommandHint(failName);
+        return {
+          gates,
+          actionText: `优先处理失败项 ${failName}（命令 ${suiteCheckCommandHint(failName)}）。`,
+          nextCheck: failName,
+          nextCommand: command,
+        };
+      }
+
+      const firstPendingGate = gates.find((gate) => gate.status === "PENDING" || gate.status === "RUNNING");
+      if (firstPendingGate) {
+        const pendingName = firstPendingGate.pendingChecks[0]?.name || "NONE";
+        if (pendingName !== "NONE") {
+          const command = suiteCheckCommandHint(pendingName);
+          return {
+            gates,
+            actionText: `下一步检查：${pendingName}（命令 ${suiteCheckCommandHint(pendingName)}）。`,
+            nextCheck: pendingName,
+            nextCommand: command,
+          };
+        }
+        const fallbackCheck = firstPendingGate.checks?.[0] || "NONE";
+        return {
+          gates,
+          actionText: "当前关卡进行中，可继续观察时间线里的 suite_check 明细。",
+          nextCheck: fallbackCheck,
+          nextCommand: suiteCheckCommandHint(fallbackCheck),
+        };
+      }
+
+      return {
+        gates,
+        actionText: "本轮关卡已全部通过，可直接看回归结论。",
+        nextCheck: "NONE",
+        nextCommand: "NONE",
+      };
+    }
+
+    function focusSuiteCheckByName(checkName, scrollToRow = true) {
+      if (!checkName || checkName === "NONE") return false;
+      const matchedRecord = findSuiteCheckRecordByName(checkName);
+      const command = suiteCheckCommandHint(checkName);
+
+      if (!matchedRecord) {
+        setSuiteCheckActionMessage(`该检查尚未出现在时间线：${checkName}（命令 ${command}）`);
+        return false;
+      }
+
+      highlightedTimelineCheck = checkName;
+      setSuiteCheckDetail(matchedRecord);
+      renderSessionTimeline(latestSessionTimelineRecords);
+      setSuiteCheckActionMessage(`已定位检查项：${checkName}（命令 ${command}）`);
+
+      if (scrollToRow) {
+        const body = document.getElementById("sessionTimelineBody");
+        const rows = Array.from(body.querySelectorAll("tr[data-suite-check]"));
+        const target = rows.find((row) => String(row.dataset.suiteCheck || "") === checkName);
+        if (target) {
+          target.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      }
+      return true;
+    }
+
+    function renderSuiteGatePanel(records) {
+      const container = document.getElementById("suiteGateBody");
+      const actionNode = document.getElementById("suiteGateActionValue");
+      const commandNode = document.getElementById("suiteGateNextCommandValue");
+      const copyCommandBtn = document.getElementById("suiteGateCopyCommandBtn");
+      if (!container || !actionNode || !commandNode || !copyCommandBtn) return;
+
+      const view = buildSuiteGateView(records);
+      latestSuiteGateView = view;
+      container.innerHTML = view.gates.map((gate) => {
+        const failedText = gate.failedChecks.length
+          ? gate.failedChecks.map((item) => item.name).join(" / ")
+          : "NONE";
+        const pendingText = gate.pendingChecks.length
+          ? gate.pendingChecks.map((item) => item.name).join(" / ")
+          : "NONE";
+        const focusCheck = gate.failedChecks[0]?.name
+          || gate.pendingChecks[0]?.name
+          || gate.checks?.[0]
+          || "NONE";
+        const cardClass = String(gate.status || "PENDING").toLowerCase();
+        return `
+          <div class="suite-gate-card ${cardClass}" role="button" tabindex="0" data-focus-check="${focusCheck}">
+            <div class="suite-gate-title-row">
+              <div class="suite-gate-title">${gate.label}</div>
+              ${suiteGateStatusPill(gate.status)}
+            </div>
+            <div class="suite-gate-desc">${gate.description}</div>
+            <div class="suite-gate-meta">进度 ${gate.passedCount}/${gate.total}</div>
+            <div class="suite-gate-meta">失败项 ${failedText}</div>
+            <div class="suite-gate-meta">待执行 ${pendingText}</div>
+          </div>
+        `;
+      }).join("");
+
+      actionNode.textContent = view.actionText;
+      currentSuiteGateCommand = view.nextCommand || "NONE";
+      commandNode.innerHTML = currentSuiteGateCommand !== "NONE"
+        ? semanticPill(`命令 ${currentSuiteGateCommand}`, "warn")
+        : semanticPill("命令 NONE", "normal");
+      copyCommandBtn.disabled = currentSuiteGateCommand === "NONE";
+      updateOperationCoach();
+
+      container.querySelectorAll(".suite-gate-card").forEach((card) => {
+        const focusCheck = String(card.dataset.focusCheck || "");
+        const onActivate = () => focusSuiteCheckByName(focusCheck);
+        card.addEventListener("click", onActivate);
+        card.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onActivate();
+          }
+        });
+      });
+    }
+
+    function suiteCheckNameFromRecord(record) {
+      const eventType = String(record?.event_type || "").toLowerCase();
+      if (eventType !== "suite_check") return "";
+      const payload = record?.payload || {};
+      if (!payload || typeof payload !== "object") return "";
+      return String(payload.name || "");
+    }
+
+    function findSuiteCheckRecordByName(checkName) {
+      if (!checkName) return null;
+      return latestSessionTimelineRecords.find((record) => suiteCheckNameFromRecord(record) === checkName) || null;
+    }
+
+    function isSuiteCheckPassed(record) {
+      const payload = record?.payload || {};
+      return payload.ok === true || Number(payload.ok) === 1;
+    }
+
+    function getFailedSuiteCheckRecords() {
+      return latestSessionTimelineRecords.filter((record) => {
+        const eventType = String(record?.event_type || "").toLowerCase();
+        if (eventType !== "suite_check") return false;
+        return !isSuiteCheckPassed(record);
+      });
+    }
+
+    function getAllSuiteCheckRecords() {
+      return latestSessionTimelineRecords.filter((record) => {
+        const eventType = String(record?.event_type || "").toLowerCase();
+        return eventType === "suite_check";
+      });
+    }
+
+    function getCurrentTimelineSessionSummary() {
+      return latestSessionTimelineSessions.find((session) => String(session.file_name || "") === selectedTimelineSession) || null;
+    }
+
+    function setSuiteCheckActionMessage(text) {
+      document.getElementById("suiteCheckActionValue").textContent = text || "等待选择检查项";
+    }
+
+    function refreshSuiteCheckActionButtons() {
+      const copyBtn = document.getElementById("suiteCheckCopyBtn");
+      const copyFailedBtn = document.getElementById("suiteCheckCopyFailedBtn");
+      const exportBtn = document.getElementById("suiteCheckExportBtn");
+      const exportFullBtn = document.getElementById("suiteCheckExportFullBtn");
+      const hasFailed = getFailedSuiteCheckRecords().length > 0;
+      const hasChecks = getAllSuiteCheckRecords().length > 0;
+      copyBtn.disabled = !selectedSuiteCheckRecord;
+      copyFailedBtn.disabled = !hasFailed;
+      exportBtn.disabled = !hasFailed;
+      exportFullBtn.disabled = !hasChecks;
+    }
+
+    function buildSuiteCheckSummaryText(record) {
+      if (!record) return "";
+      const payload = record.payload && typeof record.payload === "object" ? record.payload : {};
+      const result = isSuiteCheckPassed(record) ? "PASS" : "FAIL";
+      return [
+        "Flytotal Suite Check Summary",
+        `session=${selectedTimelineSession || "NONE"}`,
+        `scenario=${record.scenario_name || "NONE"}`,
+        `ts=${formatTime(record.ts_ms)}`,
+        `check=${payload.name || "NONE"}`,
+        `result=${result}`,
+        `command=${payload.command || "NONE"}`,
+        `reason=${payload.reason || "NONE"}`,
+        `note=${payload.note || "NONE"}`,
+        `line=${payload.line || "--"}`
+      ].join("\n");
+    }
+
+    function buildFailedSuiteExportText() {
+      const session = getCurrentTimelineSessionSummary();
+      const failedRecords = getFailedSuiteCheckRecords();
+      const lines = [
+        "Flytotal Suite Failure Export",
+        `session_file=${selectedTimelineSession || "NONE"}`,
+        `scenario=${session?.scenario_name || "NONE"}`,
+        `started_at=${formatTime(session?.started_ms || 0)}`,
+        `failed_count=${failedRecords.length}`,
+        ""
+      ];
+
+      failedRecords.forEach((record, index) => {
+        const payload = record.payload && typeof record.payload === "object" ? record.payload : {};
+        lines.push(`[${index + 1}] check=${payload.name || "NONE"}`);
+        lines.push(`ts=${formatTime(record.ts_ms)}`);
+        lines.push(`command=${payload.command || "NONE"}`);
+        lines.push(`reason=${payload.reason || "NONE"}`);
+        lines.push(`note=${payload.note || "NONE"}`);
+        lines.push(`line=${payload.line || "--"}`);
+        lines.push("");
+      });
+
+      return lines.join("\n");
+    }
+
+    function buildFullSuiteReportText() {
+      const session = getCurrentTimelineSessionSummary();
+      const allChecks = getAllSuiteCheckRecords();
+      const passedChecks = allChecks.filter((record) => isSuiteCheckPassed(record));
+      const failedChecks = allChecks.filter((record) => !isSuiteCheckPassed(record));
+
+      const lines = [
+        "Flytotal Full Suite Report",
+        `session_file=${selectedTimelineSession || "NONE"}`,
+        `scenario=${session?.scenario_name || "NONE"}`,
+        `started_at=${formatTime(session?.started_ms || 0)}`,
+        `total_checks=${allChecks.length}`,
+        `passed=${passedChecks.length}`,
+        `failed=${failedChecks.length}`,
+        ""
+      ];
+
+      lines.push("[Passed Checks]");
+      if (!passedChecks.length) {
+        lines.push("NONE");
+      } else {
+        passedChecks.forEach((record, index) => {
+          const payload = record.payload && typeof record.payload === "object" ? record.payload : {};
+          lines.push(`${index + 1}. ${payload.name || "NONE"} @ ${formatTime(record.ts_ms)} / command=${payload.command || "NONE"}`);
+        });
+      }
+      lines.push("");
+
+      lines.push("[Failed Checks]");
+      if (!failedChecks.length) {
+        lines.push("NONE");
+      } else {
+        failedChecks.forEach((record, index) => {
+          const payload = record.payload && typeof record.payload === "object" ? record.payload : {};
+          lines.push(`${index + 1}. check=${payload.name || "NONE"}`);
+          lines.push(`   ts=${formatTime(record.ts_ms)}`);
+          lines.push(`   command=${payload.command || "NONE"}`);
+          lines.push(`   reason=${payload.reason || "NONE"}`);
+          lines.push(`   note=${payload.note || "NONE"}`);
+          lines.push(`   line=${payload.line || "--"}`);
+        });
+      }
+
+      return lines.join("\n");
+    }
+
+    async function copyText(text) {
+      if (!text) return false;
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+
+      const textArea = document.createElement("textarea");
+      textArea.value = text;
+      textArea.style.position = "fixed";
+      textArea.style.left = "-9999px";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      let copied = false;
+      try {
+        copied = document.execCommand("copy");
+      } finally {
+        document.body.removeChild(textArea);
+      }
+      return copied;
+    }
+
+    function downloadTextFile(fileName, content) {
+      const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }
+
+    function downloadJsonFile(fileName, payload) {
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }
+
+    function setSuiteCheckDetail(record) {
+      if (!record || typeof record !== "object") {
+        selectedSuiteCheckRecord = null;
+        document.getElementById("suiteCheckNameValue").textContent = "NONE";
+        document.getElementById("suiteCheckResultValue").innerHTML = semanticPill("NONE", "normal");
+        document.getElementById("suiteCheckTimeValue").textContent = "--";
+        document.getElementById("suiteCheckCommandValue").textContent = "NONE";
+        document.getElementById("suiteCheckReasonValue").textContent = "NONE";
+        document.getElementById("suiteCheckNoteValue").textContent = "NONE";
+        document.getElementById("suiteCheckLineValue").textContent = "--";
+        refreshSuiteCheckActionButtons();
+        return;
+      }
+
+      selectedSuiteCheckRecord = record;
+      const payload = record.payload && typeof record.payload === "object" ? record.payload : {};
+      const checkName = String(payload.name || "NONE");
+      const resultOk = payload.ok === true || Number(payload.ok) === 1;
+      const resultPill = resultOk ? semanticPill("PASS", "ok") : semanticPill("FAIL", "danger");
+
+      document.getElementById("suiteCheckNameValue").textContent = checkName;
+      document.getElementById("suiteCheckResultValue").innerHTML = resultPill;
+      document.getElementById("suiteCheckTimeValue").textContent = formatTime(record.ts_ms);
+      document.getElementById("suiteCheckCommandValue").textContent = String(payload.command || "NONE");
+      document.getElementById("suiteCheckReasonValue").textContent = String(payload.reason || "NONE");
+      document.getElementById("suiteCheckNoteValue").textContent = String(payload.note || "NONE");
+      document.getElementById("suiteCheckLineValue").textContent = String(payload.line || "--");
+      refreshSuiteCheckActionButtons();
+    }
+
+    function timelineRowClass(record) {
+      const source = String(record.source || "").toLowerCase();
+      const eventType = String(record.event_type || "").toLowerCase();
+      const classNames = [];
+      if (eventType === "capture_saved") classNames.push("timeline-row-capture");
+      if (eventType === "test_result") classNames.push("timeline-row-result");
+      if (source.includes("vision") || eventType.startsWith("vision_")) classNames.push("timeline-row-vision");
+      if (source.includes("node") || eventType.startsWith("node_")) classNames.push("timeline-row-node");
+
+      if (highlightedTimelineCheck) {
+        const checkName = suiteCheckNameFromRecord(record);
+        if (checkName && checkName === highlightedTimelineCheck) {
+          classNames.push("timeline-row-focus");
+        }
+      }
+
+      return classNames.join(" ");
+    }
+
+    function timelineSourcePill(record) {
+      const source = String(record.source || "NONE");
+      const lower = source.toLowerCase();
+      if (lower.includes("vision")) return semanticPill("视觉", "warn");
+      if (lower.includes("node")) return semanticPill("主链", "ok");
+      if (lower.includes("track")) return semanticPill("测试", "normal");
+      return semanticPill(source || "NONE", "normal");
+    }
+
+    function timelineEventPill(record) {
+      const eventType = String(record.event_type || "NONE");
+      const lower = eventType.toLowerCase();
+      if (lower === "capture_saved") return semanticPill(eventType, "danger");
+      if (lower === "test_result") return semanticPill(eventType, "handover");
+      if (lower === "node_event") return semanticPill(eventType, "warn");
+      if (lower.startsWith("vision_")) return semanticPill(eventType, "warn");
+      if (lower.startsWith("node_")) return semanticPill(eventType, "ok");
+      return semanticPill(eventType, "normal");
+    }
+
+    function timelineRecordMatchesFilter(record) {
+      if (sessionTimelineFilter === "all") return true;
+
+      const source = String(record.source || "").toLowerCase();
+      const eventType = String(record.event_type || "").toLowerCase();
+
+      if (sessionTimelineFilter === "node") {
+        return source.includes("node") || eventType.startsWith("node_") || eventType === "test_result";
+      }
+
+      if (sessionTimelineFilter === "vision") {
+        return source.includes("vision") || eventType.startsWith("vision_") || eventType === "capture_saved";
+      }
+
+      if (sessionTimelineFilter === "key") {
+        return ["capture_saved", "node_event", "test_result", "suite_started", "suite_check", "suite_finished"].includes(eventType);
+      }
+
+      return true;
+    }
+
+    function setSessionTimelineFilter(filterName) {
+      sessionTimelineFilter = filterName;
+      document.querySelectorAll("#sessionTimelineFilters .filter-btn").forEach((button) => {
+        button.classList.toggle("active", button.dataset.filter === filterName);
+      });
+    }
+
+    function eventRowClass(record) {
+      const reason = String(record.reason || "").toUpperCase();
+      const level = String(record.event_level || "").toUpperCase();
+      if (reason === "HANDOVER") return "event-row-handover";
+      if (level === "CRITICAL" || reason === "HIGH_RISK" || reason === "EVENT_LOCKED") return "event-row-danger";
+      if (level === "WARN" || reason === "SUSPICIOUS" || reason === "RID_MISSING") return "event-row-warn";
+      return "";
+    }
+
+    function setRuntimeStatus(status) {
+      if (!status || !status.available) {
+        document.getElementById("runtimeStateValue").textContent = "NONE";
+        document.getElementById("runtimeLockedValue").textContent = "0";
+        document.getElementById("runtimeReadyValue").innerHTML = semanticPill("NOT_READY", "warn");
+        document.getElementById("runtimeTrackerValue").textContent = "NONE";
+        document.getElementById("runtimeTrackerPlanValue").textContent = "NONE";
+        document.getElementById("runtimeTrackerAvailableValue").textContent = "NONE";
+        document.getElementById("runtimeFrameValue").textContent = "0";
+        document.getElementById("runtimeBboxValue").textContent = "0, 0, 0, 0";
+        document.getElementById("runtimeCenterValue").textContent = "0, 0";
+        document.getElementById("runtimeCaptureValue").textContent = "NONE";
+        document.getElementById("runtimeEventBindSourceValue").textContent = "NONE";
+        document.getElementById("runtimeTimeValue").textContent = "--";
+        return;
+      }
+
+      const sourceReady = Number(status.source_ready ?? 0) === 1;
+      const trackerReady = Number(status.tracker_ready ?? 0) === 1;
+      const chainReady = Number(status.vision_chain_ready ?? 0) === 1;
+      const requestedTracker = String(status.requested_tracker_name || status.tracker_name || "NONE").toUpperCase();
+      const activeTracker = String(status.active_tracker_name || status.tracker_name || "NONE").toUpperCase();
+      const fallbackApplied = Number(status.tracker_fallback_applied ?? 0) === 1;
+      const availableTrackers = Array.isArray(status.available_trackers) && status.available_trackers.length
+        ? status.available_trackers.map((item) => String(item || "").toUpperCase()).join(" / ")
+        : "NONE";
+
+      document.getElementById("runtimeStateValue").innerHTML = mainStatePill(status.vision_state || "NONE");
+      document.getElementById("runtimeLockedValue").innerHTML = statePill(status.vision_state || "NONE", status.vision_locked ?? 0);
+      document.getElementById("runtimeReadyValue").innerHTML = chainReady
+        ? semanticPill("READY", "ok")
+        : semanticPill(`NOT_READY (SRC=${sourceReady ? 1 : 0},TRK=${trackerReady ? 1 : 0})`, "warn");
+      document.getElementById("runtimeTrackerValue").textContent = activeTracker || "NONE";
+      document.getElementById("runtimeTrackerPlanValue").textContent =
+        `${requestedTracker} -> ${activeTracker} / fallback=${fallbackApplied ? "ON" : "OFF"}`;
+      document.getElementById("runtimeTrackerAvailableValue").textContent = availableTrackers;
+      document.getElementById("runtimeFrameValue").textContent = String(status.frame_index ?? 0);
+      document.getElementById("runtimeBboxValue").textContent =
+        `${status.bbox_x ?? 0}, ${status.bbox_y ?? 0}, ${status.bbox_w ?? 0}, ${status.bbox_h ?? 0}`;
+      document.getElementById("runtimeCenterValue").textContent =
+        `${status.center_x ?? 0}, ${status.center_y ?? 0}`;
+      document.getElementById("runtimeCaptureValue").textContent = status.last_capture_reason || "NONE";
+      document.getElementById("runtimeEventBindSourceValue").textContent = String(status.event_id_source || "none");
+      document.getElementById("runtimeTimeValue").textContent = formatTime(status.timestamp_ms);
+    }
+
+    function setNodeStatus(status) {
+      const nodeCard = document.getElementById("nodeCard");
+      if (!status || !status.available) {
+        latestNodeOnline = false;
+        nodeCard.classList.remove("live");
+        nodeCard.classList.add("stale");
+        document.getElementById("nodeOnlineValue").innerHTML = onlinePill(0, 0);
+        document.getElementById("nodeIdValue").textContent = "NONE";
+        document.getElementById("nodeMainStateValue").innerHTML = mainStatePill("UNKNOWN");
+        document.getElementById("nodeHunterValue").innerHTML = semanticPill("UNKNOWN", "normal");
+        document.getElementById("nodeGimbalValue").textContent = "UNKNOWN";
+        document.getElementById("nodeRidValue").textContent = "UNKNOWN / WL_UNKNOWN";
+        document.getElementById("nodeRidWhitelistValue").innerHTML = semanticPill("UNKNOWN", "normal");
+        document.getElementById("nodeRidUpdateValue").textContent = "--";
+        document.getElementById("nodeRiskValue").innerHTML = riskLevelPill("NONE");
+        document.getElementById("nodeConsistencyValue").innerHTML = consistencyStatusPill("UNKNOWN");
+        document.getElementById("nodeConsistencyWarnValue").textContent = "NONE";
+        document.getElementById("nodeEventValue").textContent = "0 / NONE";
+        document.getElementById("nodeLastEventValue").textContent = "NONE";
+        document.getElementById("nodeLastReasonValue").textContent = "NONE / NONE / NONE";
+        document.getElementById("nodeHandoverValue").innerHTML = handoverPill("NONE");
+        document.getElementById("nodeTrackValue").textContent = "0 / 0 / 0";
+        document.getElementById("nodePositionValue").textContent = "0.0, 0.0";
+        document.getElementById("nodeSummaryTrackValue").textContent = "0 / 0 / 0";
+        document.getElementById("nodeSummaryEventValue").textContent = "0 / 0";
+        document.getElementById("nodeSummaryHandoverValue").textContent = "0 / 0 / 0";
+        document.getElementById("nodeMessageValue").textContent = "NONE";
+        document.getElementById("nodeTimeValue").textContent = "--";
+        updateOperationCoach();
+        return;
+      }
+
+      const isOnline = Number(status.online ?? 0) === 1;
+      latestNodeOnline = isOnline;
+      nodeCard.classList.toggle("live", isOnline);
+      nodeCard.classList.toggle("stale", !isOnline);
+
+      document.getElementById("nodeOnlineValue").innerHTML = onlinePill(status.online, status.stale_age_ms);
+      document.getElementById("nodeIdValue").textContent =
+        `${status.node_id || "NONE"}${status.node_zone ? ` / ${status.node_zone}` : ""}`;
+      document.getElementById("nodeMainStateValue").innerHTML = mainStatePill(status.main_state || "UNKNOWN");
+      document.getElementById("nodeHunterValue").innerHTML = hunterPolicyPill(status);
+      document.getElementById("nodeGimbalValue").textContent = status.gimbal_state || "UNKNOWN";
+      document.getElementById("nodeRidValue").textContent =
+        `${status.rid_status || "UNKNOWN"} / ${status.wl_status || "WL_UNKNOWN"}`;
+      document.getElementById("nodeRidWhitelistValue").innerHTML = whitelistPill(status);
+      const ridUpdateMs = Number(status.rid_last_update_ms ?? 0);
+      const ridMatchMs = Number(status.rid_last_match_ms ?? 0);
+      const ridUpdateText = ridUpdateMs > 0 ? `${ridUpdateMs} ms` : "--";
+      const ridMatchText = ridMatchMs > 0 ? `${ridMatchMs} ms` : "--";
+      const wlOwner = String(status.wl_owner || "NONE");
+      const wlLabel = String(status.wl_label || "NONE");
+      const wlHint = [wlOwner, wlLabel].filter((item) => item && item !== "NONE").join(" / ");
+      document.getElementById("nodeRidUpdateValue").textContent =
+        `${ridUpdateText} / match ${ridMatchText}${wlHint ? ` / ${wlHint}` : ""}`;
+      document.getElementById("nodeRiskValue").innerHTML = riskLevelPill(status.risk_level || "NONE");
+      const consistencyStatus = String(status.consistency_status || "UNKNOWN").toUpperCase();
+      const expectedMainState = String(status.consistency_expected_main_state || "UNKNOWN").toUpperCase();
+      const mainStateText = String(status.main_state || "UNKNOWN").toUpperCase();
+      const consistencyHint = consistencyStatus === "WARN" && expectedMainState !== "UNKNOWN"
+        ? ` / 期望 ${expectedMainState}`
+        : "";
+      document.getElementById("nodeConsistencyValue").innerHTML =
+        `${consistencyStatusPill(consistencyStatus)} ${mainStateText}${consistencyHint}`;
+      document.getElementById("nodeConsistencyWarnValue").textContent = consistencyWarningText(status);
+      document.getElementById("nodeEventValue").innerHTML =
+        `${eventStatusPill(status.event_status || (Number(status.event_active ?? 0) === 1 ? "OPEN" : "NONE"))} ${status.event_id || "NONE"}`;
+      document.getElementById("nodeLastEventValue").textContent =
+        `${status.last_event_id || "NONE"} / ${status.last_reason || "NONE"}`;
+      document.getElementById("nodeLastReasonValue").innerHTML =
+        `${handoverPill(status.event_reason || "NONE")} ${semanticPill(status.event_level || "NONE", String(status.event_level || "").toUpperCase() === "CRITICAL" ? "danger" : String(status.event_level || "").toUpperCase() === "WARN" ? "warn" : "normal")} ${eventStatusPill(status.event_status || "NONE")}`;
+      document.getElementById("nodeHandoverValue").innerHTML =
+        `${handoverPill(status.handover_last_result || "NONE")} ${status.handover_last_target || "NONE"}`;
+      document.getElementById("nodeTrackValue").textContent =
+        `${status.track_id ?? 0} / ${status.track_active ?? 0} / ${status.track_confirmed ?? 0}`;
+      document.getElementById("nodePositionValue").textContent =
+        `${status.x_mm ?? 0.0}, ${status.y_mm ?? 0.0}`;
+      document.getElementById("nodeSummaryTrackValue").textContent =
+        `${status.track_active_count ?? 0} / ${status.track_confirmed_count ?? 0} / ${status.track_lost_count ?? 0}`;
+      document.getElementById("nodeSummaryEventValue").textContent =
+        `${status.event_opened_count ?? 0} / ${status.event_closed_count ?? 0}`;
+      document.getElementById("nodeSummaryHandoverValue").textContent =
+        `${status.handover_queued_count ?? 0} / ${status.handover_emitted_count ?? 0} / ${status.handover_ignored_count ?? 0}`;
+      document.getElementById("nodeMessageValue").textContent = status.last_message_type || "NONE";
+      document.getElementById("nodeTimeValue").textContent =
+        `${formatTime(status.last_update_ms)} / ${Math.round((status.stale_age_ms ?? 0) / 1000)}s`;
+      updateOperationCoach();
+    }
+
+    function setParameterStatus(status) {
+      if (!status || !status.available) {
+        document.getElementById("paramPredictorValue").textContent = "0.000 / 0.000";
+        document.getElementById("paramCloudValue").textContent = "0 / 0";
+        document.getElementById("paramSimHoldValue").textContent = "0";
+        document.getElementById("paramBaudValue").textContent = "0 / 0";
+        document.getElementById("paramServoValue").textContent = "0 / 0 / 0";
+        document.getElementById("paramSafetyValue").textContent = "0 / 0";
+        document.getElementById("paramOutputValue").textContent = "0 / 0 / 0";
+        document.getElementById("paramMainStateValue").innerHTML = mainStatePill("UNKNOWN");
+        document.getElementById("paramGimbalStateValue").textContent = "UNKNOWN";
+        document.getElementById("paramRiskScoreValue").textContent = "0.0";
+        document.getElementById("paramIdleReadyValue").textContent = "0";
+        document.getElementById("paramNoteValue").textContent = "ConfirmFrames / LostTimeoutMs 暂未输出";
+        return;
+      }
+
+      document.getElementById("paramPredictorValue").textContent =
+        `${formatFixed(status.predictor_kp, 3)} / ${formatFixed(status.predictor_kd, 3)}`;
+      document.getElementById("paramCloudValue").textContent =
+        `${status.heartbeat_ms ?? 0} / ${status.event_report_ms ?? 0}`;
+      document.getElementById("paramSimHoldValue").textContent = String(status.sim_hold_ms ?? 0);
+      document.getElementById("paramBaudValue").textContent =
+        `${status.monitor_baud ?? 0} / ${status.radar_baud ?? 0}`;
+      document.getElementById("paramServoValue").textContent =
+        `${status.test_mode_enabled ?? 0} / ${status.servo_enabled ?? 0} / ${status.servo_attached ?? 0}`;
+      document.getElementById("paramSafetyValue").textContent =
+        `${status.safe_mode_enabled ?? 0} / ${status.diag_running ?? 0}`;
+      document.getElementById("paramOutputValue").textContent =
+        `${status.debug_enabled ?? 0} / ${status.quiet_enabled ?? 0} / ${status.uplink_enabled ?? 0}`;
+      document.getElementById("paramMainStateValue").innerHTML = mainStatePill(status.main_state || "UNKNOWN");
+      document.getElementById("paramGimbalStateValue").textContent = status.gimbal_state || "UNKNOWN";
+      document.getElementById("paramRiskScoreValue").textContent = formatFixed(status.risk_score, 1);
+      document.getElementById("paramIdleReadyValue").textContent = String(status.idle_ready ?? 0);
+      document.getElementById("paramNoteValue").textContent = "ConfirmFrames / LostTimeoutMs 暂未输出";
+    }
+
+    function setTestSession(session) {
+      if (!session || !session.available) {
+        document.getElementById("testStatusValue").innerHTML = testStatusPill("IDLE");
+        document.getElementById("testScenarioNameValue").textContent = "NONE";
+        document.getElementById("testSuiteNameValue").textContent = "NONE";
+        document.getElementById("testScenarioIndexValue").textContent = "0 / 0";
+        document.getElementById("testRidValue").textContent = "UNCHANGED";
+        document.getElementById("testProgressValue").textContent = "0 / 0";
+        document.getElementById("testSuiteStepValue").textContent = "0 / 0";
+        document.getElementById("testSentValue").textContent = "0";
+        document.getElementById("testSuiteChecksValue").textContent = "0 / 0";
+        document.getElementById("testSuiteFailuresValue").textContent = "NONE";
+        document.getElementById("testPositionValue").textContent = "0.0, 0.0";
+        document.getElementById("testStartValue").textContent = "--";
+        document.getElementById("testFinishValue").textContent = "--";
+        return;
+      }
+
+      const suiteReport = (session.suite_report && typeof session.suite_report === "object") ? session.suite_report : null;
+      const failedSuiteChecks = suiteReport && Array.isArray(suiteReport.failed_checks)
+        ? suiteReport.failed_checks.map((item) => item?.name || "UNKNOWN")
+        : [];
+
+      document.getElementById("testStatusValue").innerHTML = testStatusPill(session.status || "IDLE");
+      document.getElementById("testScenarioNameValue").textContent = session.scenario_name || "NONE";
+      document.getElementById("testSuiteNameValue").textContent = session.suite_name || "NONE";
+      document.getElementById("testScenarioIndexValue").textContent =
+        `${session.scenario_index ?? 0} / ${session.scenario_total ?? 0}`;
+      document.getElementById("testRidValue").textContent = session.rid_mode || "UNCHANGED";
+      document.getElementById("testProgressValue").textContent =
+        `${session.point_index ?? 0} / ${session.point_total ?? 0}`;
+      document.getElementById("testSuiteStepValue").textContent =
+        `${session.suite_step_index ?? 0} / ${session.suite_step_total ?? 0} (${session.suite_step || "NONE"})`;
+      document.getElementById("testSentValue").textContent = String(session.points_sent ?? 0);
+      document.getElementById("testSuiteChecksValue").textContent =
+        `${session.suite_passed ?? 0} / ${(session.suite_passed ?? 0) + (session.suite_failed ?? 0)}`;
+      document.getElementById("testSuiteFailuresValue").textContent =
+        failedSuiteChecks.length ? failedSuiteChecks.join(" | ") : "NONE";
+      document.getElementById("testPositionValue").textContent =
+        `${session.current_x_mm ?? 0.0}, ${session.current_y_mm ?? 0.0}`;
+      document.getElementById("testStartValue").textContent = formatTime(session.started_ms);
+      document.getElementById("testFinishValue").textContent = formatTime(session.finished_ms);
+    }
+
+    function setTestResult(result) {
+      if (!result || !result.available) {
+        document.getElementById("testResultLabelValue").innerHTML = testResultPill("NONE");
+        document.getElementById("testResultSourceValue").innerHTML = testResultSourcePill("none");
+        document.getElementById("testResultSummaryValue").textContent = "还没有结果";
+        document.getElementById("testResultScenarioValue").textContent = "NONE";
+        document.getElementById("testResultRidValue").textContent = "UNCHANGED";
+        document.getElementById("testResultStateValue").textContent = "UNKNOWN / NONE";
+        document.getElementById("testResultEventValue").textContent = "NONE";
+        document.getElementById("testResultFlagsValue").textContent = "0 / 0";
+        document.getElementById("testResultTrackValue").textContent = "0 / 0";
+        document.getElementById("testResultEventDeltaValue").textContent = "0 / 0";
+        document.getElementById("testResultHandoverDeltaValue").textContent = "0 / 0 / 0";
+        document.getElementById("testResultRiskValue").textContent = "0.0";
+        document.getElementById("testResultStartValue").textContent = "--";
+        document.getElementById("testResultFinishValue").textContent = "--";
+        return;
+      }
+
+      const fallbackResult = isFallbackResultSource(result.result_source || "none");
+      const fallbackMetricText = "N/A（套件兜底）";
+      document.getElementById("testResultLabelValue").innerHTML = testResultPill(result.result_label || "NONE");
+      document.getElementById("testResultSourceValue").innerHTML = testResultSourcePill(result.result_source || "none");
+      document.getElementById("testResultSummaryValue").textContent = buildResultSummaryText(result);
+      document.getElementById("testResultScenarioValue").textContent = result.scenario_name || "NONE";
+      document.getElementById("testResultRidValue").textContent = result.rid_mode || "UNCHANGED";
+      document.getElementById("testResultStateValue").textContent =
+        `${result.final_main_state || "UNKNOWN"} / ${result.final_risk_level || "NONE"}`;
+      document.getElementById("testResultEventValue").textContent = fallbackResult ? fallbackMetricText : (result.final_event_id || "NONE");
+      document.getElementById("testResultFlagsValue").textContent = fallbackResult
+        ? fallbackMetricText
+        : `${result.had_event ?? 0} / ${result.had_handover ?? 0}`;
+      document.getElementById("testResultTrackValue").textContent = fallbackResult
+        ? fallbackMetricText
+        : `${result.track_active_delta ?? 0} / ${result.track_lost_delta ?? 0}`;
+      document.getElementById("testResultEventDeltaValue").textContent = fallbackResult
+        ? fallbackMetricText
+        : `${result.event_opened_delta ?? 0} / ${result.event_closed_delta ?? 0}`;
+      document.getElementById("testResultHandoverDeltaValue").textContent = fallbackResult
+        ? fallbackMetricText
+        : `${result.handover_queued_delta ?? 0} / ${result.handover_emitted_delta ?? 0} / ${result.handover_ignored_delta ?? 0}`;
+      document.getElementById("testResultRiskValue").textContent = String(result.max_risk_score ?? 0.0);
+      document.getElementById("testResultStartValue").textContent = formatTime(result.started_ms);
+      document.getElementById("testResultFinishValue").textContent = formatTime(result.finished_ms);
+    }
+
+    function setLatest(record) {
+      const image = document.getElementById("latestImage");
+      const empty = document.getElementById("emptyState");
+
+      if (!record) {
+        image.style.display = "none";
+        image.removeAttribute("src");
+        empty.style.display = "grid";
+        document.getElementById("reasonValue").textContent = "--";
+        document.getElementById("eventValue").textContent = "--";
+        document.getElementById("trackerValue").textContent = "--";
+        document.getElementById("visionValue").textContent = "--";
+        document.getElementById("bboxValue").textContent = "--";
+        document.getElementById("centerValue").textContent = "--";
+        return;
+      }
+
+      const rawImageUrl = String(record.image_url || "");
+      image.src = rawImageUrl.startsWith("data:")
+        ? rawImageUrl
+        : `${rawImageUrl}?t=${record.timestamp_ms}`;
+      image.style.display = "block";
+      empty.style.display = "none";
+      document.getElementById("reasonValue").innerHTML = reasonPill(record.capture_reason);
+      document.getElementById("eventValue").textContent = record.event_id || "NONE";
+      document.getElementById("trackerValue").textContent = record.tracker_name || "NONE";
+      document.getElementById("visionValue").innerHTML = statePill(record.vision_state || "NONE", record.vision_locked ?? 0);
+      document.getElementById("bboxValue").textContent = formatBBox(record);
+      document.getElementById("centerValue").textContent = `${record.center_x}, ${record.center_y}`;
+    }
+
+    function renderRecords(records) {
+      const body = document.getElementById("recordsBody");
+      if (!records.length) {
+        body.innerHTML = '<tr><td colspan="7">当前还没有抓拍记录。</td></tr>';
+        return;
+      }
+
+      body.innerHTML = records.map((record) => `
+        <tr>
+          <td>${formatTime(record.timestamp_ms)}</td>
+          <td>${reasonPill(record.capture_reason)}</td>
+          <td>${statePill(record.vision_state, record.vision_locked)}</td>
+          <td>${record.tracker_name || "NONE"}</td>
+          <td>${record.event_id || "NONE"}</td>
+          <td>${formatBBox(record)}</td>
+          <td><a class="file-link" href="${record.image_url}" target="_blank" rel="noreferrer">查看图片</a></td>
+        </tr>
+      `).join("");
+    }
+
+    function normalizeEventId(value) {
+      const text = String(value || "").trim();
+      if (!text) return "";
+      if (text.toUpperCase() === "NONE") return "NONE";
+      return text;
+    }
+
+    function normalizeEventMatchMode(value) {
+      const text = String(value || "fallback").toLowerCase();
+      return text === "strict" ? "strict" : "fallback";
+    }
+
+    function readEventMatchMode() {
+      try {
+        if (!window.localStorage) return "fallback";
+        return normalizeEventMatchMode(window.localStorage.getItem(EVENT_MATCH_MODE_STORAGE_KEY));
+      } catch (error) {
+        return "fallback";
+      }
+    }
+
+    function saveEventMatchMode(mode) {
+      try {
+        if (!window.localStorage) return;
+        window.localStorage.setItem(EVENT_MATCH_MODE_STORAGE_KEY, normalizeEventMatchMode(mode));
+      } catch (error) {
+        // ignore storage errors
+      }
+    }
+
+    function refreshEventMatchModeButton() {
+      const button = document.getElementById("eventMatchModeBtn");
+      const normalized = normalizeEventMatchMode(eventMatchMode);
+      if (normalized === "strict") {
+        button.textContent = "匹配模式：严格";
+        button.title = "严格模式：只按 event_id 精确匹配抓拍";
+      } else {
+        button.textContent = "匹配模式：兜底";
+        button.title = "兜底模式：先精确匹配，缺失时允许时间窗口补链";
+      }
+    }
+
+    function eventRecordTime(record) {
+      return Number(record.display_time_ms || record.host_logged_ms || record.timestamp_ms || 0);
+    }
+
+    function formatCaptureBinding(detail) {
+      const mode = String(detail?.capture_binding_mode || "no_capture");
+      if (mode === "event_id_exact") return "精确匹配（event_id）";
+      if (mode === "time_window_fallback_none_event") return "时间窗口补链（NONE 抓拍）";
+      return "未匹配到抓拍";
+    }
+
+    function ensureSelectedNodeEvent(records) {
+      latestNodeEventRecords = Array.isArray(records) ? records : [];
+      const current = normalizeEventId(selectedNodeEventId);
+      const hasCurrent = !!current && latestNodeEventRecords.some(
+        (record) => normalizeEventId(record.event_id) === current
+      );
+      if (hasCurrent) return;
+
+      const fallback = latestNodeEventRecords.find((record) => normalizeEventId(record.event_id) && normalizeEventId(record.event_id) !== "NONE");
+      selectedNodeEventId = fallback ? normalizeEventId(fallback.event_id) : "";
+    }
+
+    async function loadNodeEventDetail(eventId = "") {
+      const normalized = normalizeEventId(eventId);
+      const mode = normalizeEventMatchMode(eventMatchMode);
+      const url = normalized && normalized !== "NONE"
+        ? `${NODE_EVENT_DETAIL_API_URL}?event_id=${encodeURIComponent(normalized)}&capture_match_mode=${encodeURIComponent(mode)}`
+        : `${NODE_EVENT_DETAIL_API_URL}?capture_match_mode=${encodeURIComponent(mode)}`;
+      const response = await fetch(apiUrlWithMode(url), { cache: "no-store" });
+      return response.json();
+    }
+
+    async function syncActiveEventSelection(eventId = "", force = false) {
+      const normalized = normalizeEventId(eventId);
+      const targetEventId = normalized && normalized !== "NONE" ? normalized : "NONE";
+      if (!force && targetEventId === lastSyncedActiveEventId) {
+        return;
+      }
+      const url = targetEventId === "NONE"
+        ? `${ACTIVE_EVENT_API_URL}?clear=1`
+        : `${ACTIVE_EVENT_API_URL}?event_id=${encodeURIComponent(targetEventId)}`;
+      try {
+        await fetch(apiUrlWithMode(url), { cache: "no-store" });
+        lastSyncedActiveEventId = targetEventId;
+      } catch (error) {
+        console.warn("active event sync failed", error);
+      }
+    }
+
+    async function loadNodeEventExport(eventId = "") {
+      const normalized = normalizeEventId(eventId);
+      const mode = normalizeEventMatchMode(eventMatchMode);
+      const url = normalized && normalized !== "NONE"
+        ? `${NODE_EVENT_EXPORT_API_URL}?event_id=${encodeURIComponent(normalized)}&capture_match_mode=${encodeURIComponent(mode)}`
+        : `${NODE_EVENT_EXPORT_API_URL}?capture_match_mode=${encodeURIComponent(mode)}`;
+      const response = await fetch(apiUrlWithMode(url), { cache: "no-store" });
+      return response.json();
+    }
+
+    async function loadNodeEventExports(eventId = "") {
+      const normalized = normalizeEventId(eventId);
+      const url = normalized && normalized !== "NONE"
+        ? `${NODE_EVENT_EXPORTS_API_URL}&event_id=${encodeURIComponent(normalized)}`
+        : NODE_EVENT_EXPORTS_API_URL;
+      const response = await fetch(apiUrlWithMode(url), { cache: "no-store" });
+      return response.json();
+    }
+
+    async function loadNodeEventExportDetail(fileName = "") {
+      const safeName = String(fileName || "").trim();
+      if (!safeName) return { ok: true, available: false };
+      const url = `${NODE_EVENT_EXPORT_DETAIL_API_URL}?file_name=${encodeURIComponent(safeName)}`;
+      const response = await fetch(apiUrlWithMode(url), { cache: "no-store" });
+      return response.json();
+    }
+
+    function setEventDetailActionMessage(text) {
+      document.getElementById("eventDetailActionValue").textContent = text || "选择事件后可导出证据。";
+    }
+
+    function refreshEventReplayModeUI() {
+      const state = document.getElementById("eventReplayStateValue");
+      const exitButton = document.getElementById("eventReplayExitBtn");
+      if (eventReplayMode) {
+        const fileText = eventReplayFileName ? `（${eventReplayFileName}）` : "";
+        state.textContent = `回放模式${fileText}`;
+        exitButton.style.display = "inline-flex";
+        exitButton.disabled = false;
+        return;
+      }
+      state.textContent = "实时模式";
+      exitButton.style.display = "none";
+      exitButton.disabled = true;
+    }
+
+    function setEventReplayMode(enabled, fileName = "", eventId = "") {
+      eventReplayMode = !!enabled;
+      eventReplayFileName = eventReplayMode ? String(fileName || "") : "";
+      eventReplayEventId = eventReplayMode ? normalizeEventId(eventId) : "";
+      eventDetailSourceLabel = eventReplayMode
+        ? `回放：${eventReplayFileName || "导出证据"}`
+        : "实时链路";
+      refreshEventReplayModeUI();
+    }
+
+    function renderNodeEventExports(payload) {
+      const body = document.getElementById("eventExportHistoryBody");
+      const records = Array.isArray(payload?.records) ? payload.records : [];
+      latestNodeEventExportRecords = records.slice();
+      latestNodeEventExportEventId = normalizeEventId(payload?.event_id || selectedNodeEventId || "");
+      if (!records.length) {
+        body.innerHTML = '<tr><td colspan="4">当前还没有证据导出记录。</td></tr>';
+        return;
+      }
+      body.innerHTML = records.map((record) => {
+        const exportTime = formatTime(Number(record.export_generated_ms || 0));
+        const eventId = normalizeEventId(record.event_id) || "NONE";
+        const captureCount = Number(record.capture_count || 0);
+        const fileName = String(record.file_name || "UNKNOWN");
+        const fileUrl = String(record.file_url || "");
+        const isActiveReplay = eventReplayMode && eventReplayFileName && fileName === eventReplayFileName;
+        const fileCell = fileUrl
+          ? `<a class="file-link" href="${fileUrl}" target="_blank" rel="noreferrer">${fileName}</a>`
+          : fileName;
+        const replayLabel = isActiveReplay ? "回放中" : "回放";
+        return `<tr class="${isActiveReplay ? "event-export-row-active" : ""}">
+          <td>${exportTime}</td>
+          <td>${eventId}</td>
+          <td>${captureCount}</td>
+          <td>${fileCell} <button class="mini-btn replay-export-btn" type="button" data-file-name="${fileName.replace(/"/g, "&quot;")}">${replayLabel}</button></td>
+        </tr>`;
+      }).join("");
+
+      body.querySelectorAll(".replay-export-btn").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const fileName = String(button.getAttribute("data-file-name") || "");
+          if (!fileName) return;
+          try {
+            const payload = await loadNodeEventExportDetail(fileName);
+            const detail = payload?.event_detail;
+            if (!payload?.available || !detail || typeof detail !== "object") {
+              setEventDetailActionMessage(`回放失败：${fileName} 无有效事件详情`);
+              return;
+            }
+            const eventId = normalizeEventId(payload.event_id || detail.event_id || detail?.event?.event_id || "");
+            if (eventId && eventId !== "NONE") {
+              selectedNodeEventId = eventId;
+              renderNodeEvents(latestNodeEventRecords);
+            }
+            renderNodeEventDetail(detail);
+            setEventReplayMode(true, fileName, eventId);
+            renderNodeEventExports({
+              event_id: latestNodeEventExportEventId,
+              records: latestNodeEventExportRecords,
+            });
+            setEventDetailActionMessage(`已回放导出证据：${fileName}`);
+          } catch (error) {
+            setEventDetailActionMessage(`回放失败：${error}`);
+          }
+        });
+      });
+    }
+
+    function refreshNodeEventExportButton(detail) {
+      const button = document.getElementById("eventDetailExportBtn");
+      const payload = detail && typeof detail === "object" ? detail : null;
+      const eventId = normalizeEventId(payload ? (payload.event_id || payload?.event?.event_id) : "");
+      const enabled = !!(payload && payload.available && eventId && eventId !== "NONE");
+      button.disabled = !enabled;
+    }
+
+    async function exportCurrentNodeEventEvidence() {
+      const currentEventId = normalizeEventId(
+        (currentNodeEventDetail && (currentNodeEventDetail.event_id || currentNodeEventDetail?.event?.event_id)) || selectedNodeEventId
+      );
+      const button = document.getElementById("eventDetailExportBtn");
+      button.disabled = true;
+
+      try {
+        const payload = await loadNodeEventExport(currentEventId && currentEventId !== "NONE" ? currentEventId : "");
+        if (!payload || !payload.available) {
+          setEventDetailActionMessage("当前事件暂无可导出的证据对象。");
+          return;
+        }
+        const effectiveEventId = normalizeEventId(payload.event_id || currentEventId || "NONE") || "NONE";
+        const safeEventId = String(effectiveEventId).replace(/[^\w.-]/g, "_");
+        const fileName = String(payload.suggested_file_name || `event_evidence_${safeEventId}_${Date.now()}.json`);
+        downloadJsonFile(fileName, payload);
+        const savedPath = String(payload.export_file_path || "");
+        const saveError = String(payload.export_file_error || "");
+        if (savedPath) {
+          setEventDetailActionMessage(`已导出并落盘：${fileName} -> ${savedPath}`);
+        } else if (saveError) {
+          setEventDetailActionMessage(`已导出下载：${fileName}（服务端落盘失败：${saveError}）`);
+        } else {
+          setEventDetailActionMessage(`已导出：${fileName}`);
+        }
+        const exportHistory = await loadNodeEventExports(effectiveEventId);
+        renderNodeEventExports(exportHistory);
+      } catch (error) {
+        setEventDetailActionMessage(`导出失败：${error}`);
+      } finally {
+        refreshNodeEventExportButton(currentNodeEventDetail);
+      }
+    }
+
+    function resetNodeEventDetail(message = "当前还没有可回放的事件证据。") {
+      setEventReplayMode(false);
+      currentNodeEventDetail = null;
+      const image = document.getElementById("eventDetailImage");
+      const empty = document.getElementById("eventDetailEmpty");
+      const link = document.getElementById("eventDetailPathLink");
+      image.style.display = "none";
+      image.removeAttribute("src");
+      empty.style.display = "grid";
+      empty.textContent = message;
+      document.getElementById("eventDetailIdValue").textContent = "NONE";
+      document.getElementById("eventDetailTimeValue").textContent = "--";
+      document.getElementById("eventDetailRiskValue").textContent = "NONE";
+      document.getElementById("eventDetailNodeValue").textContent = "NONE";
+      document.getElementById("eventDetailPositionValue").textContent = "0.0, 0.0";
+      document.getElementById("eventDetailRidValue").textContent = "UNKNOWN";
+      document.getElementById("eventDetailReasonValue").textContent = "NONE";
+      document.getElementById("eventDetailSourceValue").textContent = eventDetailSourceLabel;
+      document.getElementById("eventDetailBindingValue").textContent = "NONE";
+      link.textContent = "--";
+      link.href = "#";
+      renderNodeEventExports({ records: [] });
+      refreshNodeEventExportButton(null);
+      setEventDetailActionMessage("选择事件后可导出证据。");
+    }
+
+    function renderNodeEventDetail(detail) {
+      currentNodeEventDetail = detail && typeof detail === "object" ? detail : null;
+      const eventRecord = detail && typeof detail === "object" ? (detail.event || null) : null;
+      if (!eventRecord || typeof eventRecord !== "object") {
+        resetNodeEventDetail("当前还没有可回放的事件证据。先让事件和抓拍都产生日志。");
+        return;
+      }
+
+      const image = document.getElementById("eventDetailImage");
+      const empty = document.getElementById("eventDetailEmpty");
+      const link = document.getElementById("eventDetailPathLink");
+      const capture = detail.latest_capture && typeof detail.latest_capture === "object" ? detail.latest_capture : null;
+      const capturePath = capture ? String(capture.file_path || "") : "";
+      const captureImageUrl = capture ? String(capture.image_url || "") : "";
+      const captureBindingText = formatCaptureBinding(detail);
+      const captureBindingNote = String(detail?.capture_binding_note || "");
+      const effectiveMode = normalizeEventMatchMode(detail?.capture_match_mode || eventMatchMode);
+      if (captureImageUrl) {
+        image.src = captureImageUrl.startsWith("data:")
+          ? captureImageUrl
+          : `${captureImageUrl}?t=${capture.timestamp_ms || eventRecord.host_logged_ms || eventRecord.timestamp_ms || Date.now()}`;
+        image.style.display = "block";
+        empty.style.display = "none";
+      } else {
+        image.style.display = "none";
+        image.removeAttribute("src");
+        empty.style.display = "grid";
+        empty.textContent = captureBindingNote || "该事件暂时没有抓拍图片，已保留事件对象与字段。";
+      }
+
+      const eventId = normalizeEventId(eventRecord.event_id) || "NONE";
+      const eventTime = eventRecordTime(eventRecord);
+      const riskLevel = String(eventRecord.risk_level || eventRecord.event_level || "NONE");
+      const nodeId = String(eventRecord.node_id || eventRecord.source_node || "NONE");
+      const x = Number(eventRecord.x_mm ?? 0);
+      const y = Number(eventRecord.y_mm ?? 0);
+      const rid = String(eventRecord.rid_status || "UNKNOWN");
+      const reason = String(eventRecord.reason || "NONE");
+
+      document.getElementById("eventDetailIdValue").textContent = eventId;
+      document.getElementById("eventDetailTimeValue").textContent = formatTime(eventTime);
+      document.getElementById("eventDetailRiskValue").innerHTML = riskLevelPill(riskLevel);
+      document.getElementById("eventDetailNodeValue").textContent = nodeId;
+      document.getElementById("eventDetailPositionValue").textContent = `${x.toFixed(1)}, ${y.toFixed(1)}`;
+      document.getElementById("eventDetailRidValue").textContent = rid;
+      document.getElementById("eventDetailReasonValue").innerHTML = handoverPill(reason);
+      document.getElementById("eventDetailSourceValue").textContent = eventDetailSourceLabel;
+      document.getElementById("eventDetailBindingValue").textContent = `${captureBindingText}（${effectiveMode === "strict" ? "严格" : "兜底"}）`;
+      if (capturePath) {
+        link.textContent = capturePath;
+        link.href = captureImageUrl || "#";
+      } else {
+        link.textContent = "NONE";
+        link.href = "#";
+      }
+
+      refreshNodeEventExportButton(currentNodeEventDetail);
+      setEventDetailActionMessage(`已绑定事件 ${eventId}，可导出证据 JSON。`);
+    }
+
+    async function setSelectedNodeEvent(eventId) {
+      setEventReplayMode(false);
+      selectedNodeEventId = normalizeEventId(eventId);
+      renderNodeEvents(latestNodeEventRecords);
+      await syncActiveEventSelection(selectedNodeEventId);
+      try {
+        const detail = await loadNodeEventDetail(selectedNodeEventId);
+        renderNodeEventDetail(detail);
+        const exportHistory = await loadNodeEventExports(selectedNodeEventId);
+        renderNodeEventExports(exportHistory);
+      } catch (error) {
+        resetNodeEventDetail(`读取事件详情失败：${error}`);
+      }
+    }
+
+    function renderNodeEvents(records) {
+      const body = document.getElementById("nodeEventsBody");
+      if (!records.length) {
+        body.innerHTML = '<tr><td colspan="9">当前还没有 Node A 事件记录。</td></tr>';
+        resetNodeEventDetail("当前还没有 Node A 事件记录。");
+        return;
+      }
+
+      body.innerHTML = records.map((record) => `
+        <tr class="${eventRowClass(record)} ${normalizeEventId(record.event_id) === normalizeEventId(selectedNodeEventId) ? "event-row-selected" : ""}" data-event-id="${normalizeEventId(record.event_id)}">
+          <td>${formatTime(eventRecordTime(record))}</td>
+          <td>${record.source_type || "NONE"}</td>
+          <td>${record.event_id || "NONE"}</td>
+          <td>${handoverPill(record.reason || "NONE")}</td>
+          <td>${semanticPill(record.event_level || "NONE", String(record.event_level || "").toUpperCase() === "CRITICAL" ? "danger" : String(record.event_level || "").toUpperCase() === "WARN" ? "warn" : "normal")}</td>
+          <td>${eventStatusPill(record.event_status || "NONE")}</td>
+          <td>${record.track_id ?? 0}</td>
+          <td>${record.risk_score ?? 0}</td>
+          <td>${record.handover_to && record.handover_to !== "NONE" ? handoverPill(record.handover_to) : "NONE"}</td>
+        </tr>
+      `).join("");
+
+      body.querySelectorAll("tr[data-event-id]").forEach((row) => {
+        row.addEventListener("click", () => {
+          const eventId = row.getAttribute("data-event-id") || "";
+          if (!eventId || eventId === "NONE") return;
+          setSelectedNodeEvent(eventId);
+        });
+      });
+    }
+
+    function setTestResultsSummary(records) {
+      const safeRecords = Array.isArray(records) ? records : [];
+      const summary = {
+        pass: 0,
+        warn: 0,
+        fail: 0,
+        event: 0,
+        handover: 0,
+        formal: 0,
+        fallback: 0,
+      };
+
+      safeRecords.forEach((record) => {
+        const label = String(record.result_label || "NONE").toUpperCase();
+        if (label === "PASS") summary.pass += 1;
+        if (label === "WARN") summary.warn += 1;
+        if (label === "FAIL") summary.fail += 1;
+        if (Number(record.had_event ?? 0) === 1) summary.event += 1;
+        if (Number(record.had_handover ?? 0) === 1) summary.handover += 1;
+        if (isFormalResultSource(record.result_source || "none")) summary.formal += 1;
+        if (isFallbackResultSource(record.result_source || "none")) summary.fallback += 1;
+      });
+
+      document.getElementById("summaryPassChip").textContent = `PASS ${summary.pass}`;
+      document.getElementById("summaryWarnChip").textContent = `WARN ${summary.warn}`;
+      document.getElementById("summaryFailChip").textContent = `FAIL ${summary.fail}`;
+      document.getElementById("summaryEventChip").textContent = `事件 ${summary.event}`;
+      document.getElementById("summaryHandoverChip").textContent = `接力 ${summary.handover}`;
+      document.getElementById("summaryFormalChip").textContent = `正式 ${summary.formal}`;
+      document.getElementById("summaryFallbackChip").textContent = `兜底 ${summary.fallback}`;
+      latestTestResultsSummary = { ...summary, total: safeRecords.length };
+      setResultConceptGuide(summary, safeRecords.length);
+      updateOperationCoach();
+
+      const overview = document.getElementById("testResultsOverviewHint");
+      if (!safeRecords.length) {
+        overview.className = "result-overview";
+        overview.textContent = "总览：还没有结果记录。";
+        return;
+      }
+
+      if (summary.fallback > 0) {
+        overview.className = "result-overview warn";
+        overview.textContent =
+          `总览：当前有 ${summary.fallback} 条套件兜底结果。建议动作：先启动 bridge，再跑一轮当前套件补齐正式链路。`;
+        return;
+      }
+
+      overview.className = "result-overview ok";
+      overview.textContent = "总览：当前结果已来自正式/历史链路，可直接用于回归结论。";
+    }
+
+    function setTestResultsFilter(filterName) {
+      testResultsFilter = filterName;
+      document.querySelectorAll("#testResultsFilters .filter-btn").forEach((button) => {
+        button.classList.toggle("active", button.dataset.filter === filterName);
+      });
+    }
+
+    function timelineSummary(record) {
+      const payload = record.payload || {};
+      const eventType = record.event_type || "NONE";
+      if (eventType === "suite_started") {
+        return `套件开始 / ${payload.suite_name || "NONE"} / RID=${payload.rid_mode || "UNCHANGED"}`;
+      }
+      if (eventType === "suite_check") {
+        return `套件检查 ${payload.name || "NONE"} / ${payload.ok ? "PASS" : "FAIL"}`;
+      }
+      if (eventType === "suite_finished") {
+        return `套件结束 / PASS=${payload.passed ?? 0} / FAIL=${payload.failed ?? 0}`;
+      }
+      if (eventType === "session_started") {
+        return `场景开始 / RID=${payload.rid_mode || "UNCHANGED"}`;
+      }
+      if (eventType === "track_point_sent") {
+        return `TRACK ${payload.points_sent ?? 0} -> (${payload.x_mm ?? 0}, ${payload.y_mm ?? 0})`;
+      }
+      if (eventType === "session_settling") {
+        return `等待收敛 / points=${payload.points_sent ?? 0}`;
+      }
+      if (eventType === "session_finished") {
+        return `场景结束 / points=${payload.points_sent ?? 0}`;
+      }
+      if (eventType === "all_done") {
+        return `全部完成 / total=${payload.scenario_total ?? 0}`;
+      }
+      if (eventType === "node_status_changed") {
+        const current = payload.current || {};
+        return `主链切换 -> ${current.main_state || "UNKNOWN"} / ${current.risk_level || "NONE"}`;
+      }
+      if (eventType === "node_event") {
+        return `事件 ${payload.reason || "NONE"} / ${payload.event_id || "NONE"}`;
+      }
+      if (eventType === "vision_status_changed") {
+        return `视觉 ${payload.vision_state || "UNKNOWN"} / lock=${payload.vision_locked ?? 0}`;
+      }
+      if (eventType === "capture_saved") {
+        return `抓拍 ${payload.capture_reason || "NONE"} / ${payload.file_path || "NONE"}`;
+      }
+      if (eventType === "test_result") {
+        return `结果 ${payload.result_label || "NONE"} / ${payload.final_risk_level || "NONE"}`;
+      }
+      return JSON.stringify(payload);
+    }
+
+    function renderSessionTimelineSessions(sessions) {
+      const container = document.getElementById("sessionTimelineSessions");
+      latestSessionTimelineSessions = Array.isArray(sessions) ? sessions : [];
+      if (!latestSessionTimelineSessions.length) {
+        container.innerHTML = '<button class="filter-btn active" type="button">最近一轮</button>';
+        setSessionTimelineSummary(null);
+        return;
+      }
+
+      if (!selectedTimelineSession || !latestSessionTimelineSessions.some((session) => (session.file_name || "") === selectedTimelineSession)) {
+        selectedTimelineSession = latestSessionTimelineSessions[0].file_name || "";
+      }
+
+      container.innerHTML = latestSessionTimelineSessions.map((session) => {
+        const fileName = session.file_name || "";
+        const activeClass = fileName === selectedTimelineSession ? "active" : "";
+        const label = `${session.scenario_name || "session"} / ${formatTime(session.started_ms)}`;
+        return `<button class="filter-btn ${activeClass}" type="button" data-session="${fileName}">${label}</button>`;
+      }).join("");
+
+      container.querySelectorAll(".filter-btn").forEach((button) => {
+        button.addEventListener("click", () => {
+          selectedTimelineSession = button.dataset.session || "";
+          loadData();
+        });
+      });
+
+      const selectedSession = latestSessionTimelineSessions.find((session) => (session.file_name || "") === selectedTimelineSession) || latestSessionTimelineSessions[0];
+      setSessionTimelineSummary(selectedSession);
+    }
+
+    function findMatchingTimelineSession(record) {
+      const scenarioName = String(record?.scenario_name || "");
+      const startedMs = Number(record?.started_ms || 0);
+      if (!latestSessionTimelineSessions.length || !scenarioName || !startedMs) {
+        return null;
+      }
+
+      let matchedSession = latestSessionTimelineSessions.find((session) =>
+        String(session.scenario_name || "") === scenarioName && Number(session.started_ms || 0) === startedMs
+      );
+
+      if (matchedSession) return matchedSession;
+
+      matchedSession = latestSessionTimelineSessions.find((session) =>
+        String(session.scenario_name || "") === scenarioName
+      );
+
+      return matchedSession || null;
+    }
+
+    async function jumpToTimelineSession(sessionFileName, keepHighlight = false) {
+      if (!sessionFileName) return;
+      if (!keepHighlight) {
+        highlightedTimelineCheck = "";
+        setSuiteCheckDetail(null);
+        setSuiteCheckActionMessage("已切换会话，可继续选择检查项");
+      }
+      selectedTimelineSession = sessionFileName;
+      await loadData();
+      document.getElementById("sessionTimelineSummary")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    async function jumpToSuiteCheck(sessionFileName, checkName) {
+      if (!sessionFileName || !checkName) return;
+      highlightedTimelineCheck = checkName;
+      await jumpToTimelineSession(sessionFileName, true);
+      focusSuiteCheckByName(checkName, true);
+    }
+
+    function setSessionTimelineSummary(session) {
+      if (!session) {
+        latestCoachSuiteName = "standard_acceptance";
+        document.getElementById("timelineScenarioChip").textContent = "场景 NONE";
+        document.getElementById("timelineStartChip").textContent = "开始 --";
+        document.getElementById("timelineEventCountChip").textContent = "事件数 0";
+        document.getElementById("timelineCaptureChip").textContent = "抓拍 0";
+        document.getElementById("timelineNodeEventChip").textContent = "主链事件 0";
+        document.getElementById("timelineSuiteChip").textContent = "套件 NONE";
+        document.getElementById("timelineResultChip").textContent = "结果 NONE";
+        setSuiteCheckDetail(null);
+        return;
+      }
+
+      document.getElementById("timelineScenarioChip").textContent = `场景 ${session.scenario_name || "NONE"}`;
+      document.getElementById("timelineStartChip").textContent = `开始 ${formatTime(session.started_ms)}`;
+      document.getElementById("timelineEventCountChip").textContent = `事件数 ${session.event_count ?? 0}`;
+      document.getElementById("timelineCaptureChip").textContent = `抓拍 ${Number(session.has_capture ?? 0) === 1 ? 1 : 0}`;
+      document.getElementById("timelineNodeEventChip").textContent = `主链事件 ${Number(session.has_node_event ?? 0) === 1 ? 1 : 0}`;
+      const suiteName = session.suite_name || "NONE";
+      const scenarioName = String(session.scenario_name || "");
+      latestCoachSuiteName = normalizeCoachSuiteName(
+        suiteName !== "NONE" ? suiteName : scenarioName
+      );
+      const suiteResult = String(session.suite_result || "NONE").toUpperCase();
+      const suitePassed = session.suite_passed ?? 0;
+      const suiteFailed = session.suite_failed ?? 0;
+      const rawResultLabel = String(session.result_label || "NONE").toUpperCase();
+      const displayResultLabel = rawResultLabel !== "NONE" ? rawResultLabel : suiteResult;
+      const rawRiskLevel = String(session.final_risk_level || "NONE").toUpperCase();
+      const hasFormalResult = rawResultLabel !== "NONE";
+      const displayResultContext = hasFormalResult
+        ? riskLevelPill(rawRiskLevel)
+        : (suiteResult !== "NONE" ? semanticPill("套件兜底", "normal") : riskLevelPill(rawRiskLevel));
+      document.getElementById("timelineSuiteChip").innerHTML =
+        `套件 ${semanticPill(suiteName, "normal")} ${testResultPill(suiteResult)} ${suitePassed}/${suitePassed + suiteFailed}`;
+      document.getElementById("timelineResultChip").innerHTML = `结果 ${testResultPill(displayResultLabel)} ${displayResultContext}`;
+    }
+
+    function setSessionCapturesSummary(records) {
+      const safeRecords = Array.isArray(records) ? records : [];
+      const latest = safeRecords[0] || null;
+      document.getElementById("sessionCaptureScenarioChip").textContent =
+        `场景 ${latest?.scenario_name || "NONE"}`;
+      document.getElementById("sessionCaptureCountChip").textContent =
+        `抓拍数 ${safeRecords.length}`;
+      document.getElementById("sessionCaptureEventChip").textContent =
+        `事件 ${latest?.event_id || "NONE"}`;
+    }
+
+    function renderSessionCaptures(records) {
+      const body = document.getElementById("sessionCapturesBody");
+      const safeRecords = Array.isArray(records) ? records : [];
+      setSessionCapturesSummary(safeRecords);
+
+      if (!safeRecords.length) {
+        body.innerHTML = '<tr><td colspan="5">当前会话还没有抓拍证据。</td></tr>';
+        return;
+      }
+
+      body.innerHTML = safeRecords.map((record) => `
+        <tr>
+          <td>${formatTime(record.timestamp_ms)}</td>
+          <td>${reasonPill(record.capture_reason || "NONE")}</td>
+          <td>${statePill(record.vision_state || "NONE", record.vision_locked ?? 0)}</td>
+          <td>${record.event_id || "NONE"}</td>
+          <td><a class="file-link" href="${record.image_url}" target="_blank" rel="noreferrer">查看图片</a></td>
+        </tr>
+      `).join("");
+    }
+
+    function renderSessionTimeline(records) {
+      const body = document.getElementById("sessionTimelineBody");
+      latestSessionTimelineRecords = Array.isArray(records) ? records : [];
+      renderSuiteGatePanel(latestSessionTimelineRecords);
+      const filteredRecords = latestSessionTimelineRecords.filter((record) => timelineRecordMatchesFilter(record));
+      if (!filteredRecords.length) {
+        body.innerHTML = '<tr><td colspan="5">当前还没有联调时间线记录。</td></tr>';
+        setSuiteCheckDetail(null);
+        return;
+      }
+
+      body.innerHTML = filteredRecords.map((record) => `
+        <tr class="${timelineRowClass(record)}" data-suite-check="${suiteCheckNameFromRecord(record)}">
+          <td>${formatTime(record.ts_ms)}</td>
+          <td>${timelineSourcePill(record)}</td>
+          <td>${timelineEventPill(record)}</td>
+          <td>${record.scenario_name || "NONE"}</td>
+          <td>${timelineSummary(record)}</td>
+        </tr>
+      `).join("");
+
+      body.querySelectorAll("tr[data-suite-check]").forEach((row) => {
+        const checkName = String(row.dataset.suiteCheck || "");
+        if (!checkName) return;
+        row.addEventListener("click", () => {
+          highlightedTimelineCheck = checkName;
+          setSuiteCheckDetail(findSuiteCheckRecordByName(checkName));
+          renderSessionTimeline(latestSessionTimelineRecords);
+        });
+      });
+
+      const allSuiteChecks = latestSessionTimelineRecords.filter((record) => suiteCheckNameFromRecord(record));
+      const highlightedRecord = highlightedTimelineCheck ? findSuiteCheckRecordByName(highlightedTimelineCheck) : null;
+      if (highlightedRecord) {
+        setSuiteCheckDetail(highlightedRecord);
+        return;
+      }
+      if (allSuiteChecks.length) {
+        highlightedTimelineCheck = suiteCheckNameFromRecord(allSuiteChecks[0]);
+        setSuiteCheckDetail(allSuiteChecks[0]);
+        renderSessionTimeline(latestSessionTimelineRecords);
+        return;
+      }
+      highlightedTimelineCheck = "";
+      setSuiteCheckDetail(null);
+    }
+
+    function renderTestResults(records) {
+      const body = document.getElementById("testResultsBody");
+      const filteredRecords = records.filter((record) => {
+        if (testResultsFilter === "attention") {
+          return ["WARN", "FAIL"].includes(String(record.result_label || "").toUpperCase());
+        }
+        if (testResultsFilter === "event") {
+          return Number(record.had_event ?? 0) === 1;
+        }
+        if (testResultsFilter === "handover") {
+          return Number(record.had_handover ?? 0) === 1;
+        }
+        if (testResultsFilter === "fallback") {
+          return isFallbackResultSource(record.result_source || "none");
+        }
+        return true;
+      });
+
+      if (!filteredRecords.length) {
+        body.innerHTML = '<tr><td colspan="11">当前还没有测试结果历史。</td></tr>';
+        return;
+      }
+
+      body.innerHTML = filteredRecords.map((record) => {
+        const recordKey = `${record.scenario_name || "NONE"}-${record.rid_mode || "UNCHANGED"}-${record.started_ms || 0}`;
+        const expanded = expandedTestResults.has(recordKey);
+        const scenarioDescription = record.scenario_description || "NONE";
+        const fallbackResult = isFallbackResultSource(record.result_source || "none");
+        const fallbackMetricText = "N/A（套件兜底）";
+        const rowEventHandoverText = fallbackResult ? fallbackMetricText : `${record.had_event ?? 0} / ${record.had_handover ?? 0}`;
+        const rowLastEventText = fallbackResult ? fallbackMetricText : (record.final_event_id || "NONE");
+        const rowTrackDeltaText = fallbackResult ? fallbackMetricText : `${record.track_active_delta ?? 0} / ${record.track_lost_delta ?? 0}`;
+        const detailEventDeltaText = fallbackResult ? fallbackMetricText : `${record.event_opened_delta ?? 0} / ${record.event_closed_delta ?? 0}`;
+        const detailHandoverDeltaText = fallbackResult ? fallbackMetricText : `${record.handover_queued_delta ?? 0} / ${record.handover_emitted_delta ?? 0} / ${record.handover_ignored_delta ?? 0}`;
+        const detailEventIdText = fallbackResult ? fallbackMetricText : (record.final_event_id || "NONE");
+        const sourceKind = testResultReliabilityKind(record.result_source || "none");
+        const resultSourceDisplay = testResultSourceDisplay(record.result_source || "none");
+        const suiteReport = (record.suite_report && typeof record.suite_report === "object") ? record.suite_report : null;
+        const suiteSummary = suiteReport
+          ? `${suiteReport.suite_name || "standard_acceptance"} / ${suiteReport.passed ?? 0} / ${suiteReport.total_checks ?? 0}`
+          : "NONE";
+        const suiteFailedItems = suiteReport && Array.isArray(suiteReport.failed_checks)
+          ? suiteReport.failed_checks.filter((item) => item && typeof item === "object")
+          : [];
+        const matchedSession = findMatchingTimelineSession(record);
+        const suiteFailedChecks = suiteFailedItems.length
+          ? suiteFailedItems.map((item) => `${item?.name || "UNKNOWN"}: ${item?.reason || "NONE"}`).join(" | ")
+          : "NONE";
+        const suiteFailedCheckLinks = suiteFailedItems.length
+          ? suiteFailedItems.map((item) => `
+              <button
+                class="mini-btn jump-suite-check-btn"
+                type="button"
+                data-session="${matchedSession?.file_name || ""}"
+                data-check="${item?.name || ""}"
+                ${matchedSession ? "" : "disabled"}
+              >${item?.name || "UNKNOWN"}</button>
+            `).join("")
+          : "NONE";
+        const sessionButtonLabel = matchedSession ? "查看会话" : "无会话";
+
+        return `
+        <tr class="result-row-${sourceKind}">
+          <td>${formatTime(record.started_ms)}</td>
+          <td>${record.scenario_name || "NONE"}</td>
+          <td>${record.rid_mode || "UNCHANGED"}</td>
+          <td>${testResultPill(record.result_label || "NONE")}</td>
+          <td>${resultSourceDisplay}</td>
+          <td>${riskLevelPill(record.final_risk_level || "NONE")}</td>
+          <td>${rowEventHandoverText}</td>
+          <td>${rowLastEventText}</td>
+          <td>${rowTrackDeltaText}</td>
+          <td>${formatTime(record.finished_ms)}</td>
+          <td>
+            <button class="mini-btn toggle-result-btn" type="button" data-key="${recordKey}">${expanded ? "收起" : "展开"}</button>
+            <button class="mini-btn jump-session-btn" type="button" data-session="${matchedSession?.file_name || ""}" ${matchedSession ? "" : "disabled"}>${sessionButtonLabel}</button>
+          </td>
+        </tr>
+        ${expanded ? `
+        <tr class="detail-row result-row-${sourceKind}">
+          <td colspan="11">
+            <div class="detail-card">
+              <div class="detail-item"><strong>最终主状态</strong><span>${record.final_main_state || "UNKNOWN"}</span></div>
+              <div class="detail-item"><strong>最终风险</strong><span>${record.final_risk_level || "NONE"} / ${record.max_risk_score ?? 0}</span></div>
+              <div class="detail-item"><strong>最终云台 / 风险分</strong><span>${record.final_gimbal_state || "UNKNOWN"} / ${formatFixed(record.final_risk_score, 1)}</span></div>
+              <div class="detail-item"><strong>结果来源</strong><span>${resultSourceDisplay}</span></div>
+              <div class="detail-item"><strong>场景说明</strong><span>${scenarioDescription}</span></div>
+              <div class="detail-item"><strong>事件变化</strong><span>${detailEventDeltaText}</span></div>
+              <div class="detail-item"><strong>接力变化</strong><span>${detailHandoverDeltaText}</span></div>
+              <div class="detail-item"><strong>最后事件号</strong><span>${detailEventIdText}</span></div>
+              <div class="detail-item"><strong>参数快照</strong><span>KP=${formatFixed(record.predictor_kp, 3)} / KD=${formatFixed(record.predictor_kd, 3)} / HB=${record.heartbeat_ms ?? 0} / EVT=${record.event_report_ms ?? 0}</span></div>
+              <div class="detail-item"><strong>运行开关</strong><span>SIM=${record.sim_hold_ms ?? 0} / DBG=${record.debug_enabled ?? 0} / QUIET=${record.quiet_enabled ?? 0} / UPLINK=${record.uplink_enabled ?? 0}</span></div>
+              <div class="detail-item"><strong>套件摘要</strong><span>${suiteSummary}</span></div>
+              <div class="detail-item"><strong>套件失败项</strong><span>${suiteFailedChecks}</span></div>
+              <div class="detail-item"><strong>跳转失败项</strong><div class="detail-links">${suiteFailedCheckLinks}</div></div>
+            </div>
+          </td>
+        </tr>` : ""}
+      `;
+      }).join("");
+
+      document.querySelectorAll("#testResultsBody .toggle-result-btn").forEach((button) => {
+        button.addEventListener("click", () => {
+          const recordKey = button.dataset.key || "";
+          if (!recordKey) return;
+          if (expandedTestResults.has(recordKey)) {
+            expandedTestResults.delete(recordKey);
+          } else {
+            expandedTestResults.add(recordKey);
+          }
+          renderTestResults(records);
+        });
+      });
+
+      document.querySelectorAll("#testResultsBody .jump-session-btn").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const sessionFileName = button.dataset.session || "";
+          if (!sessionFileName) return;
+          await jumpToTimelineSession(sessionFileName);
+        });
+      });
+
+      document.querySelectorAll("#testResultsBody .jump-suite-check-btn").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const sessionFileName = button.dataset.session || "";
+          const checkName = button.dataset.check || "";
+          if (!sessionFileName || !checkName) return;
+          await jumpToSuiteCheck(sessionFileName, checkName);
+        });
+      });
+    }
+
+    async function loadStatus() {
+      const response = await fetch(apiUrlWithMode(STATUS_API_URL), { cache: "no-store" });
+      return response.json();
+    }
+
+    async function loadNodeStatus() {
+      const response = await fetch(apiUrlWithMode(NODE_STATUS_API_URL), { cache: "no-store" });
+      return response.json();
+    }
+
+    async function loadCaptures() {
+      const response = await fetch(apiUrlWithMode(CAPTURES_API_URL), { cache: "no-store" });
+      return response.json();
+    }
+
+    async function loadNodeEvents() {
+      const response = await fetch(apiUrlWithMode(NODE_EVENTS_API_URL), { cache: "no-store" });
+      return response.json();
+    }
+
+    async function loadTestSession() {
+      const response = await fetch(apiUrlWithMode(TEST_SESSION_API_URL), { cache: "no-store" });
+      return response.json();
+    }
+
+    async function loadTestResult() {
+      const response = await fetch(apiUrlWithMode(TEST_RESULT_API_URL), { cache: "no-store" });
+      return response.json();
+    }
+
+    async function loadTestResults() {
+      const response = await fetch(apiUrlWithMode(TEST_RESULTS_API_URL), { cache: "no-store" });
+      return response.json();
+    }
+
+    async function loadSessionTimeline(sessionName = "") {
+      const url = sessionName
+        ? `${SESSION_TIMELINE_API_URL}&session=${encodeURIComponent(sessionName)}`
+        : SESSION_TIMELINE_API_URL;
+      const response = await fetch(apiUrlWithMode(url), { cache: "no-store" });
+      return response.json();
+    }
+
+    async function loadSessionTimelineSessions() {
+      const response = await fetch(apiUrlWithMode(SESSION_TIMELINE_SESSIONS_API_URL), { cache: "no-store" });
+      return response.json();
+    }
+
+    async function loadSessionCaptures(sessionName = "") {
+      const url = sessionName
+        ? `${SESSION_CAPTURES_API_URL}&session=${encodeURIComponent(sessionName)}`
+        : SESSION_CAPTURES_API_URL;
+      const response = await fetch(apiUrlWithMode(url), { cache: "no-store" });
+      return response.json();
+    }
+
+    async function loadDataSource() {
+      const response = await fetch(apiUrlWithMode(DATA_SOURCE_API_URL), { cache: "no-store" });
+      return response.json();
+    }
+
+    async function loadData() {
+      try {
+        const [status, nodeStatus, captures, nodeEvents, testSession, testResult, testResults, sessionTimelineSessions, dataSource] = await Promise.all([
+          loadStatus(),
+          loadNodeStatus(),
+          loadCaptures(),
+          loadNodeEvents(),
+          loadTestSession(),
+          loadTestResult(),
+          loadTestResults(),
+          loadSessionTimelineSessions(),
+          loadDataSource(),
+        ]);
+        if (!selectedTimelineSession && sessionTimelineSessions.latest_file) {
+          selectedTimelineSession = sessionTimelineSessions.latest_file;
+        }
+        const [sessionTimeline, sessionCaptures] = await Promise.all([
+          loadSessionTimeline(selectedTimelineSession),
+          loadSessionCaptures(selectedTimelineSession),
+        ]);
+        setRuntimeStatus(status);
+        setNodeStatus(nodeStatus);
+        setParameterStatus(nodeStatus);
+        setTestSession(testSession);
+        setTestResult(testResult);
+        setLatest(captures.latest || null);
+        renderRecords(captures.records || []);
+        ensureSelectedNodeEvent(nodeEvents.records || []);
+        if (!eventReplayMode) {
+          await syncActiveEventSelection(selectedNodeEventId);
+        }
+        renderNodeEvents(nodeEvents.records || []);
+        const eventExportHistory = await loadNodeEventExports(selectedNodeEventId);
+        if (!eventReplayMode) {
+          const nodeEventDetail = await loadNodeEventDetail(selectedNodeEventId);
+          renderNodeEventDetail(nodeEventDetail);
+        }
+        renderNodeEventExports(eventExportHistory);
+        setTestResultsSummary(testResults.records || []);
+        renderSessionTimelineSessions(sessionTimelineSessions.sessions || []);
+        renderTestResults(testResults.records || []);
+        renderSessionTimeline(sessionTimeline.records || []);
+        renderSessionCaptures(sessionCaptures.records || []);
+        const sourceMode = normalizeDataMode(dataSource?.mode || dataMode);
+        if (sourceMode !== dataMode) {
+          setDataMode(sourceMode, false);
+        } else {
+          refreshDataModeUI();
+        }
+      } catch (error) {
+        document.getElementById("recordsBody").innerHTML =
+          `<tr><td colspan="7">读取数据失败：${error}</td></tr>`;
+        document.getElementById("nodeEventsBody").innerHTML =
+          `<tr><td colspan="9">读取事件失败：${error}</td></tr>`;
+        resetNodeEventDetail(`读取事件详情失败：${error}`);
+        document.getElementById("testResultsBody").innerHTML =
+          `<tr><td colspan="11">读取测试结果历史失败：${error}</td></tr>`;
+        document.getElementById("sessionTimelineBody").innerHTML =
+          `<tr><td colspan="5">读取联调时间线失败：${error}</td></tr>`;
+        document.getElementById("sessionCapturesBody").innerHTML =
+          `<tr><td colspan="5">读取本轮抓拍证据失败：${error}</td></tr>`;
+        document.getElementById("eventExportHistoryBody").innerHTML =
+          `<tr><td colspan="4">读取导出历史失败：${error}</td></tr>`;
+      }
+    }
+
+    document.querySelectorAll("#testResultsFilters .filter-btn").forEach((button) => {
+      button.addEventListener("click", () => {
+        setTestResultsFilter(button.dataset.filter || "all");
+        loadData();
+      });
+    });
+
+    document.querySelectorAll("#sessionTimelineFilters .filter-btn").forEach((button) => {
+      button.addEventListener("click", () => {
+        setSessionTimelineFilter(button.dataset.filter || "all");
+        renderSessionTimeline(latestSessionTimelineRecords);
+      });
+    });
+
+    document.getElementById("dataModeLiveBtn").addEventListener("click", () => {
+      setDataMode("live");
+    });
+
+    document.getElementById("dataModeMockBtn").addEventListener("click", () => {
+      setDataMode("mock");
+    });
+
+    document.getElementById("eventDetailExportBtn").addEventListener("click", async () => {
+      await exportCurrentNodeEventEvidence();
+    });
+
+    document.getElementById("eventReplayExitBtn").addEventListener("click", async () => {
+      setEventReplayMode(false);
+      if (normalizeEventId(selectedNodeEventId) && normalizeEventId(selectedNodeEventId) !== "NONE") {
+        await setSelectedNodeEvent(selectedNodeEventId);
+        return;
+      }
+      await loadData();
+    });
+
+    document.getElementById("eventMatchModeBtn").addEventListener("click", async () => {
+      eventMatchMode = normalizeEventMatchMode(eventMatchMode) === "strict" ? "fallback" : "strict";
+      saveEventMatchMode(eventMatchMode);
+      refreshEventMatchModeButton();
+      if (normalizeEventId(selectedNodeEventId) && normalizeEventId(selectedNodeEventId) !== "NONE") {
+        await setSelectedNodeEvent(selectedNodeEventId);
+        return;
+      }
+      await loadData();
+    });
+
+    document.getElementById("suiteCheckCopyBtn").addEventListener("click", async () => {
+      if (!selectedSuiteCheckRecord) {
+        setSuiteCheckActionMessage("未选中检查项，无法复制");
+        return;
+      }
+      try {
+        const copied = await copyText(buildSuiteCheckSummaryText(selectedSuiteCheckRecord));
+        setSuiteCheckActionMessage(copied ? "已复制选中检查摘要" : "复制失败，请重试");
+      } catch (error) {
+        setSuiteCheckActionMessage(`复制失败：${error}`);
+      }
+    });
+
+    document.getElementById("suiteCheckCopyFailedBtn").addEventListener("click", async () => {
+      const failed = getFailedSuiteCheckRecords();
+      if (!failed.length) {
+        setSuiteCheckActionMessage("当前会话无失败检查项可复制");
+        return;
+      }
+      try {
+        const copied = await copyText(buildFailedSuiteExportText());
+        setSuiteCheckActionMessage(copied ? "已复制本轮失败清单" : "复制失败，请重试");
+      } catch (error) {
+        setSuiteCheckActionMessage(`复制失败：${error}`);
+      }
+    });
+
+    document.getElementById("suiteCheckExportBtn").addEventListener("click", () => {
+      const failed = getFailedSuiteCheckRecords();
+      if (!failed.length) {
+        setSuiteCheckActionMessage("当前会话无失败检查项可导出");
+        return;
+      }
+      const safeSession = String(selectedTimelineSession || "session").replace(/[^\w.-]/g, "_");
+      const fileName = `${safeSession}_suite_failures.txt`;
+      downloadTextFile(fileName, buildFailedSuiteExportText());
+      setSuiteCheckActionMessage(`已导出失败摘要：${fileName}`);
+    });
+
+    document.getElementById("suiteCheckExportFullBtn").addEventListener("click", () => {
+      const allChecks = getAllSuiteCheckRecords();
+      if (!allChecks.length) {
+        setSuiteCheckActionMessage("当前会话还没有 suite_check 记录");
+        return;
+      }
+      const safeSession = String(selectedTimelineSession || "session").replace(/[^\w.-]/g, "_");
+      const fileName = `${safeSession}_suite_full_report.txt`;
+      downloadTextFile(fileName, buildFullSuiteReportText());
+      setSuiteCheckActionMessage(`已导出完整验收报告：${fileName}`);
+    });
+
+    document.getElementById("suiteGateCopyCommandBtn").addEventListener("click", async () => {
+      if (!currentSuiteGateCommand || currentSuiteGateCommand === "NONE") {
+        setSuiteCheckActionMessage("当前没有可复制的下一步命令");
+        return;
+      }
+      try {
+        const copied = await copyText(currentSuiteGateCommand);
+        setSuiteCheckActionMessage(copied ? `已复制命令：${currentSuiteGateCommand}` : "复制失败，请重试");
+      } catch (error) {
+        setSuiteCheckActionMessage(`复制失败：${error}`);
+      }
+    });
+
+    document.getElementById("coachCopyBridgeBtn").addEventListener("click", async () => {
+      const command = buildBridgeCommand(getCoachPortValue());
+      try {
+        const copied = await copyText(command);
+        setSuiteCheckActionMessage(copied ? `已复制命令：${command}` : "复制失败，请重试");
+      } catch (error) {
+        setSuiteCheckActionMessage(`复制失败：${error}`);
+      }
+    });
+
+    document.getElementById("coachCopySuiteBtn").addEventListener("click", async () => {
+      const command = buildSuiteCommand(getCoachPortValue());
+      try {
+        const copied = await copyText(command);
+        setSuiteCheckActionMessage(copied ? `已复制命令：${command}` : "复制失败，请重试");
+      } catch (error) {
+        setSuiteCheckActionMessage(`复制失败：${error}`);
+      }
+    });
+
+    document.getElementById("coachPortInput").addEventListener("input", () => {
+      updateOperationCoach();
+    });
+
+    eventMatchMode = readEventMatchMode();
+    refreshEventMatchModeButton();
+    setEventReplayMode(false);
+    refreshSuiteCheckActionButtons();
+    setSuiteCheckActionMessage("等待选择检查项");
+    setDataMode(readDataMode(), false);
+    updateOperationCoach();
+
+    loadData();
+    setInterval(loadData, 2000);
+  </script>
+</body>
+</html>
+

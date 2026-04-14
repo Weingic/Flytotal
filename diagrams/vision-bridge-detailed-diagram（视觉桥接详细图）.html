@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vision_bridge Detailed Diagram（视觉桥接详细图）</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #0d1117; color: #c9d1d9; padding: 28px 18px 80px; }
+  .container { max-width: 1320px; margin: 0 auto; }
+  h1 { color: #58a6ff; font-size: 30px; margin-bottom: 8px; }
+  .subtitle { color: #8b949e; font-size: 14px; line-height: 1.8; margin-bottom: 24px; max-width: 1090px; }
+  .section { background: #11161d; border: 1px solid #21262d; border-radius: 18px; padding: 18px; margin-bottom: 22px; }
+  .label { color: #58a6ff; font-size: 12px; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase; margin-bottom: 12px; }
+  .title { font-size: 22px; margin-bottom: 8px; }
+  .desc { color: #8b949e; font-size: 13px; line-height: 1.75; margin-bottom: 14px; }
+  .flow { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; margin-bottom: 12px; }
+  .arrow { align-self: center; color: #fbbf24; font-size: 26px; font-weight: 700; }
+  .box { flex: 1 1 185px; min-width: 175px; background: #161b22; border: 1px solid #21262d; border-radius: 14px; padding: 14px; }
+  .box b { display: block; color: #58a6ff; font-size: 14px; margin-bottom: 6px; }
+  .box p { color: #b7c0ca; font-size: 12px; line-height: 1.7; }
+  .box.good { background: #102318; border-color: #1f6b3b; }
+  .box.good b { color: #86efac; }
+  .box.warn { background: #2a1f10; border-color: #6f4f12; }
+  .box.warn b { color: #fbbf24; }
+  .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  .card { background: #161b22; border: 1px solid #21262d; border-radius: 14px; padding: 14px; }
+  .card h3 { color: #fbbf24; font-size: 13px; margin-bottom: 10px; }
+  .card ul { padding-left: 18px; color: #b7c0ca; font-size: 12px; line-height: 1.75; }
+  .card li { margin-bottom: 5px; }
+  .code { font-family: "JetBrains Mono", monospace; background: #0b1016; border: 1px solid #202a35; border-radius: 6px; padding: 1px 6px; font-size: 11px; color: #e6edf3; }
+  .copy-btn { position: fixed; top: 16px; right: 16px; border: none; background: #238636; color: #fff; border-radius: 999px; padding: 11px 16px; cursor: pointer; font-weight: 700; }
+  .copy-btn:hover { background: #2ea043; }
+  .copy-btn.copied { background: #1a7f37; }
+  @media (max-width: 1100px) { .grid4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 960px) { .grid2, .grid3, .grid4 { grid-template-columns: 1fr; } .arrow { width: 100%; text-align: center; } }
+</style>
+</head>
+<body>
+<button class="copy-btn" onclick="copyAsImage(this)">Copy as image</button>
+<div class="container" id="diagram">
+  <h1>`vision_bridge` 详细功能逻辑图</h1>
+  <div class="subtitle">
+    这张图对应 <span class="code">tools/vision_bridge_视觉桥接.py</span>。它的定位是“最小视觉锁定与抓拍桥接器”：
+    打开摄像头或视频源，允许你手动框选 ROI，使用 OpenCV tracker 持续跟踪目标，并把视觉状态、抓拍记录、最新状态 JSON、
+    session timeline 一起维护起来。
+  </div>
+
+  <div class="section">
+    <div class="label">Role</div>
+    <div class="title">1. 这个脚本负责什么</div>
+    <div class="desc">它不是做检测模型推理，而是做“人工选目标 + 跟踪 + 抓拍 + 状态桥接”。</div>
+    <div class="flow">
+      <div class="box"><b>输入</b><p>摄像头索引或视频文件<br>人工框选 ROI<br>可选 event_id 标签</p></div>
+      <div class="arrow">→</div>
+      <div class="box warn"><b>处理</b><p>Tracker 跟踪<br>状态机切换<br>自动/手动抓拍<br>输出状态与日志</p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>输出</b><p>窗口 overlay<br><span class="code">latest_status.json</span><br><span class="code">capture_records.csv</span><br><span class="code">captures/*.jpg</span><br>session timeline 事件</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Main Function</div>
+    <div class="title">2. `main()` 的完整流程</div>
+    <div class="desc">`main()` 的核心是“初始化一次，然后进入逐帧循环”。所有状态变化、抓拍、按键控制都在这个循环里完成。</div>
+    <div class="flow">
+      <div class="box"><b>require_opencv()</b><p>检查是否安装 OpenCV<br>缺失就退出并提示安装</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>argparse</b><p>解析视频源、tracker 类型、尺寸、日志、抓拍、状态文件参数</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>resolve_path()</b><p>把目录和文件路径转绝对路径<br>包括 <span class="code">capture-dir</span>、<span class="code">status-file</span>、<span class="code">session-file</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box warn"><b>open_source()</b><p>打开摄像头索引或视频文件<br>失败就 <span class="code">return 1</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>初始化运行时变量</b><p><span class="code">tracker</span>、<span class="code">current_bbox</span>、<span class="code">current_state</span>、<span class="code">capture_index</span>、<span class="code">last_capture_record</span> 等</p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>进入逐帧循环</b><p>读帧、更新 tracker、写状态、自动抓拍、显示 overlay、处理按键</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Main Parameters</div>
+    <div class="title">3. `main()` 参数图</div>
+    <div class="grid3">
+      <div class="card">
+        <h3>视频输入参数</h3>
+        <ul>
+          <li><span class="code">--source</span>：默认 <span class="code">0</span>，可填摄像头索引或视频文件路径。</li>
+          <li><span class="code">--tracker</span>：可选 <span class="code">csrt</span> 或 <span class="code">kcf</span>，默认 <span class="code">csrt</span>。</li>
+          <li><span class="code">--width</span> / <span class="code">--height</span>：请求摄像头采集尺寸，默认 <span class="code">1280x720</span>。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>状态输出参数</h3>
+        <ul>
+          <li><span class="code">--log-interval</span>：锁定状态下重复终端打印的最小间隔，默认 <span class="code">1.0</span> 秒。</li>
+          <li><span class="code">--log-file</span>：可选，连续视觉状态 CSV。</li>
+          <li><span class="code">--status-file</span>：最新视觉状态 JSON。</li>
+          <li><span class="code">--status-write-interval</span>：状态未变化时，最小 JSON 重写间隔，默认 <span class="code">0.25</span> 秒。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>抓拍与 session 参数</h3>
+        <ul>
+          <li><span class="code">--capture-dir</span>：图片保存目录，默认 <span class="code">captures</span>。</li>
+          <li><span class="code">--capture-log-file</span>：抓拍元数据 CSV，默认 <span class="code">&lt;capture-dir&gt;/capture_records.csv</span>。</li>
+          <li><span class="code">--capture-cooldown</span>：自动抓拍冷却时间，默认 <span class="code">2.0</span> 秒。</li>
+          <li><span class="code">--session-file</span>：当前测试 session JSON。</li>
+          <li><span class="code">--session-log-dir</span>：timeline 目录。</li>
+          <li><span class="code">--event-id</span>：附加到抓拍文件名里的事件标签。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Core Types</div>
+    <div class="title">4. 这份代码里最重要的数据结构</div>
+    <div class="grid4">
+      <div class="card">
+        <h3>`VisionSnapshot`</h3>
+        <ul>
+          <li>描述“某一帧”的视觉状态。</li>
+          <li>包含 <span class="code">frame_index</span>、<span class="code">vision_state</span>、<span class="code">vision_locked</span>、<span class="code">bbox</span>、<span class="code">center</span>、<span class="code">tracker_name</span>。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>`CaptureRecord`</h3>
+        <ul>
+          <li>描述“某一次抓拍”的记录。</li>
+          <li>额外保存 <span class="code">event_id</span>、<span class="code">file_path</span>、<span class="code">capture_reason</span>。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>`CsvVisionLogger`</h3>
+        <ul>
+          <li>连续状态日志。</li>
+          <li>每次写一帧的基础视觉状态行。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>`CaptureMetadataLogger`</h3>
+        <ul>
+          <li>抓拍元数据日志。</li>
+          <li>每次抓拍成功才写一行。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Frame Loop</div>
+    <div class="title">5. 每一帧内部到底发生了什么</div>
+    <div class="desc">下面这一段几乎就是你理解整份文件的核心。逐帧循环里依次做“读图、更新 tracker、构造快照、判断打印、判断写状态、判断自动抓拍、画 overlay、处理键盘”。</div>
+    <div class="flow">
+      <div class="box"><b>cap.read()</b><p>从视频源读取一帧<br>失败就结束程序</p></div>
+      <div class="arrow">→</div>
+      <div class="box warn"><b>tracker.update(frame)</b><p>如果 tracker 存在，就尝试更新 bbox<br>成功且宽高大于 0: <span class="code">VISION_LOCKED</span><br>失败或 bbox 无效: tracker 清空并转 <span class="code">VISION_LOST</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>build_snapshot()</b><p>把当前状态打包成 <span class="code">VisionSnapshot</span><br>自动计算中心点 <span class="code">(center_x, center_y)</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>vision_signature()</b><p>如果视觉签名发生变化，就写入 session timeline 的 <span class="code">vision_status_changed</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>print_snapshot()</b><p>状态变化时立即打印<br>锁定期间也会按 <span class="code">log-interval</span> 周期重复打印</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>write_latest_status_json()</b><p>状态变化或到达 <span class="code">status-write-interval</span> 时刷新 <span class="code">latest_status.json</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>draw_overlay() + imshow()</b><p>画框、中心点、状态文本、帮助按键提示并显示窗口</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">State Machine</div>
+    <div class="title">6. 状态机图</div>
+    <div class="grid4">
+      <div class="card">
+        <h3>`VISION_IDLE`</h3>
+        <ul>
+          <li>初始状态。</li>
+          <li>没有 tracker，没锁定目标。</li>
+          <li>按 <span class="code">s</span> 或空格后准备选框。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>`VISION_SEARCHING`</h3>
+        <ul>
+          <li>进入 ROI 选择流程。</li>
+          <li>执行 <span class="code">select_target_roi()</span>。</li>
+          <li>框选成功则转锁定，否则回空闲。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>`VISION_LOCKED`</h3>
+        <ul>
+          <li>tracker 初始化成功并持续更新成功。</li>
+          <li>可自动抓拍，也允许手动抓拍。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>`VISION_LOST`</h3>
+        <ul>
+          <li>之前锁定过，但 tracker 更新失败。</li>
+          <li>tracker 会被清空。</li>
+          <li>之后可重新选框回到搜索流程。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Capture Logic</div>
+    <div class="title">7. 自动抓拍和手动抓拍是怎么触发的</div>
+    <div class="flow">
+      <div class="box"><b>自动抓拍触发条件</b><p><span class="code">is_new_lock</span> 为真<br>也就是当前帧锁定且上一状态不是 <span class="code">VISION_LOCKED</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box warn"><b>冷却判定</b><p><span class="code">now - last_auto_capture_time &gt;= capture_cooldown</span><br>防止刚锁上就疯狂连续抓拍</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>capture_if_allowed()</b><p>内部调用 <span class="code">save_capture()</span><br>真正落盘 JPG，并生成 <span class="code">CaptureRecord</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>记录副作用</b><p>打印 <span class="code">CAPTURE,...</span><br>写抓拍 CSV<br>更新 <span class="code">last_capture_record</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>时间线与状态</b><p>写 <span class="code">capture_saved</span> 到 session timeline<br>并立即刷新 <span class="code">latest_status.json</span></p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Key Bindings</div>
+    <div class="title">8. 键盘控制图</div>
+    <div class="grid3">
+      <div class="card">
+        <h3>选择与重置</h3>
+        <ul>
+          <li><span class="code">s</span> / 空格：进入 <span class="code">VISION_SEARCHING</span>，弹出 ROI 选框。</li>
+          <li><span class="code">r</span>：重置 tracker，清空 bbox，状态回到 <span class="code">VISION_IDLE</span>。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>抓拍与帮助</h3>
+        <ul>
+          <li><span class="code">c</span>：仅在 <span class="code">VISION_LOCKED</span> 时允许手动抓拍。</li>
+          <li><span class="code">h</span>：切换帮助文字显示。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>退出</h3>
+        <ul>
+          <li><span class="code">q</span> 或 <span class="code">ESC</span>：正常退出。</li>
+          <li>退出时会释放视频源、关闭窗口、关闭 CSV 记录器。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Output Files</div>
+    <div class="title">9. 最终会生成哪些文件</div>
+    <div class="grid2">
+      <div class="card">
+        <h3>实时状态类</h3>
+        <ul>
+          <li><span class="code">latest_status.json</span>：最新帧状态。</li>
+          <li>字段包括 <span class="code">vision_state</span>、<span class="code">vision_locked</span>、<span class="code">bbox_x/y/w/h</span>、<span class="code">center_x/y</span>、<span class="code">last_capture_reason</span>、<span class="code">last_capture_file</span>。</li>
+          <li>可被本地网页服务或其他脚本直接读取。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>抓拍与日志类</h3>
+        <ul>
+          <li><span class="code">capture_records.csv</span>：每次抓拍的元数据。</li>
+          <li><span class="code">captures/*.jpg</span>：真正保存的抓拍图片。</li>
+          <li><span class="code">log-file</span> 对应 CSV：连续帧状态日志，可选。</li>
+          <li><span class="code">session_logs/*.jsonl</span>：额外补充 <span class="code">vision_status_changed</span> 和 <span class="code">capture_saved</span>。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">File Relationship</div>
+    <div class="title">10. 它和其他代码文件是什么关系</div>
+    <div class="flow">
+      <div class="box"><b>track_injector</b><p>提供当前测试 session<br>方便抓拍和视觉状态写进同一条时间线</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>vision_bridge</b><p>生成视觉锁定状态、抓拍记录、实时状态 JSON</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>vision_web_server</b><p>读取 <span class="code">latest_status.json</span> 和抓拍目录<br>对外展示网页</p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>session_log_utils</b><p>把视觉状态变化和抓拍事件并入统一 session timeline</p></div>
+    </div>
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" integrity="sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H" crossorigin="anonymous"></script>
+<script>
+async function copyAsImage(btn) {
+  btn.textContent = "Rendering...";
+  try {
+    const canvas = await html2canvas(document.getElementById("diagram"), { backgroundColor: "#0d1117", scale: 2, useCORS: true });
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+    if (!blob) throw new Error("Canvas toBlob returned null");
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    btn.textContent = "Copied!";
+    btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = "Copy as image"; btn.classList.remove("copied"); }, 1800);
+  } catch (err) {
+    console.error(err);
+    btn.textContent = "Failed";
+    setTimeout(() => { btn.textContent = "Copy as image"; btn.classList.remove("copied"); }, 2200);
+  }
+}
+</script>
+</body>
+</html>

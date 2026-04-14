@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flytotal Parameter Glossary（参数词典）</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #0d1117; color: #c9d1d9; padding: 28px 18px 80px; }
+  .container { max-width: 1240px; margin: 0 auto; }
+  h1 { color: #58a6ff; font-size: 30px; margin-bottom: 8px; }
+  .subtitle { color: #8b949e; font-size: 14px; line-height: 1.8; margin-bottom: 24px; max-width: 980px; }
+  .section { background: #11161d; border: 1px solid #21262d; border-radius: 18px; padding: 18px; margin-bottom: 22px; }
+  .label { color: #58a6ff; font-size: 12px; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase; margin-bottom: 12px; }
+  .title { font-size: 22px; margin-bottom: 8px; }
+  .desc { color: #8b949e; font-size: 13px; line-height: 1.8; margin-bottom: 14px; }
+  .grid2, .grid3 { display: grid; gap: 12px; }
+  .grid2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .card { background: #161b22; border: 1px solid #21262d; border-radius: 14px; padding: 14px; }
+  .card h3 { color: #fbbf24; font-size: 14px; margin-bottom: 10px; }
+  .card ul { padding-left: 18px; color: #b7c0ca; font-size: 12px; line-height: 1.8; }
+  .card li { margin-bottom: 5px; }
+  .term { color: #58a6ff; font-family: "JetBrains Mono", monospace; }
+  .code { font-family: "JetBrains Mono", monospace; background: #0b1016; border: 1px solid #202a35; border-radius: 6px; padding: 1px 6px; font-size: 11px; color: #e6edf3; }
+  .copy-btn { position: fixed; top: 16px; right: 16px; border: none; background: #238636; color: #fff; border-radius: 999px; padding: 11px 16px; cursor: pointer; font-weight: 700; }
+  .copy-btn:hover { background: #2ea043; }
+  .copy-btn.copied { background: #1a7f37; }
+  @media (max-width: 960px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<button class="copy-btn" onclick="copyAsImage(this)">Copy as image</button>
+<div class="container" id="diagram">
+  <h1>Flytotal 参数词典</h1>
+  <div class="subtitle">
+    这张图不讲函数，不讲源码跳转，只讲“参数到底是什么意思”。如果你看到某个参数完全没概念，先来这里查。可以把它理解成项目里的小白版词典。
+  </div>
+
+  <div class="section">
+    <div class="label">Serial Basics</div>
+    <div class="title">1. 串口基础词</div>
+    <div class="grid3">
+      <div class="card">
+        <h3><span class="term">port</span></h3>
+        <ul>
+          <li>电脑连接设备时使用的串口号。</li>
+          <li>Windows 常见写法是 <span class="code">COM3</span>、<span class="code">COM4</span>。</li>
+          <li>如果填错，脚本就找不到设备。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="term">baud</span></h3>
+        <ul>
+          <li>串口通信速度。</li>
+          <li>设备和电脑两边必须一致。</li>
+          <li>你这里默认常用的是 <span class="code">115200</span>。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="term">timeout</span></h3>
+        <ul>
+          <li>串口读取时，最多等多久。</li>
+          <li>时间太大，反应显得慢。</li>
+          <li>时间太小，会更频繁进入空读循环。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Track Injector</div>
+    <div class="title">2. `track_injector` 参数怎么理解</div>
+    <div class="desc">这个脚本最像“自动点位播放器”。</div>
+    <div class="grid2">
+      <div class="card">
+        <h3>控制发点节奏的参数</h3>
+        <ul>
+          <li><span class="term">scenario</span>：选哪条预设轨迹。</li>
+          <li><span class="term">interval</span>：两个点之间的时间间隔。越小，目标看起来移动越快。</li>
+          <li><span class="term">hold-repeat</span>：同一个点重复发几次。越大，目标越像“停住了一下”。</li>
+          <li><span class="term">settle</span>：轨迹发完后，额外再等多久，让系统有时间稳定下来。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>控制环境和记录的参数</h3>
+        <ul>
+          <li><span class="term">rid</span>：先给设备一个 RID 状态，例如 <span class="code">OK</span>、<span class="code">MISSING</span>、<span class="code">SUSPICIOUS</span>。</li>
+          <li><span class="term">boot-wait</span>：串口打开后先等设备启动。</li>
+          <li><span class="term">session-file</span>：当前测试进度写到哪个 JSON。</li>
+          <li><span class="term">session-log-dir</span>：时间线日志写到哪个目录。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Serial Bridge</div>
+    <div class="title">3. `node_a_serial_bridge` 参数怎么理解</div>
+    <div class="desc">这个脚本最像“状态采集器 + 结果判定器”。</div>
+    <div class="grid2">
+      <div class="card">
+        <h3>自动轮询参数</h3>
+        <ul>
+          <li><span class="term">status-interval</span>：多久向设备发一次 <span class="code">STATUS</span>。</li>
+          <li><span class="term">selftest-interval</span>：多久向设备发一次 <span class="code">SELFTEST</span>。</li>
+          <li><span class="term">summary-interval</span>：多久向设备发一次 <span class="code">SUMMARY</span>。</li>
+          <li>如果某个间隔设成 <span class="code">0</span>，就是关闭这一类自动轮询。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>结果整理参数</h3>
+        <ul>
+          <li><span class="term">events-limit</span>：最近事件列表最多保留几条。</li>
+          <li><span class="term">result-history-limit</span>：最近测试结果最多保留几条。</li>
+          <li><span class="term">offline-timeout</span>：多久没收到有效状态就判离线。</li>
+          <li><span class="term">echo</span>：是否把原始串口文本直接打印出来。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Vision Bridge</div>
+    <div class="title">4. `vision_bridge` 参数怎么理解</div>
+    <div class="desc">这个脚本最像“摄像头监控 + 跟踪 + 抓拍器”。</div>
+    <div class="grid2">
+      <div class="card">
+        <h3>输入与跟踪参数</h3>
+        <ul>
+          <li><span class="term">source</span>：视频源。可以是摄像头编号，也可以是视频文件路径。</li>
+          <li><span class="term">tracker</span>：你框完目标后，程序用哪种算法继续跟住它。</li>
+          <li><span class="term">width</span> / <span class="term">height</span>：希望摄像头输出多大画面。</li>
+          <li><span class="term">log-interval</span>：锁定期间，终端多久重复打印一次状态。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>抓拍与输出参数</h3>
+        <ul>
+          <li><span class="term">capture-dir</span>：抓拍图片存到哪里。</li>
+          <li><span class="term">capture-log-file</span>：抓拍记录 CSV 存到哪里。</li>
+          <li><span class="term">capture-cooldown</span>：两次自动抓拍至少隔多久。</li>
+          <li><span class="term">status-file</span>：把最新视觉状态写到哪个 JSON。</li>
+          <li><span class="term">event-id</span>：给抓拍文件名附加一个标签。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Session Words</div>
+    <div class="title">5. 状态文件里常见词是什么意思</div>
+    <div class="grid3">
+      <div class="card">
+        <h3><span class="term">scenario_name</span></h3>
+        <ul>
+          <li>当前跑的是哪一个场景。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="term">point_index</span></h3>
+        <ul>
+          <li>当前跑到第几个点。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="term">points_sent</span></h3>
+        <ul>
+          <li>到现在为止，一共发了多少条 <span class="code">TRACK</span> 命令。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="term">status</span></h3>
+        <ul>
+          <li>当前处于哪个阶段，例如 <span class="code">IDLE</span>、<span class="code">RUNNING</span>、<span class="code">DONE</span>。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="term">rid_status</span></h3>
+        <ul>
+          <li>当前 RID 模拟状态。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="term">vision_locked</span></h3>
+        <ul>
+          <li>视觉侧是否已经锁定住目标。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Firmware Core</div>
+    <div class="title">6. 当前阶段固件主链参数怎么理解</div>
+    <div class="desc">这一节开始讲的不是 Python 工具参数，而是设备端 `main.cpp + AppConfig.h` 里真正影响风险、轨迹、云台行为的核心参数。</div>
+    <div class="grid3">
+      <div class="card">
+        <h3>轨迹确认参数</h3>
+        <ul>
+          <li><span class="term">ConfirmFrames</span>：目标连续出现多少次才算“确认成立”。</li>
+          <li>变大：更稳，不容易误判，但会慢一点。</li>
+          <li>变小：更快，但更容易把偶然点也当成真目标。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>轨迹丢失参数</h3>
+        <ul>
+          <li><span class="term">LostTimeoutMs</span>：多久没再看到目标就判定丢失。</li>
+          <li><span class="term">RebuildGapMs</span>：中断太久后再次出现时，是否重建新轨迹。</li>
+          <li>这两个参数一起决定“轨迹是延续还是重新开始”。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>云台居中与扫描参数</h3>
+        <ul>
+          <li><span class="term">CenterPanDeg</span> / <span class="term">CenterTiltDeg</span>：云台默认中心角。</li>
+          <li><span class="term">ScanningAmplitudeDeg</span>：扫描时左右摆动多大。</li>
+          <li><span class="term">ScanningPeriodDivisor</span>：扫描快慢控制。越大越慢，越小越快。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Risk Scoring</div>
+    <div class="title">7. 风险评分参数怎么理解</div>
+    <div class="desc">你现在最需要理解的是：风险分不是一个黑盒总分，而是多个“为什么危险”的分项累加出来的。</div>
+    <div class="grid2">
+      <div class="card">
+        <h3>基础与持续性分数</h3>
+        <ul>
+          <li><span class="term">TrackingBaseScore</span>：只要有目标，就先给一个基础分。</li>
+          <li><span class="term">PersistenceScorePerSeen</span>：目标每多持续出现一次，加多少分。</li>
+          <li><span class="term">PersistenceScoreMax</span>：持续性分数的上限，避免无限累加。</li>
+          <li><span class="term">ConfirmedBonusScore</span>：目标一旦确认成立，再额外加一笔分。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>身份相关分数</h3>
+        <ul>
+          <li><span class="term">RidMatchedScore</span>：身份匹配时给负分，意思是“更安全”。</li>
+          <li><span class="term">RidUnknownScore</span>：身份未知时小幅加分。</li>
+          <li><span class="term">RidMissingScore</span>：身份缺失时明显加分。</li>
+          <li><span class="term">RidSuspiciousScore</span>：身份可疑时加更高的分。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>距离与运动相关分数</h3>
+        <ul>
+          <li><span class="term">ProximityThresholdMm</span>：距离小于它时，认为“离得太近”。</li>
+          <li><span class="term">ProximityScore</span>：离得太近时额外加多少分。</li>
+          <li><span class="term">MotionAnomalySpeedThresholdMmS</span>：速度大于它时，认为运动异常。</li>
+          <li><span class="term">MotionAnomalyScore</span>：运动异常时额外加多少分。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>最通俗的理解</h3>
+        <ul>
+          <li>有目标：先加基础分。</li>
+          <li>目标持续存在：继续加分。</li>
+          <li>目标被确认：再加分。</li>
+          <li>身份有问题、距离太近、速度异常：继续叠加风险。</li>
+          <li>最后得到一个总分，决定系统处于哪种风险级别。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Risk Thresholds</div>
+    <div class="title">8. 风险阈值和保持窗口怎么理解</div>
+    <div class="desc">系统不是一到分数线就立刻抖动切换，而是通过“阈值 + 保持时间”让结果更稳。</div>
+    <div class="grid2">
+      <div class="card">
+        <h3>风险等级阈值</h3>
+        <ul>
+          <li><span class="term">SuspiciousThreshold</span>：达到后进入“可疑”。</li>
+          <li><span class="term">HighRiskThreshold</span>：达到后进入“高风险”。</li>
+          <li><span class="term">EventThreshold</span>：达到后进入“事件锁定”。</li>
+          <li>这三条线决定风险状态和事件是否打开。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>升级 / 回落保持窗口</h3>
+        <ul>
+          <li><span class="term">SuspiciousEnterHoldMs</span> / <span class="term">HighRiskEnterHoldMs</span> / <span class="term">EventEnterHoldMs</span>：升级前要先保持多久。</li>
+          <li><span class="term">SuspiciousExitHoldMs</span> / <span class="term">HighRiskExitHoldMs</span> / <span class="term">EventExitHoldMs</span>：回落前要先保持多久。</li>
+          <li>作用：减少状态来回抖动，让事件开关更稳定。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">How To Read</div>
+    <div class="title">9. 小白现在最应该先理解什么</div>
+    <div class="grid2">
+      <div class="card">
+        <h3>先理解这 4 个概念</h3>
+        <ul>
+          <li>什么是 <span class="term">active</span>：系统当前认为“有目标”。</li>
+          <li>什么是 <span class="term">confirmed</span>：系统认为“这个目标不是偶然噪声”。</li>
+          <li>什么是 <span class="term">risk_score</span>：系统对危险程度的量化分数。</li>
+          <li>什么是 <span class="term">event_active</span>：系统已经正式把这次风险过程当作事件处理。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>推荐配合阅读</h3>
+        <ul>
+          <li>先看 <span class="code">flytotal-beginner-logic-map</span>，搞懂角色分工。</li>
+          <li>再回来看这张参数词典，搞懂“哪些数字在控制行为”。</li>
+          <li>最后看 <span class="code">main-host-command-map</span>，搞懂命令进入后会改哪里。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" integrity="sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H" crossorigin="anonymous"></script>
+<script>
+async function copyAsImage(btn) {
+  btn.textContent = "Rendering...";
+  try {
+    const canvas = await html2canvas(document.getElementById("diagram"), { backgroundColor: "#0d1117", scale: 2, useCORS: true });
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+    if (!blob) throw new Error("Canvas toBlob returned null");
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    btn.textContent = "Copied!";
+    btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = "Copy as image"; btn.classList.remove("copied"); }, 1800);
+  } catch (err) {
+    console.error(err);
+    btn.textContent = "Failed";
+    setTimeout(() => { btn.textContent = "Copy as image"; btn.classList.remove("copied"); }, 2200);
+  }
+}
+</script>
+</body>
+</html>

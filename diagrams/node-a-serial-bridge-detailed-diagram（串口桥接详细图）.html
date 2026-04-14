@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>node_a_serial_bridge Detailed Diagram（串口桥接详细图）</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #0d1117; color: #c9d1d9; padding: 28px 18px 80px; }
+  .container { max-width: 1320px; margin: 0 auto; }
+  h1 { color: #58a6ff; font-size: 30px; margin-bottom: 8px; }
+  .subtitle { color: #8b949e; font-size: 14px; line-height: 1.8; margin-bottom: 24px; max-width: 1090px; }
+  .section { background: #11161d; border: 1px solid #21262d; border-radius: 18px; padding: 18px; margin-bottom: 22px; }
+  .label { color: #58a6ff; font-size: 12px; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase; margin-bottom: 12px; }
+  .title { font-size: 22px; margin-bottom: 8px; }
+  .desc { color: #8b949e; font-size: 13px; line-height: 1.75; margin-bottom: 14px; }
+  .flow { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; margin-bottom: 12px; }
+  .arrow { align-self: center; color: #3fb950; font-size: 26px; font-weight: 700; }
+  .box { flex: 1 1 185px; min-width: 175px; background: #161b22; border: 1px solid #21262d; border-radius: 14px; padding: 14px; }
+  .box b { display: block; color: #58a6ff; font-size: 14px; margin-bottom: 6px; }
+  .box p { color: #b7c0ca; font-size: 12px; line-height: 1.7; }
+  .box.good { background: #102318; border-color: #1f6b3b; }
+  .box.good b { color: #86efac; }
+  .box.warn { background: #2a1f10; border-color: #6f4f12; }
+  .box.warn b { color: #fbbf24; }
+  .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  .card { background: #161b22; border: 1px solid #21262d; border-radius: 14px; padding: 14px; }
+  .card h3 { color: #fbbf24; font-size: 13px; margin-bottom: 10px; }
+  .card ul { padding-left: 18px; color: #b7c0ca; font-size: 12px; line-height: 1.75; }
+  .card li { margin-bottom: 5px; }
+  .code { font-family: "JetBrains Mono", monospace; background: #0b1016; border: 1px solid #202a35; border-radius: 6px; padding: 1px 6px; font-size: 11px; color: #e6edf3; }
+  .copy-btn { position: fixed; top: 16px; right: 16px; border: none; background: #238636; color: #fff; border-radius: 999px; padding: 11px 16px; cursor: pointer; font-weight: 700; }
+  .copy-btn:hover { background: #2ea043; }
+  .copy-btn.copied { background: #1a7f37; }
+  @media (max-width: 1100px) { .grid4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 960px) { .grid2, .grid3, .grid4 { grid-template-columns: 1fr; } .arrow { width: 100%; text-align: center; } }
+</style>
+</head>
+<body>
+<button class="copy-btn" onclick="copyAsImage(this)">Copy as image</button>
+<div class="container" id="diagram">
+  <h1>`node_a_serial_bridge` 详细功能逻辑图</h1>
+  <div class="subtitle">
+    这张图对应 <span class="code">tools/node_a_serial_bridge_NodeA串口桥接.py</span>。它的核心定位不是“控制设备”，而是
+    “把 Node A 串口吐出来的文本消息，转换成统一 JSON 状态、事件历史和测试结论”。它还会周期性给设备发
+    <span class="code">STATUS</span>、<span class="code">SELFTEST</span>、<span class="code">SUMMARY</span>，因此它是“轮询器 + 解析器 + 结果汇总器”三合一。
+  </div>
+
+  <div class="section">
+    <div class="label">Role</div>
+    <div class="title">1. 这个脚本在系统中的职责</div>
+    <div class="desc">它把设备侧文本协议变成上层脚本和网页更容易消费的结构化状态。</div>
+    <div class="flow">
+      <div class="box"><b>输入</b><p>Node A 串口文本<br><span class="code">STATUS,...</span><br><span class="code">SELFTEST,...</span><br><span class="code">SUMMARY,...</span><br><span class="code">UPLINK,EVENT,...</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box warn"><b>处理</b><p>拆 prefix 和字段<br>做类型转换<br>做字段别名统一<br>维护状态、事件、结果监视器</p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>输出</b><p><span class="code">latest_node_status.json</span><br><span class="code">latest_node_events.json</span><br><span class="code">latest_test_result.json</span><br><span class="code">latest_test_results.json</span></p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Main Function</div>
+    <div class="title">2. `main()` 的完整流程</div>
+    <div class="desc">`main()` 做的事情很多，但可以理解成 4 步：准备初始文件、连接串口、循环轮询、按行解析并落盘。</div>
+    <div class="flow">
+      <div class="box"><b>require_pyserial()</b><p>确保装了 <span class="code">pyserial</span><br>否则无法读串口</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>argparse</b><p>解析串口参数、轮询参数、结果文件参数、离线超时参数</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>初始化状态</b><p><span class="code">build_initial_status()</span><br><span class="code">build_initial_test_result()</span><br>先把 4 份 JSON 写成“空白初值”</p></div>
+      <div class="arrow">→</div>
+      <div class="box warn"><b>打开串口</b><p>失败就 <span class="code">return 1</span><br>成功后清空缓冲区</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>等待 boot-wait</b><p>给设备启动缓冲时间</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>轮询发送命令</b><p>用 <span class="code">maybe_send_command()</span><br>按时间间隔发送 <span class="code">STATUS</span>、<span class="code">SELFTEST</span>、<span class="code">SUMMARY</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>读取串口行</b><p>每来一行都进入事件分支、状态分支、测试结果分支</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Main Parameters</div>
+    <div class="title">3. `main()` 参数图</div>
+    <div class="grid3">
+      <div class="card">
+        <h3>串口连接参数</h3>
+        <ul>
+          <li><span class="code">--port</span>：必填，Node A 所在串口。</li>
+          <li><span class="code">--baud</span>：默认 <span class="code">115200</span>。</li>
+          <li><span class="code">--timeout</span>：串口单次读取超时，默认 <span class="code">0.2</span> 秒。</li>
+          <li><span class="code">--boot-wait</span>：打开串口后先等多久再开始轮询，默认 <span class="code">1.0</span> 秒。</li>
+          <li><span class="code">--echo</span>：是否把原始串口文本直接打印到终端。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>轮询节奏参数</h3>
+        <ul>
+          <li><span class="code">--status-interval</span>：自动发送 <span class="code">STATUS</span> 的周期，默认 <span class="code">2.0</span> 秒。</li>
+          <li><span class="code">--selftest-interval</span>：自动发送 <span class="code">SELFTEST</span> 的周期，默认 <span class="code">6.0</span> 秒。</li>
+          <li><span class="code">--summary-interval</span>：自动发送 <span class="code">SUMMARY</span> 的周期，默认 <span class="code">0</span>，表示默认关闭。</li>
+          <li><span class="code">--offline-timeout</span>：超过多久没有有效状态更新就判离线，默认 <span class="code">5.0</span> 秒。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>文件与历史参数</h3>
+        <ul>
+          <li><span class="code">--output-file</span>：最新统一状态 JSON。</li>
+          <li><span class="code">--events-file</span>：最近事件历史 JSON。</li>
+          <li><span class="code">--session-file</span>：读取 <span class="code">track_injector</span> 写出的当前 session。</li>
+          <li><span class="code">--result-file</span>：本轮最新测试结论 JSON。</li>
+          <li><span class="code">--result-history-file</span>：历史测试结论列表。</li>
+          <li><span class="code">--result-history-limit</span>：保留最近多少次结论，默认 <span class="code">16</span>。</li>
+          <li><span class="code">--events-limit</span>：保留最近多少条事件，默认 <span class="code">12</span>。</li>
+          <li><span class="code">--session-log-dir</span>：统一时间线目录。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Parsing Pipeline</div>
+    <div class="title">4. 一行串口文本是怎么变成统一状态的</div>
+    <div class="desc">这一段是整份脚本最重要的“协议桥接逻辑”。设备侧字段名可能不稳定或来源不同，这里会统一成固定 JSON 字段。</div>
+    <div class="flow">
+      <div class="box"><b>parse_prefix_and_fields()</b><p>拆出消息前缀和字段字典<br>例如前缀可能是 <span class="code">STATUS</span>、<span class="code">SELFTEST</span>、<span class="code">SUMMARY</span>、<span class="code">UPLINK,EVENT</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>coerce_value()</b><p>把字符串转成 <span class="code">int</span> / <span class="code">float</span> / 原始字符串</p></div>
+      <div class="arrow">→</div>
+      <div class="box warn"><b>normalize_fields()</b><p>根据 <span class="code">alias_map</span> 做字段别名统一<br>例如 <span class="code">track → track_id</span><br><span class="code">active → track_active</span><br><span class="code">rid → rid_status</span><br><span class="code">x/y → x_mm/y_mm</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>update_status_from_line()</b><p>只处理被监控的前缀<br>把统一字段 merge 进当前状态字典<br>同时记住 <span class="code">last_raw_line</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>refresh_runtime_flags()</b><p>根据 <span class="code">last_update_ms</span> 计算 <span class="code">stale_age_ms</span> 和 <span class="code">online</span></p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Field Normalization</div>
+    <div class="title">5. 统一字段到底统一了哪些内容</div>
+    <div class="grid4">
+      <div class="card">
+        <h3>节点身份类</h3>
+        <ul>
+          <li><span class="code">node → node_id</span></li>
+          <li><span class="code">zone → node_zone</span></li>
+          <li><span class="code">role → node_role</span></li>
+          <li><span class="code">main_state → main_state</span></li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>轨迹与风险类</h3>
+        <ul>
+          <li><span class="code">track → track_id</span></li>
+          <li><span class="code">active → track_active</span></li>
+          <li><span class="code">confirmed → track_confirmed</span></li>
+          <li><span class="code">x/y → x_mm/y_mm</span></li>
+          <li><span class="code">vx/vy → vx_mm_s/vy_mm_s</span></li>
+          <li><span class="code">rid → rid_status</span></li>
+          <li><span class="code">risk → risk_score</span></li>
+          <li><span class="code">risk_level → risk_level</span></li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>事件与交接类</h3>
+        <ul>
+          <li><span class="code">event_id → event_id</span></li>
+          <li><span class="code">reason → event_reason</span></li>
+          <li><span class="code">last_event_id → last_event_id</span></li>
+          <li><span class="code">last_reason → last_reason</span></li>
+          <li><span class="code">handover_last_result → handover_last_result</span></li>
+          <li><span class="code">handover_last_target → handover_last_target</span></li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>设备配置类</h3>
+        <ul>
+          <li><span class="code">predictor_kp → predictor_kp</span></li>
+          <li><span class="code">predictor_kd → predictor_kd</span></li>
+          <li><span class="code">heartbeat_ms → heartbeat_ms</span></li>
+          <li><span class="code">event_report_ms → event_report_ms</span></li>
+          <li><span class="code">test_mode → test_mode_enabled</span></li>
+          <li><span class="code">servo_enabled → servo_enabled</span></li>
+          <li><span class="code">safe_mode → safe_mode_enabled</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Event Branch</div>
+    <div class="title">6. 事件分支怎么工作</div>
+    <div class="desc">不是每一条串口信息都会进入事件历史。只有被认定为事件前缀的消息，才会生成事件记录。</div>
+    <div class="flow">
+      <div class="box"><b>build_event_record()</b><p>只处理事件前缀<br>提取 <span class="code">event_id</span>、<span class="code">reason</span>、<span class="code">event_level</span>、<span class="code">event_status</span>、<span class="code">track_id</span>、<span class="code">risk_score</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>append_event_record()</b><p>用 <span class="code">source_type + timestamp + event_id + reason + track_id</span> 做轻量去重<br>只检查最近几条，避免刷屏</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>write_event_history_json()</b><p>写入 <span class="code">latest_node_events.json</span><br>包含 <span class="code">count</span>、<span class="code">records</span>、<span class="code">latest</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>append_session_timeline_event()</b><p>再同步写入 session timeline<br>事件类型是 <span class="code">node_event</span></p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Status Branch</div>
+    <div class="title">7. 状态分支怎么工作</div>
+    <div class="flow">
+      <div class="box"><b>extract_state_signature()</b><p>只提取关键状态签名<br><span class="code">main_state</span>、<span class="code">risk_level</span>、<span class="code">event_id</span>、<span class="code">track_active</span>、<span class="code">handover_last_result</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box warn"><b>update_status_from_line()</b><p>如果这一行属于监控前缀，就刷新当前统一状态</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>write_status_json()</b><p>写入 <span class="code">latest_node_status.json</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>状态变化事件</b><p>如果当前签名和上一次不同<br>追加 <span class="code">node_status_changed</span> 到 timeline</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Result Logic</div>
+    <div class="title">8. 它怎么判断 PASS / WARN / FAIL</div>
+    <div class="desc">这里不是简单看一条串口，而是结合 session 生命周期、SUMMARY 计数器增量、风险等级、事件是否发生来综合判断。</div>
+    <div class="flow">
+      <div class="box"><b>update_test_result_monitor()</b><p>当 session 进入 <span class="code">RUNNING / SETTLING / DONE</span> 时初始化监视器<br>保存 baseline summary<br>并开始跟踪 <span class="code">saw_track_active</span>、<span class="code">saw_event</span>、<span class="code">saw_handover</span>、<span class="code">max_risk_score</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>build_test_result_payload()</b><p>计算当前 summary 相对 baseline 的增量<br>例如 <span class="code">track_active_delta</span>、<span class="code">event_opened_delta</span>、<span class="code">handover_ignored_delta</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box warn"><b>判定规则</b><p>没见到轨迹: <span class="code">FAIL</span><br>有 <span class="code">handover_ignored</span>: <span class="code">WARN</span><br>风险高、发生事件、发生交接: <span class="code">WARN</span><br>其余: <span class="code">PASS</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>正式落盘</b><p>只在 session 到达 <span class="code">DONE</span> 且还未 finalize 时写结果<br>并写入历史文件与 timeline</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Output Files</div>
+    <div class="title">9. 最终会产出哪些文件</div>
+    <div class="grid2">
+      <div class="card">
+        <h3>状态与事件类</h3>
+        <ul>
+          <li><span class="code">latest_node_status.json</span>：统一后的当前节点状态。</li>
+          <li><span class="code">latest_node_events.json</span>：最近事件历史，包含最新事件索引。</li>
+          <li><span class="code">session_logs/*.jsonl</span>：时间线里会补充 <span class="code">node_event</span>、<span class="code">node_status_changed</span>。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>测试结论类</h3>
+        <ul>
+          <li><span class="code">latest_test_result.json</span>：本轮最终结论。</li>
+          <li><span class="code">latest_test_results.json</span>：最近若干轮结论历史。</li>
+          <li>结果里会带上场景名、RID 模式、最终主状态、最终风险等级、是否发生事件/交接、KP/KD、心跳周期等信息。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">File Relationship</div>
+    <div class="title">10. 它和其他代码文件的关系</div>
+    <div class="flow">
+      <div class="box"><b>src/main.cpp</b><p>输出原始串口文本协议</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>node_a_serial_bridge</b><p>轮询、解析、统一字段、生成结果</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>track_injector</b><p>提供 <span class="code">latest_test_session.json</span><br>让 bridge 知道当前测试场景处于哪个阶段</p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>vision_bridge / web UI</b><p>后续直接消费统一 JSON<br>不用再自己解析串口文本</p></div>
+    </div>
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" integrity="sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H" crossorigin="anonymous"></script>
+<script>
+async function copyAsImage(btn) {
+  btn.textContent = "Rendering...";
+  try {
+    const canvas = await html2canvas(document.getElementById("diagram"), { backgroundColor: "#0d1117", scale: 2, useCORS: true });
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+    if (!blob) throw new Error("Canvas toBlob returned null");
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    btn.textContent = "Copied!";
+    btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = "Copy as image"; btn.classList.remove("copied"); }, 1800);
+  } catch (err) {
+    console.error(err);
+    btn.textContent = "Failed";
+    setTimeout(() => { btn.textContent = "Copy as image"; btn.classList.remove("copied"); }, 2200);
+  }
+}
+</script>
+</body>
+</html>

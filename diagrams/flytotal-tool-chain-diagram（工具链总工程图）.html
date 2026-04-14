@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flytotal Tool Chain Diagram（工具链总工程图）</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel2: #11161d;
+    --line: #30363d;
+    --text: #c9d1d9;
+    --muted: #8b949e;
+    --blue: #58a6ff;
+    --green: #3fb950;
+    --yellow: #fbbf24;
+    --orange: #d29922;
+    --purple: #bc8cff;
+  }
+  body {
+    background: radial-gradient(circle at top, #172131 0%, var(--bg) 34%);
+    color: var(--text);
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    padding: 32px 20px 80px;
+  }
+  .container { max-width: 1320px; margin: 0 auto; }
+  h1 { color: var(--blue); font-size: 32px; margin-bottom: 10px; }
+  .subtitle { color: var(--muted); font-size: 15px; line-height: 1.75; max-width: 980px; margin-bottom: 28px; }
+  .copy-btn {
+    position: fixed; top: 18px; right: 18px; z-index: 100;
+    border: none; border-radius: 999px; padding: 12px 18px;
+    background: #238636; color: white; font-size: 13px; font-weight: 700; cursor: pointer;
+  }
+  .copy-btn:hover { background: #2ea043; }
+  .copy-btn.copied { background: #1a7f37; }
+  .section {
+    margin-bottom: 26px;
+    background: rgba(13, 17, 23, 0.72);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 20px;
+    padding: 20px;
+    backdrop-filter: blur(8px);
+  }
+  .section-label {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px; font-weight: 800; letter-spacing: 1.5px;
+    text-transform: uppercase; margin-bottom: 16px;
+  }
+  .section-label .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .blue { color: var(--blue); } .blue .dot { background: var(--blue); }
+  .green { color: var(--green); } .green .dot { background: var(--green); }
+  .yellow { color: var(--yellow); } .yellow .dot { background: var(--yellow); }
+  .purple { color: var(--purple); } .purple .dot { background: var(--purple); }
+  .section-title { font-size: 22px; margin-bottom: 8px; }
+  .section-text { color: var(--muted); font-size: 13px; line-height: 1.75; margin-bottom: 18px; }
+  .flow { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; margin-bottom: 14px; }
+  .arrow { align-self: center; color: #5b6675; font-size: 26px; font-weight: 700; }
+  .arrow.blue { color: var(--blue); }
+  .arrow.green { color: var(--green); }
+  .arrow.yellow { color: var(--yellow); }
+  .box {
+    min-width: 175px; flex: 1 1 185px;
+    border-radius: 14px; padding: 14px;
+    border: 1px solid #21262d; background: var(--panel);
+  }
+  .box b { display: block; font-size: 14px; margin-bottom: 6px; }
+  .box p { color: #b7c0ca; font-size: 12px; line-height: 1.65; }
+  .box.client { background: #1a1f2e; border-color: #2d3548; }
+  .box.client b { color: #93c5fd; }
+  .box.layer b { color: var(--blue); }
+  .box.good { background: #102318; border-color: rgba(63,185,80,0.45); }
+  .box.good b { color: #86efac; }
+  .box.warn { background: #2a1f10; border-color: rgba(210,153,34,0.45); }
+  .box.warn b { color: var(--yellow); }
+  .box.special { background: #1c1730; border-color: rgba(188,140,255,0.35); }
+  .box.special b { color: var(--purple); }
+  .grid2, .grid3, .grid4 {
+    display: grid; gap: 12px;
+  }
+  .grid2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .grid4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .card {
+    background: var(--panel2); border: 1px solid #21262d;
+    border-radius: 14px; padding: 14px;
+  }
+  .card h3 { color: var(--yellow); font-size: 13px; margin-bottom: 10px; }
+  .card ul { padding-left: 18px; color: #b7c0ca; font-size: 12px; line-height: 1.7; }
+  .card li { margin-bottom: 5px; }
+  .code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    background: #0b1016; border: 1px solid #202a35;
+    color: #e6edf3; border-radius: 6px; padding: 1px 6px; font-size: 11px;
+  }
+  @media (max-width: 1100px) { .grid4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 960px) { .grid2, .grid3, .grid4 { grid-template-columns: 1fr; } .arrow { width: 100%; text-align: center; } }
+</style>
+</head>
+<body>
+<button class="copy-btn" onclick="copyAsImage(this)">Copy as image</button>
+<div class="container" id="diagram">
+  <h1>Flytotal 工具链总工程图</h1>
+  <div class="subtitle">
+    这张总图把你当前最关键的 PC 端 Python 工具、设备端 <span class="code">src/main.cpp</span>、以及共用日志文件串成一条完整关系图。
+    建议阅读顺序是：先看“代码文件关系”，再看“自动轨迹联调链”，最后看“视觉链”和“共享文件”。这样你会更容易把每个文件的功能和边界拼到一起。
+  </div>
+
+  <div class="section">
+    <div class="section-label blue"><span class="dot"></span> CODE RELATIONSHIP</div>
+    <div class="section-title">1. 不同代码文件之间的关系</div>
+    <div class="section-text">这一块优先回答“谁调用谁”“谁依赖谁”“谁真正处理命令”。</div>
+    <div class="flow">
+      <div class="box client">
+        <b>tools/track_injector</b>
+        <p>负责发 <span class="code">RID</span>、<span class="code">TRACK</span>、<span class="code">RESET</span><br>并维护 <span class="code">latest_test_session.json</span></p>
+      </div>
+      <div class="arrow blue">→</div>
+      <div class="box good">
+        <b>src/main.cpp</b>
+        <p>设备端主控制入口<br>通过 <span class="code">pollHostCommands()</span> / <span class="code">handleHostCommand()</span> 真正处理这些命令</p>
+      </div>
+      <div class="arrow blue">→</div>
+      <div class="box layer">
+        <b>tools/node_a_serial_bridge</b>
+        <p>把设备串口文本协议转成统一状态 JSON、事件历史、测试结论</p>
+      </div>
+    </div>
+    <div class="flow">
+      <div class="box special">
+        <b>lib/RadarParser</b>
+        <p>负责解析雷达字节流</p>
+      </div>
+      <div class="arrow blue">→</div>
+      <div class="box special">
+        <b>lib/TrackManager</b>
+        <p>负责轨迹 active / confirmed / lost 生命周期</p>
+      </div>
+      <div class="arrow blue">→</div>
+      <div class="box special">
+        <b>lib/HunterAction</b>
+        <p>负责风险分数、风险等级、alert / capture / guardian 触发逻辑</p>
+      </div>
+      <div class="arrow blue">→</div>
+      <div class="box special">
+        <b>lib/GimbalController + GimbalPredictor</b>
+        <p>负责云台状态和角度控制</p>
+      </div>
+      <div class="arrow blue">→</div>
+      <div class="box special">
+        <b>include/SharedData.h</b>
+        <p>负责不同任务共享统一状态结构</p>
+      </div>
+    </div>
+    <div class="flow">
+      <div class="box client">
+        <b>tools/vision_bridge</b>
+        <p>独立视觉链<br>人工选框、tracker 跟踪、抓拍、写视觉状态 JSON</p>
+      </div>
+      <div class="arrow yellow">→</div>
+      <div class="box layer">
+        <b>tools/vision_web_server</b>
+        <p>读取视觉状态 JSON 和抓拍目录，对外提供网页</p>
+      </div>
+      <div class="arrow yellow">→</div>
+      <div class="box layer">
+        <b>vision_dashboard.html</b>
+        <p>把本地状态和抓拍结果展示出来</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label green"><span class="dot"></span> TRACK TEST FLOW</div>
+    <div class="section-title">2. 自动轨迹联调主链</div>
+    <div class="section-text">这一条链说明“测试点是怎么进入设备、设备又怎么把状态吐回来并被总结成测试结果”的完整闭环。</div>
+    <div class="flow">
+      <div class="box client">
+        <b>track_scenarios.json</b>
+        <p>提供场景名、描述、点列表</p>
+      </div>
+      <div class="arrow green">→</div>
+      <div class="box layer">
+        <b>track_injector.main()</b>
+        <p>解析 <span class="code">--port</span>、<span class="code">--scenario</span>、<span class="code">--interval</span>、<span class="code">--hold-repeat</span>、<span class="code">--settle</span>、<span class="code">--rid</span></p>
+      </div>
+      <div class="arrow green">→</div>
+      <div class="box warn">
+        <b>track_injector.run_scenario()</b>
+        <p>可选先发 <span class="code">RID,...</span><br>再循环发送 <span class="code">TRACK,x,y</span><br>最后发 <span class="code">TRACK,CLEAR</span> 和 <span class="code">RESET</span></p>
+      </div>
+      <div class="arrow green">→</div>
+      <div class="box good">
+        <b>main.cpp</b>
+        <p>在 <span class="code">handleHostCommand()</span> 里处理主机命令<br>再由任务把状态发布出去</p>
+      </div>
+      <div class="arrow green">→</div>
+      <div class="box layer">
+        <b>node_a_serial_bridge.main()</b>
+        <p>周期发 <span class="code">STATUS</span> / <span class="code">SELFTEST</span> / <span class="code">SUMMARY</span><br>并解析设备串口输出</p>
+      </div>
+      <div class="arrow green">→</div>
+      <div class="box good">
+        <b>测试结论</b>
+        <p><span class="code">latest_node_status.json</span><br><span class="code">latest_test_result.json</span><br><span class="code">latest_test_results.json</span></p>
+      </div>
+    </div>
+    <div class="grid3">
+      <div class="card">
+        <h3>`track_injector` 关键参数</h3>
+        <ul>
+          <li><span class="code">scenario</span>：跑哪个场景。</li>
+          <li><span class="code">interval</span>：两条 TRACK 间隔。</li>
+          <li><span class="code">hold-repeat</span>：每个点重发几次。</li>
+          <li><span class="code">settle</span>：清轨后等待时间。</li>
+          <li><span class="code">rid</span>：先设置的 RID 模式。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>`main.cpp` 关键入口</h3>
+        <ul>
+          <li><span class="code">setup()</span>：创建 <span class="code">RadarTask</span>、<span class="code">TrackingTask</span>、<span class="code">CloudTask</span>。</li>
+          <li><span class="code">pollHostCommands()</span>：读取主机串口命令。</li>
+          <li><span class="code">handleHostCommand()</span>：分发 <span class="code">TRACK</span>、<span class="code">RID</span>、<span class="code">STATUS</span>、<span class="code">RESET</span> 等。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>`node_a_serial_bridge` 关键参数</h3>
+        <ul>
+          <li><span class="code">status-interval</span>：自动轮询 STATUS。</li>
+          <li><span class="code">selftest-interval</span>：自动轮询 SELFTEST。</li>
+          <li><span class="code">summary-interval</span>：自动轮询 SUMMARY。</li>
+          <li><span class="code">offline-timeout</span>：多久判离线。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label yellow"><span class="dot"></span> VISION FLOW</div>
+    <div class="section-title">3. 视觉链主流程</div>
+    <div class="section-text">视觉链和设备串口链是并行关系，不是替代关系。它主要提供视觉锁定状态和抓拍结果。</div>
+    <div class="flow">
+      <div class="box client">
+        <b>Camera / Video Source</b>
+        <p>输入来自摄像头索引或视频文件</p>
+      </div>
+      <div class="arrow yellow">→</div>
+      <div class="box warn">
+        <b>vision_bridge.main()</b>
+        <p>解析 <span class="code">--source</span>、<span class="code">--tracker</span>、<span class="code">--capture-cooldown</span>、<span class="code">--status-file</span>、<span class="code">--event-id</span></p>
+      </div>
+      <div class="arrow yellow">→</div>
+      <div class="box layer">
+        <b>状态机</b>
+        <p><span class="code">VISION_IDLE</span><br><span class="code">VISION_SEARCHING</span><br><span class="code">VISION_LOCKED</span><br><span class="code">VISION_LOST</span></p>
+      </div>
+      <div class="arrow yellow">→</div>
+      <div class="box layer">
+        <b>抓拍逻辑</b>
+        <p>新锁定且冷却完成时自动抓拍<br><span class="code">c</span> 键时手动抓拍</p>
+      </div>
+      <div class="arrow yellow">→</div>
+      <div class="box good">
+        <b>视觉输出</b>
+        <p><span class="code">latest_status.json</span><br><span class="code">capture_records.csv</span><br><span class="code">captures/*.jpg</span></p>
+      </div>
+    </div>
+    <div class="grid3">
+      <div class="card">
+        <h3>关键按键</h3>
+        <ul>
+          <li><span class="code">s</span> / 空格：选择 ROI。</li>
+          <li><span class="code">c</span>：手动抓拍。</li>
+          <li><span class="code">r</span>：重置 tracker。</li>
+          <li><span class="code">h</span>：显示/隐藏帮助。</li>
+          <li><span class="code">q</span> / ESC：退出。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>关键输出字段</h3>
+        <ul>
+          <li><span class="code">vision_state</span></li>
+          <li><span class="code">vision_locked</span></li>
+          <li><span class="code">bbox_x/y/w/h</span></li>
+          <li><span class="code">center_x/y</span></li>
+          <li><span class="code">last_capture_file</span></li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>视觉链和测试链的交集</h3>
+        <ul>
+          <li>都读取同一个 <span class="code">session_file</span>。</li>
+          <li>都往 <span class="code">session_logs/*.jsonl</span> 追加 timeline 事件。</li>
+          <li>这样可以把“发点”“设备状态变化”“抓拍”对到同一条时间线。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label purple"><span class="dot"></span> SHARED FILES</div>
+    <div class="section-title">4. 整条链路共享的关键文件</div>
+    <div class="section-text">理解这些文件后，你就能知道不同脚本是怎么互相“看见彼此状态”的。</div>
+    <div class="grid4">
+      <div class="card">
+        <h3>`latest_test_session.json`</h3>
+        <ul>
+          <li>由 <span class="code">track_injector</span> 写。</li>
+          <li>描述当前跑到哪个场景、哪个点、当前状态是不是 <span class="code">RUNNING / SETTLING / DONE</span>。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>`latest_node_status.json`</h3>
+        <ul>
+          <li>由 <span class="code">node_a_serial_bridge</span> 写。</li>
+          <li>是设备侧统一状态快照。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>`latest_test_result.json`</h3>
+        <ul>
+          <li>由 <span class="code">node_a_serial_bridge</span> 在 session 完成时写。</li>
+          <li>包含 PASS / WARN / FAIL 和对应原因。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>`session_logs/*.jsonl`</h3>
+        <ul>
+          <li>由 <span class="code">session_log_utils</span> 统一维护。</li>
+          <li>串起注入、设备状态、视觉状态、抓拍、测试结论。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label blue"><span class="dot"></span> READING ORDER</div>
+    <div class="section-title">5. 推荐阅读顺序</div>
+    <div class="section-text">如果你想真正把代码看懂，最不绕的顺序是：</div>
+    <div class="grid2">
+      <div class="card">
+        <h3>先看整体</h3>
+        <ul>
+          <li>先看这张总图，明确文件关系。</li>
+          <li>再看 <span class="code">main.cpp</span> 详细图，理解设备端主控。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>再看两条桥接链</h3>
+        <ul>
+          <li>看 <span class="code">track_injector</span>，理解测试输入从哪里来。</li>
+          <li>看 <span class="code">node_a_serial_bridge</span>，理解设备状态怎么被总结。</li>
+          <li>看 <span class="code">vision_bridge</span>，理解视觉抓拍链怎么独立工作。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" integrity="sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H" crossorigin="anonymous"></script>
+<script>
+async function copyAsImage(btn) {
+  btn.textContent = "Rendering...";
+  try {
+    const canvas = await html2canvas(document.getElementById("diagram"), { backgroundColor: "#0d1117", scale: 2, useCORS: true });
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+    if (!blob) throw new Error("Canvas toBlob returned null");
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    btn.textContent = "Copied!";
+    btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = "Copy as image"; btn.classList.remove("copied"); }, 1800);
+  } catch (err) {
+    console.error(err);
+    btn.textContent = "Failed";
+    setTimeout(() => { btn.textContent = "Copy as image"; btn.classList.remove("copied"); }, 2200);
+  }
+}
+</script>
+</body>
+</html>

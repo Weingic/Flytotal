@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>main.cpp Detailed Diagram（详细功能逻辑图）</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #0d1117; color: #c9d1d9; padding: 28px 18px 80px; }
+  .container { max-width: 1200px; margin: 0 auto; }
+  h1 { color: #58a6ff; font-size: 30px; margin-bottom: 8px; }
+  .subtitle { color: #8b949e; font-size: 14px; line-height: 1.75; margin-bottom: 22px; max-width: 960px; }
+  .section { background: #11161d; border: 1px solid #21262d; border-radius: 18px; padding: 18px; margin-bottom: 22px; }
+  .label { color: #58a6ff; font-size: 12px; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase; margin-bottom: 12px; }
+  .title { font-size: 22px; margin-bottom: 8px; }
+  .desc { color: #8b949e; font-size: 13px; line-height: 1.7; margin-bottom: 14px; }
+  .flow { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; margin-bottom: 12px; }
+  .arrow { align-self: center; color: #58a6ff; font-size: 26px; font-weight: 700; }
+  .box { flex: 1 1 180px; min-width: 170px; background: #161b22; border: 1px solid #21262d; border-radius: 14px; padding: 14px; }
+  .box b { display: block; color: #58a6ff; font-size: 14px; margin-bottom: 6px; }
+  .box p { color: #b7c0ca; font-size: 12px; line-height: 1.6; }
+  .box.good { background: #102318; border-color: #1f6b3b; }
+  .box.good b { color: #86efac; }
+  .box.warn { background: #2a1f10; border-color: #6f4f12; }
+  .box.warn b { color: #fbbf24; }
+  .box.special { background: #1c1730; border-color: #3f2c63; }
+  .box.special b { color: #c4b5fd; }
+  .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .card { background: #161b22; border: 1px solid #21262d; border-radius: 14px; padding: 14px; }
+  .card h3 { color: #fbbf24; font-size: 13px; margin-bottom: 10px; }
+  .card ul, .card ol { padding-left: 18px; color: #b7c0ca; font-size: 12px; line-height: 1.7; }
+  .code { font-family: "JetBrains Mono", monospace; background: #0b1016; border: 1px solid #202a35; border-radius: 6px; padding: 1px 6px; font-size: 11px; color: #e6edf3; }
+  .copy-btn { position: fixed; top: 16px; right: 16px; border: none; background: #238636; color: #fff; border-radius: 999px; padding: 11px 16px; cursor: pointer; font-weight: 700; }
+  .copy-btn:hover { background: #2ea043; }
+  .copy-btn.copied { background: #1a7f37; }
+  @media (max-width: 960px) { .grid2, .grid3 { grid-template-columns: 1fr; } .arrow { width: 100%; text-align: center; } }
+</style>
+</head>
+<body>
+<button class="copy-btn" onclick="copyAsImage(this)">Copy as image</button>
+<div class="container" id="diagram">
+  <h1>`main.cpp` 详细功能逻辑图</h1>
+  <div class="subtitle">
+    这张图专门解释 <span class="code">src/main.cpp</span>。Arduino/ESP32 工程没有传统意义上的 <span class="code">main()</span> 供你直接写业务，这里真正的主入口是 <span class="code">setup()</span> 和 <span class="code">loop()</span>。而你的业务主体又被拆成 3 个 FreeRTOS 任务：<span class="code">RadarTask</span>、<span class="code">TrackingTask</span>、<span class="code">CloudTask</span>。
+  </div>
+
+  <div class="section">
+    <div class="label">Entry Model</div>
+    <div class="title">1. `setup()` / `loop()` 等价于主函数入口</div>
+    <div class="desc">如果你要找“主函数到底干了什么”，就先看 `setup()`：它做初始化、打印启动信息、创建任务。`loop()` 本身不承载业务，只是删除自己。</div>
+    <div class="flow">
+      <div class="box"><b>Serial.begin()</b><p>参数：<span class="code">AppSerialConfig::MonitorBaudRate</span><br>作用：打开 USB 监视串口</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>delay()</b><p>参数：<span class="code">AppSerialConfig::StartupDelayMs</span><br>作用：预留启动等待时间</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>resetSummaryStats()<br>resetHandoverStatus()<br>resetLastEventSnapshot()<br>resetRuntimeEventStatus()</b><p>作用：清空统计、handover、事件快照和运行态事件</p></div>
+      <div class="arrow">→</div>
+      <div class="box warn"><b>xTaskCreatePinnedToCore()</b><p>创建 3 个核心任务<br>RadarTask / TrackingTask / CloudTask</p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>loop() -> vTaskDelete(NULL)</b><p>自身退出，主业务完全交给任务执行</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Task Layout</div>
+    <div class="title">2. 三大任务的职责</div>
+    <div class="flow">
+      <div class="box"><b>RadarTask</b><p>读雷达口 / 读取模拟轨迹<br>维护 <span class="code">globalData.radar_track</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box.warn"><b>TrackingTask</b><p>处理主机命令<br>计算 hunter 风险<br>更新 vision / gimbal / trigger 状态</p></div>
+      <div class="arrow">→</div>
+      <div class="box.good"><b>CloudTask</b><p>把统一状态发布成<br><span class="code">UPLINK,HB / UPLINK,TRACK / UPLINK,EVENT</span></p></div>
+    </div>
+
+    <div class="grid3" style="margin-top:12px;">
+      <div class="card">
+        <h3>RadarTask 启动参数</h3>
+        <ul>
+          <li>栈：<span class="code">4096</span></li>
+          <li>优先级：<span class="code">1</span></li>
+          <li>核心：<span class="code">0</span></li>
+          <li>主要配置：<span class="code">RadarBaudRate</span>、<span class="code">RadarRxPin</span>、<span class="code">RadarTxPin</span>、<span class="code">RadarConfig::PollDelayMs</span></li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>TrackingTask 启动参数</h3>
+        <ul>
+          <li>栈：<span class="code">6144</span></li>
+          <li>优先级：<span class="code">2</span></li>
+          <li>核心：<span class="code">1</span></li>
+          <li>主要配置：<span class="code">TrackingConfig::LoopDelayMs</span>、<span class="code">TrackingConfig::LostRecoveryTimeoutMs</span>、Servo/Gimbal/Hunter 配置</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>CloudTask 启动参数</h3>
+        <ul>
+          <li>栈：<span class="code">4096</span></li>
+          <li>优先级：<span class="code">1</span></li>
+          <li>核心：<span class="code">1</span></li>
+          <li>主要配置：<span class="code">CloudConfig::HeartbeatMs</span>、<span class="code">CloudConfig::EventReportMs</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Radar Task</div>
+    <div class="title">3. `RadarTask()` 详细流程</div>
+    <div class="desc">这块负责“轨迹来源”。如果有模拟轨迹在生效，优先使用模拟轨迹；否则就走真实雷达串口输入。</div>
+    <div class="flow">
+      <div class="box"><b>Serial1.begin()</b><p>参数：<span class="code">RadarBaudRate / RadarRxPin / RadarTxPin</span><br>打开雷达硬串口</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>getSimTrackSnapshot()</b><p>查看模拟轨迹是否启用<br>以及是否仍在有效时间内</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>myRadar.feedByte()</b><p>逐字节喂给 <span class="code">RadarParser</span><br>解析出 x / y</p></div>
+      <div class="arrow">→</div>
+      <div class="box.warn"><b>applyTrackMeasurement()</b><p>更新轨迹测量值<br>模拟轨迹优先级高于真实雷达输入</p></div>
+      <div class="arrow">→</div>
+      <div class="box.good"><b>myTrackManager.refresh()</b><p>更新 active / confirmed / lost 等轨迹状态<br>写回 <span class="code">globalData.radar_track</span> 和 <span class="code">is_locked</span></p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Tracking Task</div>
+    <div class="title">4. `TrackingTask()` 详细流程</div>
+    <div class="desc">这块是整条主控链的核心决策器：主机命令、风险判断、视觉状态推导、舵机控制、调试输出都发生在这里。</div>
+    <div class="flow">
+      <div class="box"><b>pollHostCommands()</b><p>读取主机串口命令<br>进入 <span class="code">handleHostCommand()</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>读取当前快照</b><p>拿到 <span class="code">track_snapshot</span> 和 <span class="code">rid_snapshot</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>processServoDiagnostic()</b><p>推进舵机诊断流程</p></div>
+      <div class="arrow">→</div>
+      <div class="box.warn"><b>myHunter.update()</b><p>核心风险判断器<br>输出：<span class="code">state / risk_score / trigger_alert / trigger_capture / trigger_guardian</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>推导视觉状态</b><p>根据轨迹 active / confirmed / trigger_capture<br>推导 <span class="code">VISION_IDLE / SEARCHING / LOCKED / LOST</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>回写 globalData</b><p>写 hunter / risk / vision / capture_ready / trigger_flags / event 状态</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>myGimbalController.update()</b><p>算出 <span class="code">gimbal_state</span> 和目标 pan / tilt</p></div>
+      <div class="arrow">→</div>
+      <div class="box good"><b>舵机输出 + 本地调试</b><p>控制舵机角度<br>必要时打印 <span class="code">GIMBAL / DATA / STATE</span></p></div>
+    </div>
+
+    <div class="grid3" style="margin-top:12px;">
+      <div class="card">
+        <h3>主要输入</h3>
+        <ul>
+          <li><span class="code">track_snapshot</span>：来自 RadarTask 的统一轨迹</li>
+          <li><span class="code">rid_snapshot</span>：当前 RID 状态</li>
+          <li>主机命令：来自 USB 串口</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>主要输出</h3>
+        <ul>
+          <li><span class="code">hunter_state</span></li>
+          <li><span class="code">risk_score</span> 与风险细分分数</li>
+          <li><span class="code">vision_state / vision_locked / capture_ready</span></li>
+          <li><span class="code">gimbal_state</span></li>
+          <li><span class="code">trigger_flags</span></li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>关键配置参数</h3>
+        <ul>
+          <li><span class="code">TrackingConfig::LoopDelayMs</span>：主循环周期</li>
+          <li><span class="code">TrackingConfig::LostRecoveryTimeoutMs</span>：视觉 LOST 保持时间</li>
+          <li><span class="code">ServoConfig::PanPin / TiltPin / PulseMinUs / PulseMaxUs</span></li>
+          <li><span class="code">GimbalConfig::PredictorKp / PredictorKd</span></li>
+          <li><span class="code">HunterConfig::*Threshold</span>：风险阈值</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Cloud Task</div>
+    <div class="title">5. `CloudTask()` 详细流程</div>
+    <div class="desc">这块把设备内部统一状态发布成串口上行文本，也是 Python 侧桥接脚本看到的核心输出来源。</div>
+    <div class="flow">
+      <div class="box"><b>读取 globalData</b><p>获得当前统一系统快照</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>emitCloudHeartbeat()</b><p>周期性输出 <span class="code">UPLINK,HB</span><br>参数：<span class="code">CloudConfig::HeartbeatMs</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>事件上下文管理</b><p>判断 EVENT 是否打开/关闭<br>维护 <span class="code">EventContext</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>handover 请求处理</b><p>如果有 pending request，就判断是 ignored 还是 emitted</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>emitCloudTrack()</b><p>周期性输出 <span class="code">UPLINK,TRACK</span><br>参数：<span class="code">CloudConfig::EventReportMs</span></p></div>
+      <div class="arrow">→</div>
+      <div class="box.good"><b>emitCloudEvent()</b><p>在 TRACK_CHANGED / TRACK_ACTIVE / TRACK_LOST / HUNTER_STATE / RID_STATE 等变化时输出 <span class="code">UPLINK,EVENT</span></p></div>
+    </div>
+
+    <div class="grid2" style="margin-top:12px;">
+      <div class="card">
+        <h3>主要参数</h3>
+        <ul>
+          <li><span class="code">CloudConfig::HeartbeatMs</span>：心跳间隔</li>
+          <li><span class="code">CloudConfig::EventReportMs</span>：轨迹报告间隔</li>
+          <li><span class="code">uplinkOutput.enabled</span>：是否允许上行</li>
+          <li><span class="code">EventContext</span>：当前事件 ID、sequence、track_id</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>输出到哪里</h3>
+        <ul>
+          <li><span class="code">UPLINK,HB</span>：心跳快照</li>
+          <li><span class="code">UPLINK,TRACK</span>：轨迹快照</li>
+          <li><span class="code">UPLINK,EVENT</span>：事件变化</li>
+          <li>这些输出会被 <span class="code">node_a_serial_bridge</span> 读取、解析并转成 JSON</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Host Command Entry</div>
+    <div class="title">6. 主机命令是怎么进入设备端的</div>
+    <div class="desc">Python 工具给 ESP32 发的命令，本质上都是通过 `pollHostCommands()` 这条入口进入设备端逻辑。</div>
+    <div class="flow">
+      <div class="box"><b>Serial.available()</b><p>从 USB 串口取字节</p></div>
+      <div class="arrow">→</div>
+      <div class="box"><b>commandBuffer</b><p>逐字节组一整行命令</p></div>
+      <div class="arrow">→</div>
+      <div class="box.warn"><b>handleHostCommand(commandBuffer)</b><p>按命令内容进入不同处理分支</p></div>
+      <div class="arrow">→</div>
+      <div class="box.good"><b>影响运行态</b><p>可能修改模拟轨迹、RID、KP/KD、测试模式、舵机模式、调试输出、上行输出</p></div>
+    </div>
+
+    <div class="grid3" style="margin-top:12px;">
+      <div class="card">
+        <h3>来自 `track_injector` 的命令</h3>
+        <ul>
+          <li><span class="code">STATUS</span></li>
+          <li><span class="code">RID,...</span></li>
+          <li><span class="code">TRACK,x,y</span></li>
+          <li><span class="code">TRACK,CLEAR</span></li>
+          <li><span class="code">RESET</span></li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>来自单板测试脚本的命令</h3>
+        <ul>
+          <li><span class="code">HELP</span></li>
+          <li><span class="code">SELFTEST</span></li>
+          <li><span class="code">KP,...</span> / <span class="code">KD,...</span></li>
+          <li>以及 RID、TRACK、RESET 这些测试命令</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>会影响的模块</h3>
+        <ul>
+          <li>模拟轨迹输入</li>
+          <li>RID 状态</li>
+          <li>预测器参数 KP/KD</li>
+          <li>舵机诊断 / 手动模式 / 安全模式</li>
+          <li>上行状态和调试输出</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Code Relationship</div>
+    <div class="title">7. `main.cpp` 与其他代码文件的关系</div>
+    <div class="flow">
+      <div class="box"><b>src/main.cpp</b><p>总调度入口<br>创建任务、汇总状态、处理主机命令、输出上行</p></div>
+      <div class="arrow">→</div>
+      <div class="box.special"><b>lib/RadarParser</b><p>雷达字节流解析</p></div>
+      <div class="arrow">→</div>
+      <div class="box.special"><b>lib/TrackManager</b><p>轨迹状态维护</p></div>
+      <div class="arrow">→</div>
+      <div class="box.special"><b>lib/HunterAction</b><p>风险与触发计算</p></div>
+      <div class="arrow">→</div>
+      <div class="box.special"><b>lib/GimbalController + GimbalPredictor</b><p>云台角度与状态控制</p></div>
+      <div class="arrow">→</div>
+      <div class="box.good"><b>include/SharedData.h</b><p>统一共享状态结构，连接任务和桥接脚本</p></div>
+    </div>
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" integrity="sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H" crossorigin="anonymous"></script>
+<script>
+async function copyAsImage(btn) {
+  btn.textContent = "Rendering...";
+  try {
+    const canvas = await html2canvas(document.getElementById("diagram"), { backgroundColor: "#0d1117", scale: 2, useCORS: true });
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+    if (!blob) throw new Error("Canvas toBlob returned null");
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    btn.textContent = "Copied!";
+    btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = "Copy as image"; btn.classList.remove("copied"); }, 1800);
+  } catch (err) {
+    console.error(err);
+    btn.textContent = "Failed";
+    setTimeout(() => { btn.textContent = "Copy as image"; btn.classList.remove("copied"); }, 2200);
+  }
+}
+</script>
+</body>
+</html>

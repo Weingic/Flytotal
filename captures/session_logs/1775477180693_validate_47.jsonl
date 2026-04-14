@@ -1,0 +1,8 @@
+{"ts_ms": 1775477180696, "source": "track_injector", "event_type": "validation_47_started", "scenario_name": "validate_47", "started_ms": 1775477180693, "payload": {"x_mm": 320.0, "y_mm": 1800.0, "confirm_repeat": 6, "rid_mode": "MISSING"}}
+{"ts_ms": 1775477183063, "source": "track_injector", "event_type": "validation_47_track_sent", "scenario_name": "validate_47", "started_ms": 1775477180693, "payload": {"repeat_index": 1, "x_mm": 320.0, "y_mm": 1800.0}}
+{"ts_ms": 1775477183171, "source": "track_injector", "event_type": "validation_47_track_sent", "scenario_name": "validate_47", "started_ms": 1775477180693, "payload": {"repeat_index": 2, "x_mm": 320.0, "y_mm": 1800.0}}
+{"ts_ms": 1775477183278, "source": "track_injector", "event_type": "validation_47_track_sent", "scenario_name": "validate_47", "started_ms": 1775477180693, "payload": {"repeat_index": 3, "x_mm": 320.0, "y_mm": 1800.0}}
+{"ts_ms": 1775477183387, "source": "track_injector", "event_type": "validation_47_track_sent", "scenario_name": "validate_47", "started_ms": 1775477180693, "payload": {"repeat_index": 4, "x_mm": 320.0, "y_mm": 1800.0}}
+{"ts_ms": 1775477183497, "source": "track_injector", "event_type": "validation_47_track_sent", "scenario_name": "validate_47", "started_ms": 1775477180693, "payload": {"repeat_index": 5, "x_mm": 320.0, "y_mm": 1800.0}}
+{"ts_ms": 1775477183601, "source": "track_injector", "event_type": "validation_47_track_sent", "scenario_name": "validate_47", "started_ms": 1775477180693, "payload": {"repeat_index": 6, "x_mm": 320.0, "y_mm": 1800.0}}
+{"ts_ms": 1775477189467, "source": "track_injector", "event_type": "validation_47_finished", "scenario_name": "validate_47", "started_ms": 1775477180693, "payload": {"rid_mode": "MISSING", "confirm_repeat": 6}}
