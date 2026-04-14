@@ -50,8 +50,23 @@ def load_scenarios() -> dict:
 def write_session_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_suffix(path.suffix + ".tmp")
-    temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    temp_path.replace(path)
+    content = json.dumps(payload, ensure_ascii=False, indent=2)
+
+    # Windows occasionally reports transient WinError 5 when another process
+    # is reading the target file at the same moment we rotate .tmp -> final.
+    # Retry a few times to avoid flaky acceptance false-failures.
+    last_error: PermissionError | None = None
+    for _ in range(8):
+        try:
+            temp_path.write_text(content, encoding="utf-8")
+            temp_path.replace(path)
+            return
+        except PermissionError as exc:
+            last_error = exc
+            time.sleep(0.08)
+
+    if last_error is not None:
+        raise last_error
 
 
 def coerce_value(value: str, default: Any) -> Any:

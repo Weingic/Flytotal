@@ -65,6 +65,15 @@ class CaptureRecord:
     center_y: int
 
 
+@dataclass
+class NodeRuntimeSignals:
+    risk_level: str
+    event_active: int
+    event_id: str
+    last_event_id: str
+    updated_ms: int
+
+
 class CsvVisionLogger:
     # 记录连续运行中的状态快照。
     def __init__(self, path: Path) -> None:
@@ -341,6 +350,64 @@ def safe_int(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def normalize_event_id(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "NONE"
+    if text.upper() == "NONE":
+        return "NONE"
+    return text
+
+
+def normalize_risk_level(value: object) -> str:
+    text = str(value or "NONE").strip().upper()
+    return text or "NONE"
+
+
+def load_node_runtime_signals(node_status_file: Path) -> NodeRuntimeSignals:
+    payload = load_json_payload(node_status_file)
+    if not isinstance(payload, dict):
+        return NodeRuntimeSignals(
+            risk_level="NONE",
+            event_active=0,
+            event_id="NONE",
+            last_event_id="NONE",
+            updated_ms=0,
+        )
+    event_active = safe_int(payload.get("event_active", 0), 0)
+    event_id = normalize_event_id(payload.get("event_id", payload.get("current_event_id", "NONE")))
+    last_event_id = normalize_event_id(payload.get("last_event_id", "NONE"))
+    updated_ms = safe_int(payload.get("last_update_ms", payload.get("timestamp_ms", 0)), 0)
+    return NodeRuntimeSignals(
+        risk_level=normalize_risk_level(payload.get("risk_level", "NONE")),
+        event_active=1 if event_active > 0 else 0,
+        event_id=event_id,
+        last_event_id=last_event_id,
+        updated_ms=updated_ms,
+    )
+
+
+def is_high_risk_level(level: str) -> bool:
+    normalized = normalize_risk_level(level)
+    return normalized in {"HIGH_RISK", "EVENT"}
+
+
+def select_policy_event_id(
+    runtime_event_id: str,
+    signals: NodeRuntimeSignals,
+    fallback_event_id: str = "NONE",
+) -> str:
+    for candidate in (
+        normalize_event_id(runtime_event_id),
+        normalize_event_id(signals.event_id),
+        normalize_event_id(signals.last_event_id),
+        normalize_event_id(fallback_event_id),
+    ):
+        if candidate != "NONE":
+            return candidate
+    return "NONE"
 
 
 def resolve_event_id_from_records(
@@ -742,6 +809,36 @@ def main() -> int:
     parser.add_argument("--capture-dir", type=Path, default=Path("captures"), help="Directory used to store capture images")
     parser.add_argument("--capture-log-file", type=Path, help="Optional CSV output path for capture metadata. Defaults to <capture-dir>/capture_records.csv")
     parser.add_argument("--capture-cooldown", type=float, default=2.0, help="Minimum seconds between automatic captures")
+    parser.add_argument(
+        "--policy-capture-enable",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable event-driven capture policy (high-risk enter / event open / event close)",
+    )
+    parser.add_argument(
+        "--policy-capture-high-risk-enter",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Queue a capture when risk_level enters HIGH_RISK/EVENT",
+    )
+    parser.add_argument(
+        "--policy-capture-event-open",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Queue a capture when event_active changes 0 -> 1",
+    )
+    parser.add_argument(
+        "--policy-capture-event-close",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Queue a capture when event_active changes 1 -> 0",
+    )
+    parser.add_argument(
+        "--policy-capture-pending-window-s",
+        type=float,
+        default=8.0,
+        help="Pending window for policy capture reasons waiting for VISION_LOCKED",
+    )
     parser.add_argument("--status-file", type=Path, default=Path("captures/latest_status.json"), help="JSON file used to expose latest runtime status to the local web server")
     parser.add_argument("--status-write-interval", type=float, default=0.25, help="Minimum seconds between two status JSON writes while state stays unchanged")
     parser.add_argument("--session-file", type=Path, default=Path("captures/latest_test_session.json"), help="JSON file written by track_injector with the current test session")
@@ -838,6 +935,8 @@ def main() -> int:
     last_capture_record: CaptureRecord | None = None
     last_vision_signature: tuple[str, int, int, int, int, int] | None = None
     last_capture_hint_time = 0.0
+    last_node_signals = load_node_runtime_signals(args.node_status_file)
+    pending_policy_captures: list[dict[str, object]] = []
 
     print("Vision bridge started.")
     print(f"Writing session timeline logs to: {args.session_log_dir.as_posix()}")
@@ -853,6 +952,14 @@ def main() -> int:
     print(
         "Tracker selection: "
         f"requested={args.tracker.upper()}, active={active_tracker_name.upper()}, fallback={int(fallback_applied)}"
+    )
+    print(
+        "Capture policy: "
+        f"enabled={int(bool(args.policy_capture_enable))},"
+        f"high_risk_enter={int(bool(args.policy_capture_high_risk_enter))},"
+        f"event_open={int(bool(args.policy_capture_event_open))},"
+        f"event_close={int(bool(args.policy_capture_event_close))},"
+        f"pending_window_s={max(0.0, float(args.policy_capture_pending_window_s)):.1f}"
     )
     print(
         "Available trackers in this OpenCV build: "
@@ -955,6 +1062,83 @@ def main() -> int:
                 snapshot.bbox_h,
             )
             now = time.time()
+            current_node_signals = load_node_runtime_signals(args.node_status_file)
+            pending_window_s = max(0.0, float(args.policy_capture_pending_window_s))
+            if pending_window_s > 0:
+                pending_policy_captures = [
+                    item
+                    for item in pending_policy_captures
+                    if (now - float(item.get("queued_at_s", now))) <= pending_window_s
+                ]
+            else:
+                pending_policy_captures = []
+
+            if bool(args.policy_capture_enable):
+                policy_triggers: list[tuple[str, str]] = []
+                if (
+                    bool(args.policy_capture_high_risk_enter)
+                    and (not is_high_risk_level(last_node_signals.risk_level))
+                    and is_high_risk_level(current_node_signals.risk_level)
+                ):
+                    policy_triggers.append(
+                        (
+                            "AUTO_HIGH_RISK_ENTER",
+                            select_policy_event_id(runtime_event_id, current_node_signals, last_node_signals.event_id),
+                        )
+                    )
+                if (
+                    bool(args.policy_capture_event_open)
+                    and last_node_signals.event_active == 0
+                    and current_node_signals.event_active == 1
+                ):
+                    policy_triggers.append(
+                        (
+                            "AUTO_EVENT_OPENED",
+                            select_policy_event_id(runtime_event_id, current_node_signals, last_node_signals.event_id),
+                        )
+                    )
+                if (
+                    bool(args.policy_capture_event_close)
+                    and last_node_signals.event_active == 1
+                    and current_node_signals.event_active == 0
+                ):
+                    policy_triggers.append(
+                        (
+                            "AUTO_EVENT_CLOSED",
+                            select_policy_event_id(runtime_event_id, current_node_signals, last_node_signals.event_id),
+                        )
+                    )
+
+                for capture_reason, policy_event_id in policy_triggers:
+                    normalized_policy_event_id = normalize_event_id(policy_event_id)
+                    already_queued = any(
+                        str(item.get("capture_reason", "")) == capture_reason
+                        and normalize_event_id(item.get("event_id", "NONE")) == normalized_policy_event_id
+                        for item in pending_policy_captures
+                    )
+                    if already_queued:
+                        continue
+                    pending_policy_captures.append(
+                        {
+                            "capture_reason": capture_reason,
+                            "event_id": normalized_policy_event_id,
+                            "queued_at_s": now,
+                        }
+                    )
+                    append_session_event(
+                        load_json_payload(args.session_file),
+                        args.session_log_dir,
+                        source="vision_bridge",
+                        event_type="capture_policy_queued",
+                        payload={
+                            "capture_reason": capture_reason,
+                            "event_id": normalized_policy_event_id,
+                            "risk_level": current_node_signals.risk_level,
+                            "event_active": current_node_signals.event_active,
+                        },
+                    )
+
+            last_node_signals = current_node_signals
             should_print = signature != last_print_signature
             if not should_print and snapshot.vision_locked and (now - last_print_time) >= args.log_interval:
                 should_print = True
@@ -987,9 +1171,69 @@ def main() -> int:
                 last_status_signature = signature
                 last_status_write_time = now
 
+            captured_this_frame = False
+            cooldown_ready = (now - last_auto_capture_time) >= args.capture_cooldown
+            if (
+                bool(args.policy_capture_enable)
+                and snapshot.vision_locked
+                and cooldown_ready
+                and pending_policy_captures
+            ):
+                policy_item = pending_policy_captures.pop(0)
+                policy_capture_reason = str(policy_item.get("capture_reason", "AUTO_POLICY") or "AUTO_POLICY")
+                policy_event_id = normalize_event_id(policy_item.get("event_id", runtime_event_id))
+                capture_index += 1
+                record = capture_if_allowed(
+                    cv=cv,
+                    frame=frame,
+                    snapshot=snapshot,
+                    capture_dir=args.capture_dir,
+                    event_id=policy_event_id,
+                    capture_reason=policy_capture_reason,
+                    capture_index=capture_index,
+                    metadata_logger=capture_metadata_logger,
+                )
+                if record is None:
+                    print("Policy capture failed: could not write image file.", file=sys.stderr)
+                else:
+                    last_auto_capture_time = now
+                    last_capture_record = record
+                    captured_this_frame = True
+                    append_session_event(
+                        load_json_payload(args.session_file),
+                        args.session_log_dir,
+                        source="vision_bridge",
+                        event_type="capture_saved",
+                        payload={
+                            "capture_reason": record.capture_reason,
+                            "file_path": record.file_path,
+                            "event_id": record.event_id,
+                            "frame_index": record.frame_index,
+                            "vision_state": record.vision_state,
+                        },
+                    )
+                    write_latest_status_json(
+                        args.status_file,
+                        build_status_payload(
+                            snapshot,
+                            runtime_event_id,
+                            runtime_event_id_source,
+                            last_capture_record,
+                            requested_tracker_name=args.tracker,
+                            active_tracker_name=active_tracker_name,
+                            tracker_fallback_applied=fallback_applied,
+                            available_trackers=available_trackers,
+                            source=args.source,
+                            source_ready=True,
+                            capture_backend=active_backend,
+                        ),
+                    )
+                    last_status_signature = signature
+                    last_status_write_time = now
+
             is_new_lock = snapshot.vision_locked and last_state != VISION_LOCKED
             cooldown_ready = (now - last_auto_capture_time) >= args.capture_cooldown
-            if is_new_lock and cooldown_ready:
+            if (not captured_this_frame) and is_new_lock and cooldown_ready:
                 capture_index += 1
                 record = capture_if_allowed(
                     cv=cv,

@@ -1023,7 +1023,7 @@
       <article class="panel capture-panel">
         <div class="capture-header">
           <h2 class="section-title">事件详情（最小回放）</h2>
-          <p class="section-subtitle">点选上方事件行后，这里显示事件编号、时间、风险、坐标、RID 和抓拍证据。</p>
+          <p class="section-subtitle">点选上方事件行后，这里显示事件编号、时间、风险、白名单、视觉状态、触发标志与抓拍证据。</p>
           <div class="timeline-check-actions">
             <button class="mini-btn" type="button" id="eventDetailExportBtn" disabled>导出当前事件证据 JSON</button>
             <button class="mini-btn" type="button" id="eventMatchModeBtn">匹配模式：兜底</button>
@@ -1043,7 +1043,12 @@
           <div class="fact"><span class="label">节点编号</span><div class="value" id="eventDetailNodeValue">NONE</div></div>
           <div class="fact"><span class="label">坐标</span><div class="value" id="eventDetailPositionValue">0.0, 0.0</div></div>
           <div class="fact"><span class="label">RID 状态</span><div class="value" id="eventDetailRidValue">UNKNOWN</div></div>
+          <div class="fact"><span class="label">白名单状态</span><div class="value" id="eventDetailWhitelistValue">WL_UNKNOWN</div></div>
+          <div class="fact"><span class="label">Hunter 状态</span><div class="value" id="eventDetailHunterValue">UNKNOWN</div></div>
+          <div class="fact"><span class="label">视觉状态</span><div class="value" id="eventDetailVisionValue">UNKNOWN</div></div>
+          <div class="fact"><span class="label">事件状态</span><div class="value" id="eventDetailStateValue">NONE</div></div>
           <div class="fact"><span class="label">触发原因</span><div class="value" id="eventDetailReasonValue">NONE</div></div>
+          <div class="fact"><span class="label">触发标志</span><div class="value" id="eventDetailTriggerValue">NONE</div></div>
           <div class="fact"><span class="label">详情来源</span><div class="value" id="eventDetailSourceValue">实时</div></div>
           <div class="fact"><span class="label">抓拍绑定方式</span><div class="value" id="eventDetailBindingValue">NONE</div></div>
           <div class="fact"><span class="label">抓拍路径</span><div class="value"><a class="file-link" id="eventDetailPathLink" href="#" target="_blank" rel="noreferrer">--</a></div></div>
@@ -2820,7 +2825,12 @@
       document.getElementById("eventDetailNodeValue").textContent = "NONE";
       document.getElementById("eventDetailPositionValue").textContent = "0.0, 0.0";
       document.getElementById("eventDetailRidValue").textContent = "UNKNOWN";
+      document.getElementById("eventDetailWhitelistValue").textContent = "WL_UNKNOWN";
+      document.getElementById("eventDetailHunterValue").textContent = "UNKNOWN";
+      document.getElementById("eventDetailVisionValue").textContent = "UNKNOWN";
+      document.getElementById("eventDetailStateValue").textContent = "NONE";
       document.getElementById("eventDetailReasonValue").textContent = "NONE";
+      document.getElementById("eventDetailTriggerValue").textContent = "NONE";
       document.getElementById("eventDetailSourceValue").textContent = eventDetailSourceLabel;
       document.getElementById("eventDetailBindingValue").textContent = "NONE";
       link.textContent = "--";
@@ -2847,6 +2857,9 @@
       const captureBindingText = formatCaptureBinding(detail);
       const captureBindingNote = String(detail?.capture_binding_note || "");
       const effectiveMode = normalizeEventMatchMode(detail?.capture_match_mode || eventMatchMode);
+      const eventObject = detail?.event_object_v1 && typeof detail.event_object_v1 === "object"
+        ? detail.event_object_v1
+        : {};
       if (captureImageUrl) {
         image.src = captureImageUrl.startsWith("data:")
           ? captureImageUrl
@@ -2860,14 +2873,22 @@
         empty.textContent = captureBindingNote || "该事件暂时没有抓拍图片，已保留事件对象与字段。";
       }
 
-      const eventId = normalizeEventId(eventRecord.event_id) || "NONE";
-      const eventTime = eventRecordTime(eventRecord);
-      const riskLevel = String(eventRecord.risk_level || eventRecord.event_level || "NONE");
-      const nodeId = String(eventRecord.node_id || eventRecord.source_node || "NONE");
-      const x = Number(eventRecord.x_mm ?? 0);
-      const y = Number(eventRecord.y_mm ?? 0);
-      const rid = String(eventRecord.rid_status || "UNKNOWN");
+      const eventId = normalizeEventId(eventObject.event_id || eventRecord.event_id) || "NONE";
+      const eventTime = Number(eventObject.update_time ?? 0) > 0
+        ? Number(eventObject.update_time)
+        : eventRecordTime(eventRecord);
+      const riskLevel = String(eventObject.risk_level || eventRecord.risk_level || eventRecord.event_level || "NONE");
+      const nodeId = String(eventObject.node_id || eventRecord.node_id || eventRecord.source_node || "NONE");
+      const x = Number(eventObject.x ?? eventRecord.x_mm ?? 0);
+      const y = Number(eventObject.y ?? eventRecord.y_mm ?? 0);
+      const rid = String(eventObject.rid_status || eventRecord.rid_status || "UNKNOWN");
+      const whitelistStatus = String(eventObject.whitelist_status || eventRecord.whitelist_status || eventRecord.wl_status || "WL_UNKNOWN");
+      const hunterState = String(eventObject.hunter_state || eventRecord.hunter_state || "UNKNOWN");
+      const visionState = String(eventObject.vision_state || eventRecord.vision_state || "UNKNOWN");
+      const eventState = String(eventObject.event_state || eventRecord.event_state || eventRecord.event_status || "NONE");
       const reason = String(eventRecord.reason || "NONE");
+      const triggerFlags = String(eventObject.trigger_flags || eventRecord.trigger_flags || "NONE");
+      const displayCapturePath = capturePath || String(eventObject.capture_path || "");
 
       document.getElementById("eventDetailIdValue").textContent = eventId;
       document.getElementById("eventDetailTimeValue").textContent = formatTime(eventTime);
@@ -2875,11 +2896,16 @@
       document.getElementById("eventDetailNodeValue").textContent = nodeId;
       document.getElementById("eventDetailPositionValue").textContent = `${x.toFixed(1)}, ${y.toFixed(1)}`;
       document.getElementById("eventDetailRidValue").textContent = rid;
+      document.getElementById("eventDetailWhitelistValue").innerHTML = whitelistPill({ wl_status: whitelistStatus, rid_whitelist_hit: whitelistStatus === "WL_ALLOWED" ? 1 : 0 });
+      document.getElementById("eventDetailHunterValue").innerHTML = semanticPill(hunterState, "normal");
+      document.getElementById("eventDetailVisionValue").innerHTML = statePill(visionState, visionState === "VISION_LOCKED" ? 1 : 0);
+      document.getElementById("eventDetailStateValue").innerHTML = eventStatusPill(eventState);
       document.getElementById("eventDetailReasonValue").innerHTML = handoverPill(reason);
+      document.getElementById("eventDetailTriggerValue").innerHTML = semanticPill(triggerFlags, "normal");
       document.getElementById("eventDetailSourceValue").textContent = eventDetailSourceLabel;
       document.getElementById("eventDetailBindingValue").textContent = `${captureBindingText}（${effectiveMode === "strict" ? "严格" : "兜底"}）`;
-      if (capturePath) {
-        link.textContent = capturePath;
+      if (displayCapturePath) {
+        link.textContent = displayCapturePath;
         link.href = captureImageUrl || "#";
       } else {
         link.textContent = "NONE";

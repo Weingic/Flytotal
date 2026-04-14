@@ -69,11 +69,20 @@ def parse_int_flag(value: object) -> int:
         return 0
 
 
+def parse_positive_int(value: object) -> int:
+    try:
+        parsed = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return parsed if parsed > 0 else 0
+
+
 def evaluate_vision_evidence(
     node_status_payload: dict[str, Any],
     vision_status_payload: dict[str, Any],
     event_store_payload: dict[str, Any],
     latest_event_id: str,
+    capture_ready_last_capture_max_age_ms: int,
 ) -> dict[str, Any]:
     records_raw = event_store_payload.get("records", []) if isinstance(event_store_payload, dict) else []
     records = records_raw if isinstance(records_raw, list) else []
@@ -112,6 +121,17 @@ def evaluate_vision_evidence(
         parse_int_flag(node_status_payload.get("capture_ready", 0)) > 0
         or parse_int_flag(vision_status_payload.get("capture_ready", 0)) > 0
     ) else 0
+    vision_status_ts_ms = parse_positive_int(vision_status_payload.get("timestamp_ms", 0))
+    if vision_status_ts_ms <= 0:
+        vision_status_ts_ms = int(time.time() * 1000)
+    last_capture_ts_ms = parse_positive_int(vision_status_payload.get("last_capture_timestamp_ms", 0))
+    last_capture_age_ms = 0
+    status_last_capture_hit = 0
+    if last_capture_ts_ms > 0 and vision_status_ts_ms >= last_capture_ts_ms:
+        last_capture_age_ms = vision_status_ts_ms - last_capture_ts_ms
+        max_age_ms = max(0, int(capture_ready_last_capture_max_age_ms))
+        if max_age_ms <= 0 or last_capture_age_ms <= max_age_ms:
+            status_last_capture_hit = 1
 
     return {
         "scope_event_id": scope_event_id if scope_event_id else "NONE",
@@ -120,8 +140,10 @@ def evaluate_vision_evidence(
         "capture_ready_record_hits": capture_ready_record_hits,
         "status_vision_lock_hit": status_vision_lock_hit,
         "status_capture_ready_hit": status_capture_ready_hit,
-        "vision_lock_hits": vision_lock_record_hits + status_vision_lock_hit,
-        "capture_ready_hits": capture_ready_record_hits + status_capture_ready_hit,
+        "status_last_capture_hit": status_last_capture_hit,
+        "status_last_capture_age_ms": last_capture_age_ms,
+        "vision_lock_hits": vision_lock_record_hits + status_vision_lock_hit + status_last_capture_hit,
+        "capture_ready_hits": capture_ready_record_hits + status_capture_ready_hit + status_last_capture_hit,
     }
 
 
@@ -219,6 +241,12 @@ def main() -> int:
         default=1,
         help="Minimum capture-ready evidence hits when --require-capture-ready is enabled",
     )
+    parser.add_argument(
+        "--capture-ready-last-capture-max-age-ms",
+        type=int,
+        default=900000,
+        help="Treat recent last_capture_timestamp_ms as capture-ready evidence when age <= this value; set 0 to disable age limit",
+    )
     parser.add_argument("--allow-no-export", action="store_true", help="Allow export history count == 0")
     parser.add_argument(
         "--auto-export-if-missing",
@@ -262,7 +290,13 @@ def main() -> int:
 
     latest_event_id = pick_latest_event_id(vision_status, node_events, event_store)
     node_id = str(node_status.get("node_id", "") or "").strip()
-    vision_evidence = evaluate_vision_evidence(node_status, vision_status, event_store, latest_event_id)
+    vision_evidence = evaluate_vision_evidence(
+        node_status,
+        vision_status,
+        event_store,
+        latest_event_id,
+        capture_ready_last_capture_max_age_ms=max(0, int(args.capture_ready_last_capture_max_age_ms)),
+    )
     vision_lock_hits = int(vision_evidence.get("vision_lock_hits", 0) or 0)
     capture_ready_hits = int(vision_evidence.get("capture_ready_hits", 0) or 0)
 
@@ -431,6 +465,8 @@ def main() -> int:
             "vision_lock_hits": vision_lock_hits,
             "capture_ready_hits": capture_ready_hits,
             "vision_scope_record_count": int(vision_evidence.get("scope_record_count", 0) or 0),
+            "status_last_capture_hit": int(vision_evidence.get("status_last_capture_hit", 0) or 0),
+            "status_last_capture_age_ms": int(vision_evidence.get("status_last_capture_age_ms", 0) or 0),
         },
         "latest_event_id": latest_event_id or "NONE",
         "node_id": node_id or "NONE",
@@ -453,6 +489,7 @@ def main() -> int:
             "min_vision_lock_hits": max(1, int(args.min_vision_lock_hits)),
             "require_capture_ready": bool(args.require_capture_ready),
             "min_capture_ready_hits": max(1, int(args.min_capture_ready_hits)),
+            "capture_ready_last_capture_max_age_ms": max(0, int(args.capture_ready_last_capture_max_age_ms)),
             "scope_event_id": str(vision_evidence.get("scope_event_id", "NONE") or "NONE"),
         },
         "auto_export": {

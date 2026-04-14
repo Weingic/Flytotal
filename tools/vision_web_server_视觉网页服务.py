@@ -95,6 +95,13 @@ def safe_int(value: object, default: int = 0) -> int:
         return default
 
 
+def safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return default
+
+
 def normalize_event_record_time(record: dict[str, object], fallback_host_ms: int) -> dict[str, object]:
     normalized = dict(record)
     timestamp_ms = safe_int(normalized.get("timestamp_ms", 0))
@@ -177,6 +184,96 @@ def event_record_time_ms(record: dict[str, object]) -> int:
         ),
         0,
     )
+
+
+def normalize_whitelist_status(record: dict[str, object]) -> str:
+    status = str(
+        record.get(
+            "whitelist_status",
+            record.get("wl_status", ""),
+        )
+        or ""
+    ).strip().upper()
+    if status:
+        return status
+    if safe_int(record.get("rid_whitelist_hit", 0), 0) == 1:
+        return "WL_ALLOWED"
+    return "WL_UNKNOWN"
+
+
+def pick_capture_path(record: dict[str, object], captures: list[dict[str, object]]) -> str:
+    raw_capture_path = str(record.get("capture_path", "") or "").strip()
+    if raw_capture_path and raw_capture_path.upper() != "NONE":
+        return raw_capture_path
+    if captures:
+        latest_capture = captures[0]
+        if isinstance(latest_capture, dict):
+            latest_path = str(latest_capture.get("file_path", "") or "").strip()
+            if latest_path:
+                return latest_path
+    return "NONE"
+
+
+def build_event_object_v1(
+    event_record: dict[str, object] | None,
+    captures: list[dict[str, object]],
+) -> dict[str, object]:
+    if not isinstance(event_record, dict):
+        return {}
+    event_id = normalize_event_id(event_record.get("event_id", "")) or "NONE"
+    node_id = str(event_record.get("node_id", event_record.get("source_node", "NONE")) or "NONE").strip() or "NONE"
+    track_id = safe_int(event_record.get("track_id", 0), 0)
+    risk_score = round(safe_float(event_record.get("risk_score", 0.0), 0.0), 2)
+    risk_level = str(event_record.get("risk_level", event_record.get("event_level", "NONE")) or "NONE").strip() or "NONE"
+    hunter_state = str(event_record.get("hunter_state", "UNKNOWN") or "UNKNOWN").strip() or "UNKNOWN"
+    rid_status = str(event_record.get("rid_status", "UNKNOWN") or "UNKNOWN").strip() or "UNKNOWN"
+    whitelist_status = normalize_whitelist_status(event_record)
+    vision_state = str(event_record.get("vision_state", "UNKNOWN") or "UNKNOWN").strip() or "UNKNOWN"
+    trigger_flags = str(
+        event_record.get(
+            "trigger_flags",
+            event_record.get("event_trigger_reasons", "NONE"),
+        )
+        or "NONE"
+    ).strip() or "NONE"
+    start_time = safe_int(
+        event_record.get(
+            "start_time_ms",
+            event_record.get("current_event_start_time", event_record.get("timestamp_ms", 0)),
+        ),
+        0,
+    )
+    update_time = safe_int(
+        event_record.get(
+            "update_time_ms",
+            event_record.get("display_time_ms", event_record.get("host_logged_ms", event_record.get("timestamp_ms", 0))),
+        ),
+        0,
+    )
+    x = safe_float(event_record.get("x_mm", event_record.get("x", 0.0)), 0.0)
+    y = safe_float(event_record.get("y_mm", event_record.get("y", 0.0)), 0.0)
+    capture_path = pick_capture_path(event_record, captures)
+    event_state = str(event_record.get("event_state", event_record.get("event_status", "NONE")) or "NONE").strip() or "NONE"
+
+    return {
+        "schema_version": "event_object_v1",
+        "event_id": event_id,
+        "node_id": node_id,
+        "track_id": track_id,
+        "risk_score": risk_score,
+        "risk_level": risk_level,
+        "hunter_state": hunter_state,
+        "rid_status": rid_status,
+        "whitelist_status": whitelist_status,
+        "vision_state": vision_state,
+        "trigger_flags": trigger_flags,
+        "start_time": start_time,
+        "update_time": update_time,
+        "x": round(x, 2),
+        "y": round(y, 2),
+        "capture_path": capture_path,
+        "event_state": event_state,
+    }
 
 
 def select_captures_for_event(
@@ -398,6 +495,7 @@ def build_node_event_detail_payload(
         capture_fallback_window_ms=capture_fallback_window_ms,
         capture_match_mode=capture_match_mode,
     )
+    event_object_v1 = build_event_object_v1(selected_event, captures)
 
     return {
         "ok": True,
@@ -405,6 +503,7 @@ def build_node_event_detail_payload(
         "requested_event_id": normalized_event_id,
         "event_id": selected_event_id or "NONE",
         "event": selected_event,
+        "event_object_v1": event_object_v1,
         "capture_binding_mode": capture_binding_mode,
         "capture_binding_note": capture_binding_note,
         "capture_fallback_window_ms": max(0, safe_int(capture_fallback_window_ms, 0)),

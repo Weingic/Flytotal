@@ -103,3 +103,16 @@
    - `checks.vision_evidence_ok`
 4. 意义：
    - 防止“验收步骤看起来通过，但未形成视觉锁定/抓拍证据”的伪通过进入交付包。
+
+## 2026-04-14 严格门禁稳定性补记（4.16 继续推进）
+1. 修复了“收尾事件导致严格门禁误判”的问题：
+   - 文件：`tools/single_node_evidence_closure_check_单节点证据闭环核对.py`
+   - 新增规则：当 `latest_status.json` 中存在“最近抓拍时间”且在时效窗口内，可作为视觉锁定/抓拍就绪补充证据。
+2. 新增参数：
+   - `--capture-ready-last-capture-max-age-ms`（默认 `900000`）
+3. 新增报告计数字段：
+   - `counts.status_last_capture_hit`
+   - `counts.status_last_capture_age_ms`
+4. 严格门禁回归结果：
+   - `python tools/acceptance_flow_411_单节点闭环验收流程.py --mode full --port COM4 --suite-chain rid_identity_chain_v1,risk_event_vision_chain_v1`
+   - 结果：`result=PASS`，`closure_vision_lock_hits=1`，`closure_capture_ready_hits=1`

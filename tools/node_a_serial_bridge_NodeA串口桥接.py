@@ -1,4 +1,4 @@
-# ???? Node A ?????????? JSON ???????????????????????????????????
+﻿# ???? Node A ?????????? JSON ???????????????????????????????????
 import argparse
 import json
 import sys
@@ -36,6 +36,8 @@ SUMMARY_COUNTER_FIELDS = (
     "handover_emitted_count",
     "handover_ignored_count",
 )
+EVENT_STORE_DEDUP_COOLDOWN_MS = 1500
+EVENT_REOPEN_MARK_WINDOW_MS = 10000
 
 
 def require_pyserial() -> Any:
@@ -82,9 +84,9 @@ def coerce_value(value: str) -> Any:
 
 
 def normalize_fields(prefix: str, raw_fields: dict[str, str]) -> dict[str, Any]:
-    # 这里做“字段别名统一”。
-    # 例如 STATUS 里可能叫 track/active/confirmed，
-    # 而统一状态文件里统一改成 track_id/track_active/track_confirmed。
+    # 杩欓噷鍋氣€滃瓧娈靛埆鍚嶇粺涓€鈥濄€?
+    # 渚嬪 STATUS 閲屽彲鑳藉彨 track/active/confirmed锛?
+    # 鑰岀粺涓€鐘舵€佹枃浠堕噷缁熶竴鏀规垚 track_id/track_active/track_confirmed銆?
     normalized: dict[str, Any] = {
         "last_message_type": prefix,
         "last_update_ms": int(time.time() * 1000),
@@ -398,6 +400,7 @@ def build_event_record(prefix: str, raw_fields: dict[str, str]) -> dict[str, Any
     reason = raw_fields.get("reason", raw_fields.get("last_reason", "NONE")).strip() or "NONE"
     event_level = raw_fields.get("event_level", "NONE").strip() or "NONE"
     event_status = raw_fields.get("event_status", "NONE").strip() or "NONE"
+    event_state = raw_fields.get("current_event_state", event_status).strip() or event_status
     track_id = coerce_value(raw_fields.get("track", raw_fields.get("track_id", "0")))
     risk_score = coerce_value(raw_fields.get("risk", raw_fields.get("risk_score", "0")))
     handover_to = raw_fields.get("handover_to", raw_fields.get("handover_last_target", "NONE")).strip() or "NONE"
@@ -446,11 +449,30 @@ def build_event_record(prefix: str, raw_fields: dict[str, str]) -> dict[str, Any
         raw_fields.get("event_trigger_reasons", raw_fields.get("current_event_trigger_reasons", "NONE")).strip()
         or "NONE"
     )
+    trigger_flags = (
+        raw_fields.get("trigger_flags", raw_fields.get("current_event_trigger_flags", "NONE")).strip()
+        or "NONE"
+    )
     vision_state = raw_fields.get("vision_state", "UNKNOWN").strip() or "UNKNOWN"
     vision_locked = coerce_value(raw_fields.get("vision_locked", "0"))
     capture_ready = coerce_value(raw_fields.get("capture_ready", "0"))
+    rid_whitelist_hit = coerce_value(raw_fields.get("rid_whitelist_hit", "0"))
+    capture_path = raw_fields.get("capture_path", "").strip() or "NONE"
+    start_time_ms = coerce_value(
+        raw_fields.get(
+            "current_event_start_time",
+            raw_fields.get("event_start_time", raw_fields.get("start_time", "0")),
+        )
+    )
+    update_time_ms = coerce_value(
+        raw_fields.get(
+            "current_event_opened_ms",
+            raw_fields.get("update_time", raw_fields.get("timestamp", str(timestamp_ms))),
+        )
+    )
+    event_active = coerce_value(raw_fields.get("event_active", "0"))
 
-    # 无事件编号的 EVENT,STATUS 不进入事件仓，避免空状态刷屏。
+    # 鏃犱簨浠剁紪鍙风殑 EVENT,STATUS 涓嶈繘鍏ヤ簨浠朵粨锛岄伩鍏嶇┖鐘舵€佸埛灞忋€?
     if prefix == "EVENT,STATUS" and event_id == "NONE":
         return None
 
@@ -464,16 +486,23 @@ def build_event_record(prefix: str, raw_fields: dict[str, str]) -> dict[str, Any
         "reason": reason,
         "event_level": event_level,
         "event_status": event_status,
+        "event_state": event_state,
+        "event_active": event_active,
         "event_close_reason": event_close_reason,
         "event_trigger_reasons": event_trigger_reasons,
+        "trigger_flags": trigger_flags,
         "track_id": track_id,
         "risk_score": risk_score,
         "risk_level": risk_level,
         "rid_status": rid_status,
+        "rid_whitelist_hit": rid_whitelist_hit,
         "wl_status": wl_status,
+        "whitelist_status": wl_status,
         "main_state": main_state,
         "hunter_state": hunter_state,
         "gimbal_state": gimbal_state,
+        "start_time_ms": start_time_ms,
+        "update_time_ms": update_time_ms,
         "x_mm": x_mm,
         "y_mm": y_mm,
         "vx_mm_s": vx_mm_s,
@@ -481,13 +510,14 @@ def build_event_record(prefix: str, raw_fields: dict[str, str]) -> dict[str, Any
         "vision_state": vision_state,
         "vision_locked": vision_locked,
         "capture_ready": capture_ready,
+        "capture_path": capture_path,
         "handover_to": handover_to,
         "source_node": raw_fields.get("source_node", "").strip() or raw_fields.get("node", "").strip(),
     }
 
 
 def append_event_record(history: list[dict[str, Any]], record: dict[str, Any], limit: int) -> bool:
-    # 用几个关键字段做轻量去重，避免同一事件在很短时间内重复刷屏。
+    # 鐢ㄥ嚑涓叧閿瓧娈靛仛杞婚噺鍘婚噸锛岄伩鍏嶅悓涓€浜嬩欢鍦ㄥ緢鐭椂闂村唴閲嶅鍒峰睆銆?
     key = (
         str(record.get("source_type", "")),
         str(record.get("timestamp_ms", "")),
@@ -525,7 +555,7 @@ def write_event_history_json(path: Path, records: list[dict[str, Any]]) -> None:
 
 
 def append_event_store_record(store: list[dict[str, Any]], record: dict[str, Any], limit: int) -> bool:
-    # 事件仓用于留痕，去重键不含时间，避免相同语义事件高频刷屏。
+    # 事件仓去重与冷却：避免同一语义事件短时重复刷屏。
     key = (
         str(record.get("source_type", "")),
         str(record.get("event_id", "")),
@@ -534,6 +564,38 @@ def append_event_store_record(store: list[dict[str, Any]], record: dict[str, Any
         str(record.get("reason", "")),
         str(record.get("track_id", "")),
     )
+    now_ms = int(coerce_value(str(record.get("host_logged_ms", "0"))) or 0)
+    if now_ms <= 0:
+        now_ms = int(time.time() * 1000)
+
+    event_id = str(record.get("event_id", "")).strip()
+    event_status = str(record.get("event_status", "NONE")).strip().upper()
+    record["event_cooldown_ms"] = EVENT_STORE_DEDUP_COOLDOWN_MS
+    record["event_reopen"] = 0
+    record["event_reopen_gap_ms"] = 0
+
+    # event_reopen rule: same event_id closed then open again in a short window.
+    for existing in store[:20]:
+        if not isinstance(existing, dict):
+            continue
+        existing_event_id = str(existing.get("event_id", "")).strip()
+        existing_status = str(existing.get("event_status", "NONE")).strip().upper()
+        if (
+            event_id
+            and existing_event_id
+            and event_id == existing_event_id
+            and existing_status == "CLOSED"
+            and event_status == "OPEN"
+        ):
+            existing_ms = int(coerce_value(str(existing.get("host_logged_ms", "0"))) or 0)
+            if existing_ms <= 0:
+                existing_ms = int(coerce_value(str(existing.get("timestamp_ms", "0"))) or 0)
+            gap_ms = max(0, now_ms - max(0, existing_ms))
+            if gap_ms <= EVENT_REOPEN_MARK_WINDOW_MS:
+                record["event_reopen"] = 1
+                record["event_reopen_gap_ms"] = gap_ms
+            break
+
     for existing in store[:8]:
         existing_key = (
             str(existing.get("source_type", "")),
@@ -544,13 +606,17 @@ def append_event_store_record(store: list[dict[str, Any]], record: dict[str, Any
             str(existing.get("track_id", "")),
         )
         if existing_key == key:
-            return False
+            existing_ms = int(coerce_value(str(existing.get("host_logged_ms", "0"))) or 0)
+            if existing_ms <= 0:
+                existing_ms = int(coerce_value(str(existing.get("timestamp_ms", "0"))) or 0)
+            if existing_ms > 0 and (now_ms - existing_ms) <= EVENT_STORE_DEDUP_COOLDOWN_MS:
+                return False
+            break
 
     store.insert(0, record)
     if len(store) > limit:
         del store[limit:]
     return True
-
 
 def write_event_store_json(path: Path, records: list[dict[str, Any]]) -> None:
     payload = {
@@ -579,7 +645,7 @@ def backfill_event_host_time(records: list[dict[str, Any]]) -> None:
         if ts_ms >= 946684800000:
             record["host_logged_ms"] = ts_ms
             continue
-        # 旧格式事件仅有设备相对时钟，回退为主机时间，保持记录顺序。
+        # 鏃ф牸寮忎簨浠朵粎鏈夎澶囩浉瀵规椂閽燂紝鍥為€€涓轰富鏈烘椂闂达紝淇濇寔璁板綍椤哄簭銆?
         offset = max(0, total - index - 1)
         record["host_logged_ms"] = now_ms - offset
 
@@ -902,9 +968,9 @@ def main() -> int:
     result_history = load_records_from_payload(result_history_file)
     test_result_monitor: dict[str, Any] | None = None
 
-    # 启动时把已有事件历史并入事件仓，避免重启 bridge 后证据链断档。
+    # 鍚姩鏃舵妸宸叉湁浜嬩欢鍘嗗彶骞跺叆浜嬩欢浠擄紝閬垮厤閲嶅惎 bridge 鍚庤瘉鎹摼鏂。銆?
     backfill_event_host_time(event_history)
-    # 兼容旧版事件仓记录，补齐 host_logged_ms，避免视觉侧绑定时因时间缺失退化为 NONE。
+    # 鍏煎鏃х増浜嬩欢浠撹褰曪紝琛ラ綈 host_logged_ms锛岄伩鍏嶈瑙変晶缁戝畾鏃跺洜鏃堕棿缂哄け閫€鍖栦负 NONE銆?
     backfill_event_host_time(event_store)
 
     for record in event_history:
@@ -1037,4 +1103,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
