@@ -761,6 +761,7 @@
     .pill.warn { background: rgba(183, 122, 0, 0.15); color: var(--warn); border-color: rgba(183, 122, 0, 0.18); }
     .pill.danger { background: rgba(178, 58, 47, 0.12); color: var(--danger); border-color: rgba(178, 58, 47, 0.18); }
     .pill.offline { background: rgba(111, 103, 97, 0.14); color: var(--offline); border-color: rgba(111, 103, 97, 0.16); }
+    .pill.searching { background: rgba(183, 150, 0, 0.15); color: #8a6800; border-color: rgba(183, 150, 0, 0.22); }
     .pill.handover { background: rgba(216, 90, 42, 0.14); color: var(--accent); border-color: rgba(216, 90, 42, 0.18); }
     .pill.normal { background: rgba(109, 102, 94, 0.12); color: var(--muted); border-color: rgba(109, 102, 94, 0.15); }
 
@@ -847,7 +848,7 @@
       <div class="panel status-card" id="visionCard">
         <h2 class="status-title">视觉实时状态</h2>
         <p class="status-subtitle">先看这里，确认视觉链是否已经锁定目标以及当前框的位置。</p>
-        <div class="status-row"><div class="label">视觉状态</div><div class="value" id="runtimeStateValue">NONE</div></div>
+        <div class="status-row"><div class="label">视觉状态</div><div class="value" id="runtimeStateValue"><span class="pill offline">NONE</span></div></div>
         <div class="status-row"><div class="label">锁定状态</div><div class="value" id="runtimeLockedValue">0</div></div>
         <div class="status-row"><div class="label">视觉链就绪</div><div class="value" id="runtimeReadyValue"><span class="pill warn">NOT_READY</span></div></div>
         <div class="status-row"><div class="label">跟踪器</div><div class="value" id="runtimeTrackerValue">NONE</div></div>
@@ -873,6 +874,7 @@
         <div class="status-row"><div class="label">RID 白名单</div><div class="value" id="nodeRidWhitelistValue">0</div></div>
         <div class="status-row"><div class="label">RID 最近更新</div><div class="value" id="nodeRidUpdateValue">--</div></div>
         <div class="status-row"><div class="label">风险</div><div class="value" id="nodeRiskValue">0.0 / NONE</div></div>
+        <div class="status-row"><div class="label">视觉贡献</div><div class="value" id="nodeVisionContribValue"><span class="pill offline">NONE</span></div></div>
         <div class="status-row"><div class="label">链路一致性</div><div class="value" id="nodeConsistencyValue">UNKNOWN</div></div>
         <div class="status-row"><div class="label">映射告警</div><div class="value" id="nodeConsistencyWarnValue">NONE</div></div>
         <div class="status-row"><div class="label">事件</div><div class="value" id="nodeEventValue">0 / NONE</div></div>
@@ -1049,6 +1051,9 @@
           <div class="fact"><span class="label">事件状态</span><div class="value" id="eventDetailStateValue">NONE</div></div>
           <div class="fact"><span class="label">触发原因</span><div class="value" id="eventDetailReasonValue">NONE</div></div>
           <div class="fact"><span class="label">触发标志</span><div class="value" id="eventDetailTriggerValue">NONE</div></div>
+          <div class="fact"><span class="label">风险来源标志</span><div class="value" id="eventDetailReasonFlagsValue">NONE</div></div>
+          <div class="fact"><span class="label">风险分</span><div class="value" id="eventDetailRiskScoreValue">0.0</div></div>
+          <div class="fact"><span class="label">证据 Hash</span><div class="value" id="eventDetailEvidenceHashValue" style="font-size:12px;word-break:break-all;">--</div></div>
           <div class="fact"><span class="label">详情来源</span><div class="value" id="eventDetailSourceValue">实时</div></div>
           <div class="fact"><span class="label">抓拍绑定方式</span><div class="value" id="eventDetailBindingValue">NONE</div></div>
           <div class="fact"><span class="label">抓拍路径</span><div class="value"><a class="file-link" id="eventDetailPathLink" href="#" target="_blank" rel="noreferrer">--</a></div></div>
@@ -1494,6 +1499,14 @@
 
     function semanticPill(text, kind) {
       return `<span class="pill ${kind}">${text || "NONE"}</span>`;
+    }
+
+    function visionStatePill(state) {
+      const v = String(state || "NONE").toUpperCase();
+      if (v === "VISION_LOCKED"    || v === "LOCKED")    return semanticPill(v, "ok");
+      if (v === "VISION_LOST"      || v === "LOST")      return semanticPill(v, "warn");
+      if (v === "VISION_SEARCHING" || v === "SEARCHING") return semanticPill(v, "searching");
+      return semanticPill(v, "offline");
     }
 
     function riskLevelPill(level) {
@@ -2249,7 +2262,7 @@
 
     function setRuntimeStatus(status) {
       if (!status || !status.available) {
-        document.getElementById("runtimeStateValue").textContent = "NONE";
+        document.getElementById("runtimeStateValue").innerHTML = visionStatePill("NONE");
         document.getElementById("runtimeLockedValue").textContent = "0";
         document.getElementById("runtimeReadyValue").innerHTML = semanticPill("NOT_READY", "warn");
         document.getElementById("runtimeTrackerValue").textContent = "NONE";
@@ -2274,7 +2287,7 @@
         ? status.available_trackers.map((item) => String(item || "").toUpperCase()).join(" / ")
         : "NONE";
 
-      document.getElementById("runtimeStateValue").innerHTML = mainStatePill(status.vision_state || "NONE");
+      document.getElementById("runtimeStateValue").innerHTML = visionStatePill(status.vision_state || "NONE");
       document.getElementById("runtimeLockedValue").innerHTML = statePill(status.vision_state || "NONE", status.vision_locked ?? 0);
       document.getElementById("runtimeReadyValue").innerHTML = chainReady
         ? semanticPill("READY", "ok")
@@ -2308,6 +2321,7 @@
         document.getElementById("nodeRidWhitelistValue").innerHTML = semanticPill("UNKNOWN", "normal");
         document.getElementById("nodeRidUpdateValue").textContent = "--";
         document.getElementById("nodeRiskValue").innerHTML = riskLevelPill("NONE");
+        document.getElementById("nodeVisionContribValue").innerHTML = visionStatePill("NONE");
         document.getElementById("nodeConsistencyValue").innerHTML = consistencyStatusPill("UNKNOWN");
         document.getElementById("nodeConsistencyWarnValue").textContent = "NONE";
         document.getElementById("nodeEventValue").textContent = "0 / NONE";
@@ -2348,7 +2362,15 @@
       const wlHint = [wlOwner, wlLabel].filter((item) => item && item !== "NONE").join(" / ");
       document.getElementById("nodeRidUpdateValue").textContent =
         `${ridUpdateText} / match ${ridMatchText}${wlHint ? ` / ${wlHint}` : ""}`;
-      document.getElementById("nodeRiskValue").innerHTML = riskLevelPill(status.risk_level || "NONE");
+      const riskScore = status.risk_score != null ? ` ${Number(status.risk_score).toFixed(1)}` : "";
+      document.getElementById("nodeRiskValue").innerHTML =
+        `${riskLevelPill(status.risk_level || "NONE")}<span style="font-size:13px;color:var(--muted);margin-left:6px;">${riskScore}</span>`;
+      const vc = status.vision_contribution || {};
+      const vcState = String(vc.vision_state || status.vision_state || "NONE");
+      const vcDelta = vc.score_delta != null ? ` (${Number(vc.score_delta) >= 0 ? "+" : ""}${Number(vc.score_delta).toFixed(1)})` : "";
+      const vcNote = vc.note ? ` · ${vc.note}` : "";
+      document.getElementById("nodeVisionContribValue").innerHTML =
+        `${visionStatePill(vcState)}<span style="font-size:13px;color:var(--muted);margin-left:6px;">${vcDelta}${vcNote}</span>`;
       const consistencyStatus = String(status.consistency_status || "UNKNOWN").toUpperCase();
       const expectedMainState = String(status.consistency_expected_main_state || "UNKNOWN").toUpperCase();
       const mainStateText = String(status.main_state || "UNKNOWN").toUpperCase();
@@ -2831,6 +2853,9 @@
       document.getElementById("eventDetailStateValue").textContent = "NONE";
       document.getElementById("eventDetailReasonValue").textContent = "NONE";
       document.getElementById("eventDetailTriggerValue").textContent = "NONE";
+      document.getElementById("eventDetailReasonFlagsValue").textContent = "NONE";
+      document.getElementById("eventDetailRiskScoreValue").textContent = "0.0";
+      document.getElementById("eventDetailEvidenceHashValue").textContent = "--";
       document.getElementById("eventDetailSourceValue").textContent = eventDetailSourceLabel;
       document.getElementById("eventDetailBindingValue").textContent = "NONE";
       link.textContent = "--";
@@ -2888,6 +2913,9 @@
       const eventState = String(eventObject.event_state || eventRecord.event_state || eventRecord.event_status || "NONE");
       const reason = String(eventRecord.reason || "NONE");
       const triggerFlags = String(eventObject.trigger_flags || eventRecord.trigger_flags || "NONE");
+      const reasonFlags = String(eventObject.reason_flags || eventRecord.reason_flags || "NONE");
+      const riskScore = Number(eventObject.risk_score ?? eventRecord.risk_score ?? 0);
+      const evidenceHash = String(eventObject.evidence_hash || eventRecord.evidence_hash || "--");
       const displayCapturePath = capturePath || String(eventObject.capture_path || "");
 
       document.getElementById("eventDetailIdValue").textContent = eventId;
@@ -2898,10 +2926,13 @@
       document.getElementById("eventDetailRidValue").textContent = rid;
       document.getElementById("eventDetailWhitelistValue").innerHTML = whitelistPill({ wl_status: whitelistStatus, rid_whitelist_hit: whitelistStatus === "WL_ALLOWED" ? 1 : 0 });
       document.getElementById("eventDetailHunterValue").innerHTML = semanticPill(hunterState, "normal");
-      document.getElementById("eventDetailVisionValue").innerHTML = statePill(visionState, visionState === "VISION_LOCKED" ? 1 : 0);
+      document.getElementById("eventDetailVisionValue").innerHTML = visionStatePill(visionState);
       document.getElementById("eventDetailStateValue").innerHTML = eventStatusPill(eventState);
       document.getElementById("eventDetailReasonValue").innerHTML = handoverPill(reason);
       document.getElementById("eventDetailTriggerValue").innerHTML = semanticPill(triggerFlags, "normal");
+      document.getElementById("eventDetailReasonFlagsValue").textContent = reasonFlags;
+      document.getElementById("eventDetailRiskScoreValue").textContent = riskScore.toFixed(1);
+      document.getElementById("eventDetailEvidenceHashValue").textContent = evidenceHash;
       document.getElementById("eventDetailSourceValue").textContent = eventDetailSourceLabel;
       document.getElementById("eventDetailBindingValue").textContent = `${captureBindingText}（${effectiveMode === "strict" ? "严格" : "兜底"}）`;
       if (displayCapturePath) {

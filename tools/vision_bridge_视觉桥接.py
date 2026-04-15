@@ -74,6 +74,16 @@ class NodeRuntimeSignals:
     updated_ms: int
 
 
+@dataclass
+class GimbalSignals:
+    # 来自固件侧 node_status 的云台/视觉引导字段。
+    gimbal_state: str    # "TRACKING" / "IDLE" / "LOST"
+    track_confirmed: int # 1 = 目标已稳定确认
+    track_active: int    # 1 = 正在跟踪
+    x_mm: float
+    y_mm: float
+
+
 class CsvVisionLogger:
     # 记录连续运行中的状态快照。
     def __init__(self, path: Path) -> None:
@@ -387,6 +397,99 @@ def load_node_runtime_signals(node_status_file: Path) -> NodeRuntimeSignals:
         last_event_id=last_event_id,
         updated_ms=updated_ms,
     )
+
+
+def load_gimbal_signals(node_status_file: Path) -> GimbalSignals:
+    """从 node_status JSON 读取云台引导字段。固件侧字段缺失时返回安全默认值。"""
+    payload = load_json_payload(node_status_file)
+    if not isinstance(payload, dict):
+        return GimbalSignals(gimbal_state="IDLE", track_confirmed=0, track_active=0, x_mm=0.0, y_mm=0.0)
+    gimbal_state = str(payload.get("gimbal_state", "IDLE")).strip().upper() or "IDLE"
+    track_confirmed = safe_int(payload.get("track_confirmed", 0), 0)
+    track_active = safe_int(payload.get("track_active", 0), 0)
+    x_mm = float(payload.get("x_mm", 0.0) or 0.0)
+    y_mm = float(payload.get("y_mm", 0.0) or 0.0)
+    return GimbalSignals(
+        gimbal_state=gimbal_state,
+        track_confirmed=track_confirmed,
+        track_active=track_active,
+        x_mm=x_mm,
+        y_mm=y_mm,
+    )
+
+
+def radar_to_frame(
+    x_mm: float,
+    y_mm: float,
+    frame_w: int,
+    frame_h: int,
+    radar_range_x_mm: float = 10000.0,
+    radar_range_y_mm: float = 10000.0,
+) -> tuple[int, int]:
+    """将雷达坐标 (x_mm, y_mm) 线性映射到画面像素坐标。
+
+    约定（与固件侧对齐，Win 定稿后只需改此处）：
+      x_mm ∈ [-range/2, +range/2] → px ∈ [0, frame_w]
+      y_mm ∈ [0, range]           → py ∈ [frame_h, 0]（远端在上方）
+    """
+    px = int((x_mm / radar_range_x_mm + 0.5) * frame_w)
+    py = int((1.0 - y_mm / radar_range_y_mm) * frame_h)
+    return max(0, min(frame_w - 1, px)), max(0, min(frame_h - 1, py))
+
+
+class VisionStateReporter:
+    """封装视觉状态回写逻辑（去抖 + 状态输出）。
+
+    当前阶段只打印串口命令格式到 stdout，不真正发串口。
+    Win 侧串口接口定稿后，只需替换 _emit() 内部实现。
+
+    去抖规则：
+      同一状态需连续保持 debounce_frames 帧才被确认并上报。
+      避免 LOCKED/LOST/LOCKED 来回抖动。
+    """
+
+    COMMANDS = {
+        VISION_LOCKED: "VISION,LOCKED",
+        VISION_LOST:   "VISION,LOST",
+        VISION_IDLE:   "VISION,IDLE",
+    }
+
+    def __init__(self, debounce_frames: int = 3) -> None:
+        self._debounce_frames = max(1, debounce_frames)
+        self._candidate: str = VISION_IDLE
+        self._candidate_count: int = 0
+        self._confirmed: str = VISION_IDLE
+        self._last_emitted: str = ""
+
+    def update(self, new_state: str) -> str | None:
+        """输入当前帧的视觉状态，返回本帧实际确认的状态（去抖后）。
+
+        如果状态发生跳变，返回新状态并打印串口命令；否则返回 None。
+        """
+        if new_state == self._candidate:
+            self._candidate_count += 1
+        else:
+            self._candidate = new_state
+            self._candidate_count = 1
+
+        if self._candidate_count >= self._debounce_frames:
+            if self._candidate != self._confirmed:
+                self._confirmed = self._candidate
+                self._emit(self._confirmed)
+                return self._confirmed
+
+        return None
+
+    def status_command(self) -> str:
+        """返回 VISION,STATUS 命令格式的当前状态字符串。"""
+        return f"VISION,STATUS,state={self._confirmed}"
+
+    def confirmed_state(self) -> str:
+        return self._confirmed
+
+    def _emit(self, state: str) -> None:
+        cmd = self.COMMANDS.get(state, f"VISION,IDLE")
+        print(f"VISION_CMD,{cmd},confirmed_state={state}")
 
 
 def is_high_risk_level(level: str) -> bool:
@@ -734,6 +837,44 @@ def draw_overlay(
     return frame
 
 
+def draw_guide_box(
+    cv: Any,
+    frame: Any,
+    gimbal: GimbalSignals,
+    frame_w: int,
+    frame_h: int,
+    radar_range_x_mm: float = 10000.0,
+    radar_range_y_mm: float = 10000.0,
+    box_half_px: int = 40,
+) -> Any:
+    """叠加黄色半自动引导框。
+
+    触发条件：gimbal_state == "TRACKING" AND track_confirmed == 1 AND track_active == 1。
+    当前阶段只做提示框，不自动启动 CSRT 跟踪器。
+    """
+    if gimbal.gimbal_state != "TRACKING" or gimbal.track_confirmed != 1 or gimbal.track_active != 1:
+        return frame
+
+    cx, cy = radar_to_frame(
+        gimbal.x_mm, gimbal.y_mm, frame_w, frame_h,
+        radar_range_x_mm, radar_range_y_mm,
+    )
+
+    yellow = (0, 255, 255)
+    cv.rectangle(frame, (cx - box_half_px, cy - box_half_px), (cx + box_half_px, cy + box_half_px), yellow, 2)
+    cv.circle(frame, (cx, cy), 4, yellow, -1)
+    cv.putText(
+        frame,
+        f"GUIDE ({gimbal.x_mm:.0f},{gimbal.y_mm:.0f})mm",
+        (cx - box_half_px, cy - box_half_px - 8),
+        cv.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        yellow,
+        1,
+    )
+    return frame
+
+
 def select_target_roi(
     cv: Any,
     frame: Any,
@@ -936,6 +1077,8 @@ def main() -> int:
     last_vision_signature: tuple[str, int, int, int, int, int] | None = None
     last_capture_hint_time = 0.0
     last_node_signals = load_node_runtime_signals(args.node_status_file)
+    current_gimbal_signals = load_gimbal_signals(args.node_status_file)
+    vision_reporter = VisionStateReporter(debounce_frames=3)
     pending_policy_captures: list[dict[str, object]] = []
 
     print("Vision bridge started.")
@@ -1063,6 +1206,8 @@ def main() -> int:
             )
             now = time.time()
             current_node_signals = load_node_runtime_signals(args.node_status_file)
+            current_gimbal_signals = load_gimbal_signals(args.node_status_file)
+            vision_reporter.update(current_state)
             pending_window_s = max(0.0, float(args.policy_capture_pending_window_s))
             if pending_window_s > 0:
                 pending_policy_captures = [
@@ -1283,6 +1428,11 @@ def main() -> int:
                     last_status_write_time = now
 
             display = draw_overlay(cv, frame.copy(), snapshot, show_help)
+            display = draw_guide_box(
+                cv, display, current_gimbal_signals,
+                frame_w=source_width or display.shape[1],
+                frame_h=source_height or display.shape[0],
+            )
             cv.imshow(WINDOW_NAME, display)
             key = cv.waitKey(1) & 0xFF
 

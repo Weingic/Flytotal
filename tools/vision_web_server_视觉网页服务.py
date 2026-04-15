@@ -1125,6 +1125,62 @@ def is_mock_mode(query: dict[str, list[str]]) -> bool:
     return mode in {"mock", "simulate", "sim", "demo"}
 
 
+def compute_vision_contribution(
+    vision_state: str,
+    wl_status: str,
+    risk_score: float | None = None,
+) -> dict[str, object]:
+    """根据视觉状态和白名单状态推导视觉对风险分的贡献。
+
+    规则镜像自 Win 侧 HunterAction 的约定（Day 2 A2 任务）：
+      VISION_LOCKED + WL_ALLOWED  → 降风险（负贡献），合作目标已锁定
+      VISION_LOCKED + 非 WL_ALLOWED → 中性（0），非合作目标不降风险
+      VISION_LOST                  → 小幅惩罚（正贡献），目标丢失场景
+      VISION_SEARCHING             → 微小惩罚，搜索中
+      其他 / IDLE / NONE           → 无贡献
+
+    score_delta 正数 = 加风险，负数 = 降风险，None = 未计算。
+    """
+    v = str(vision_state or "NONE").strip().upper()
+    wl = str(wl_status or "WL_UNKNOWN").strip().upper()
+
+    if v in ("VISION_LOCKED", "LOCKED"):
+        if wl == "WL_ALLOWED":
+            return {
+                "vision_state": v,
+                "score_delta": -8.0,
+                "note": "合作目标锁定，降低风险",
+                "wl_status": wl,
+            }
+        else:
+            return {
+                "vision_state": v,
+                "score_delta": 0.0,
+                "note": f"非合作目标锁定（{wl}），不降风险",
+                "wl_status": wl,
+            }
+    if v in ("VISION_LOST", "LOST"):
+        return {
+            "vision_state": v,
+            "score_delta": 4.0,
+            "note": "目标丢失，小幅加风险",
+            "wl_status": wl,
+        }
+    if v in ("VISION_SEARCHING", "SEARCHING"):
+        return {
+            "vision_state": v,
+            "score_delta": 1.0,
+            "note": "视觉搜索中",
+            "wl_status": wl,
+        }
+    return {
+        "vision_state": v,
+        "score_delta": None,
+        "note": "视觉无贡献",
+        "wl_status": wl,
+    }
+
+
 def build_mock_bundle() -> dict[str, object]:
     now_ms = int(time.time() * 1000)
     scenario_name = "standard_acceptance"
@@ -1483,6 +1539,12 @@ def build_mock_bundle() -> dict[str, object]:
             "uplink_enabled": 1,
             "idle_ready": 1,
             "data_source_mode": "mock",
+            "vision_state": "VISION_LOCKED",
+            "vision_contribution": compute_vision_contribution(
+                vision_state="VISION_LOCKED",
+                wl_status="WL_ALLOWED",
+                risk_score=17.0,
+            ),
         },
         "node_events": {
             "ok": True,
@@ -1853,7 +1915,18 @@ def create_handler(
                 if mock_mode and isinstance(mock_bundle, dict):
                     self.send_json(mock_bundle.get("node_status", {"ok": True, "available": False}))
                     return
-                self.send_json(load_json_file(node_status_file))
+                node_payload = load_json_file(node_status_file)
+                # 从 vision bridge 的 status 文件读取当前视觉状态，注入视觉贡献字段。
+                vision_payload = load_json_file(status_file)
+                v_state = str(vision_payload.get("vision_state", "NONE") or "NONE").strip().upper() or "NONE"
+                wl = str(
+                    node_payload.get("wl_status",
+                        node_payload.get("whitelist_status", "WL_UNKNOWN"))
+                    or "WL_UNKNOWN"
+                ).strip().upper() or "WL_UNKNOWN"
+                node_payload["vision_state"] = v_state
+                node_payload["vision_contribution"] = compute_vision_contribution(v_state, wl)
+                self.send_json(node_payload)
                 return
             if parsed.path == "/api/node-events":
                 limit = default_limit
