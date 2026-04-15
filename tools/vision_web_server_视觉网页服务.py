@@ -1853,7 +1853,18 @@ def create_handler(
                 if mock_mode and isinstance(mock_bundle, dict):
                     self.send_json(mock_bundle.get("node_status", {"ok": True, "available": False}))
                     return
-                self.send_json(load_json_file(node_status_file))
+                node_payload = load_json_file(node_status_file)
+                # 注入视觉贡献字段：从 vision bridge 的 status 文件读取当前 vision_state，
+                # 拼装成 vision_contribution 子对象，供网页风险区显示。
+                vision_payload = load_json_file(status_file)
+                vision_state_raw = str(vision_payload.get("vision_state", "NONE") or "NONE").strip().upper() or "NONE"
+                node_payload["vision_state"] = vision_state_raw
+                node_payload["vision_contribution"] = {
+                    "vision_state": vision_state_raw,
+                    "score_delta": None,   # Win 侧 risk_score 接入后由固件填入，目前留 null
+                    "note": "视觉贡献计算待 Win 侧固件接入后启用",
+                }
+                self.send_json(node_payload)
                 return
             if parsed.path == "/api/node-events":
                 limit = default_limit

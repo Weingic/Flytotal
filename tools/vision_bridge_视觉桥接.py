@@ -74,6 +74,16 @@ class NodeRuntimeSignals:
     updated_ms: int
 
 
+@dataclass
+class GimbalSignals:
+    # 来自固件侧 node_status 的云台/视觉引导字段。
+    gimbal_state: str    # 例如 "TRACKING" / "IDLE" / "LOST"
+    track_confirmed: int # 1 = 目标已稳定确认，0 = 未确认
+    track_active: int    # 1 = 正在跟踪，0 = 已退出
+    x_mm: float          # 雷达/视觉坐标 X（毫米）
+    y_mm: float          # 雷达/视觉坐标 Y（毫米）
+
+
 class CsvVisionLogger:
     # 记录连续运行中的状态快照。
     def __init__(self, path: Path) -> None:
@@ -387,6 +397,48 @@ def load_node_runtime_signals(node_status_file: Path) -> NodeRuntimeSignals:
         last_event_id=last_event_id,
         updated_ms=updated_ms,
     )
+
+
+def load_gimbal_signals(node_status_file: Path) -> GimbalSignals:
+    """从 node_status JSON 读取云台引导字段。固件侧尚未写入时返回安全默认值。"""
+    payload = load_json_payload(node_status_file)
+    if not isinstance(payload, dict):
+        return GimbalSignals(gimbal_state="IDLE", track_confirmed=0, track_active=0, x_mm=0.0, y_mm=0.0)
+    gimbal_state = str(payload.get("gimbal_state", "IDLE")).strip().upper() or "IDLE"
+    track_confirmed = safe_int(payload.get("track_confirmed", 0), 0)
+    track_active = safe_int(payload.get("track_active", 0), 0)
+    x_mm = float(payload.get("x_mm", 0.0) or 0.0)
+    y_mm = float(payload.get("y_mm", 0.0) or 0.0)
+    return GimbalSignals(
+        gimbal_state=gimbal_state,
+        track_confirmed=track_confirmed,
+        track_active=track_active,
+        x_mm=x_mm,
+        y_mm=y_mm,
+    )
+
+
+def radar_to_frame(
+    x_mm: float,
+    y_mm: float,
+    frame_w: int,
+    frame_h: int,
+    radar_range_x_mm: float = 10000.0,
+    radar_range_y_mm: float = 10000.0,
+) -> tuple[int, int]:
+    """将雷达坐标 (x_mm, y_mm) 映射到画面像素坐标。
+
+    约定：
+      x_mm 范围 [-radar_range_x_mm/2, +radar_range_x_mm/2] → 画面 [0, frame_w]
+      y_mm 范围 [0, radar_range_y_mm]                       → 画面 [frame_h, 0]（远端在上）
+
+    如果固件坐标系不同，只需调整这里的映射即可，调用方不变。
+    """
+    px = int((x_mm / radar_range_x_mm + 0.5) * frame_w)
+    py = int((1.0 - y_mm / radar_range_y_mm) * frame_h)
+    px = max(0, min(frame_w - 1, px))
+    py = max(0, min(frame_h - 1, py))
+    return px, py
 
 
 def is_high_risk_level(level: str) -> bool:
@@ -734,6 +786,56 @@ def draw_overlay(
     return frame
 
 
+def draw_guide_box(
+    cv: Any,
+    frame: Any,
+    gimbal: GimbalSignals,
+    frame_w: int,
+    frame_h: int,
+    radar_range_x_mm: float = 10000.0,
+    radar_range_y_mm: float = 10000.0,
+    box_half_px: int = 40,
+) -> Any:
+    """在画面上叠加黄色半自动引导框。
+
+    触发条件：gimbal_state == "TRACKING" 且 track_confirmed == 1 且 track_active == 1。
+    退出条件：track_active == 0 或 gimbal_state 不为 TRACKING → 不绘制，直接返回。
+    当前阶段只做提示框，不自动启动 CSRT 跟踪器。
+    """
+    if gimbal.gimbal_state != "TRACKING" or gimbal.track_confirmed != 1 or gimbal.track_active != 1:
+        return frame
+
+    cx, cy = radar_to_frame(
+        gimbal.x_mm,
+        gimbal.y_mm,
+        frame_w,
+        frame_h,
+        radar_range_x_mm,
+        radar_range_y_mm,
+    )
+
+    # 黄色引导框 (BGR: 0, 255, 255)
+    color_yellow = (0, 255, 255)
+    pt1 = (cx - box_half_px, cy - box_half_px)
+    pt2 = (cx + box_half_px, cy + box_half_px)
+    cv.rectangle(frame, pt1, pt2, color_yellow, 2)
+    cv.circle(frame, (cx, cy), 4, color_yellow, -1)
+
+    # 右上角标注引导框信息
+    label = f"GUIDE ({gimbal.x_mm:.0f},{gimbal.y_mm:.0f})mm"
+    cv.putText(
+        frame,
+        label,
+        (cx - box_half_px, cy - box_half_px - 8),
+        cv.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        color_yellow,
+        1,
+    )
+
+    return frame
+
+
 def select_target_roi(
     cv: Any,
     frame: Any,
@@ -936,6 +1038,7 @@ def main() -> int:
     last_vision_signature: tuple[str, int, int, int, int, int] | None = None
     last_capture_hint_time = 0.0
     last_node_signals = load_node_runtime_signals(args.node_status_file)
+    current_gimbal_signals = load_gimbal_signals(args.node_status_file)
     pending_policy_captures: list[dict[str, object]] = []
 
     print("Vision bridge started.")
@@ -1063,6 +1166,7 @@ def main() -> int:
             )
             now = time.time()
             current_node_signals = load_node_runtime_signals(args.node_status_file)
+            current_gimbal_signals = load_gimbal_signals(args.node_status_file)
             pending_window_s = max(0.0, float(args.policy_capture_pending_window_s))
             if pending_window_s > 0:
                 pending_policy_captures = [
@@ -1283,6 +1387,13 @@ def main() -> int:
                     last_status_write_time = now
 
             display = draw_overlay(cv, frame.copy(), snapshot, show_help)
+            display = draw_guide_box(
+                cv,
+                display,
+                current_gimbal_signals,
+                frame_w=source_width or display.shape[1],
+                frame_h=source_height or display.shape[0],
+            )
             cv.imshow(WINDOW_NAME, display)
             key = cv.waitKey(1) & 0xFF
 
