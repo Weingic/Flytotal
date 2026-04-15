@@ -202,6 +202,7 @@ struct EventObject {
     char event_id[32];
     char node_id[16];
     char close_reason[24];
+    char capture_path[128];
     uint32_t track_id;
     float risk_score;
     RiskLevel risk_level;
@@ -210,6 +211,7 @@ struct EventObject {
     RidStatus rid_status;
     WhitelistStatus wl_status;
     unsigned long start_time_ms;
+    unsigned long close_time_ms;
     float last_x_mm;
     float last_y_mm;
     float last_vx_mm_s;

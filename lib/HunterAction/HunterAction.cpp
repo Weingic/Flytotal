@@ -11,6 +11,8 @@ constexpr uint32_t RiskReasonRidMissing = 1u << 4;
 constexpr uint32_t RiskReasonRidSuspicious = 1u << 5;
 constexpr uint32_t RiskReasonProximity = 1u << 6;
 constexpr uint32_t RiskReasonMotionAnomaly = 1u << 7;
+constexpr uint32_t RiskReasonVisionLocked = 1u << 8;
+constexpr uint32_t RiskReasonVisionLost = 1u << 9;
 
 bool isAlertState(HunterState state) {
     return state == HUNTER_SUSPICIOUS || state == HUNTER_HIGH_RISK || state == HUNTER_EVENT_LOCKED;
@@ -79,7 +81,12 @@ void HunterAction::setState(HunterState next_state, unsigned long now) {
     pending_state_started_ms_ = now;
 }
 
-HunterRiskAssessment HunterAction::computeRiskAssessment(const RadarTrack &track, RidStatus rid_status, WhitelistStatus wl_status) const {
+HunterRiskAssessment HunterAction::computeRiskAssessment(
+    const RadarTrack &track,
+    RidStatus rid_status,
+    WhitelistStatus wl_status,
+    VisionState vision_state
+) const {
     HunterRiskAssessment assessment = {0.0f, 0u, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     if (!track.is_active) {
         return assessment;
@@ -156,6 +163,18 @@ HunterRiskAssessment HunterAction::computeRiskAssessment(const RadarTrack &track
         assessment.reason_flags |= RiskReasonMotionAnomaly;
     }
 
+    if (vision_state == VISION_LOCKED && wl_status == WL_ALLOWED) {
+        score += HunterConfig::VisionLockedAssistScore;
+        assessment.reason_flags |= RiskReasonVisionLocked;
+    } else if (vision_state == VISION_LOST) {
+        const bool high_attention_target = wl_status != WL_ALLOWED &&
+                                           (rid_status == RID_NONE || rid_status == RID_EXPIRED || rid_status == RID_INVALID);
+        if (track.is_confirmed && high_attention_target && score >= HunterConfig::VisionLostPenaltyMinScore) {
+            score += HunterConfig::VisionLostPenaltyScore;
+            assessment.reason_flags |= RiskReasonVisionLost;
+        }
+    }
+
     if (score < 0.0f) {
         score = 0.0f;
     }
@@ -195,9 +214,15 @@ void HunterAction::applyStateTarget(HunterState target_state, unsigned long now)
     }
 }
 
-HunterOutput HunterAction::update(const RadarTrack &track, RidStatus rid_status, WhitelistStatus wl_status, unsigned long now) {
+HunterOutput HunterAction::update(
+    const RadarTrack &track,
+    RidStatus rid_status,
+    WhitelistStatus wl_status,
+    VisionState vision_state,
+    unsigned long now
+) {
     HunterOutput output = {};
-    HunterRiskAssessment assessment = computeRiskAssessment(track, rid_status, wl_status);
+    HunterRiskAssessment assessment = computeRiskAssessment(track, rid_status, wl_status, vision_state);
     output.risk_score = assessment.score;
     output.risk_reason_flags = assessment.reason_flags;
     output.risk_base_score = assessment.base_score;
