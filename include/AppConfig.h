@@ -67,6 +67,9 @@ constexpr float RidMissingScore = RidNoneScore;
 constexpr float RidSuspiciousScore = RidInvalidScore;
 constexpr float ProximityScore = 12.0f;
 constexpr float MotionAnomalyScore = 12.0f;
+constexpr float VisionLockedAssistScore = -10.0f;
+constexpr float VisionLostPenaltyScore = 8.0f;
+constexpr float VisionLostPenaltyMinScore = 40.0f;
 constexpr float ProximityThresholdMm = 1500.0f;
 constexpr float MotionAnomalySpeedThresholdMmS = 350.0f;
 constexpr float SuspiciousThreshold = 40.0f;
@@ -90,6 +93,9 @@ constexpr unsigned long ReconfirmWindowMs = 1200;
 namespace TrackingConfig {
 constexpr unsigned long AcquireConfirmMs = 150;
 constexpr unsigned long LostRecoveryTimeoutMs = 3000;
+constexpr unsigned long VisionStateSwitchHoldMs = 120;
+constexpr unsigned long VisionLockedHoldMs = 220;
+constexpr unsigned long VisionLostHoldMs = 350;
 constexpr unsigned long LoopDelayMs = 20;
 }
 
@@ -101,4 +107,16 @@ constexpr unsigned long EventReportMs = 250;
 namespace EventConfig {
 // A short no-RID appearance is treated as suspicious, but must not be eventized immediately.
 constexpr unsigned long MissingRidEventMinDurationMs = 800;
+// Event close is delayed for a short hold window to avoid open/close flapping.
+constexpr unsigned long CloseHoldMs = 350;
+// Cooldown window after a close; prevents immediate reopen.
+constexpr unsigned long ReopenCooldownMs = 1200;
+// Additional guard for same track id reopen.
+constexpr unsigned long SameTrackReopenBlockMs = 1800;
+// Capture policy: allow capture in HIGH_RISK and OPEN EVENT states.
+constexpr bool CaptureInHighRisk = true;
+constexpr bool CaptureInEvent = true;
+// Capture throttling to avoid burst capture storms.
+constexpr unsigned long CaptureMinIntervalMs = 900;
+constexpr uint8_t CaptureMaxPerEvent = 3;
 }
