@@ -20,6 +20,28 @@ function Run-Git {
     }
 }
 
+function Run-GitWithRetry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$GitArgs,
+        [int]$MaxAttempts = 3,
+        [int]$DelaySeconds = 3
+    )
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            Run-Git -GitArgs $GitArgs
+            return
+        } catch {
+            if ($attempt -ge $MaxAttempts) {
+                throw
+            }
+            Write-Host "Git command failed, retrying in $DelaySeconds s ($attempt/$MaxAttempts)..." -ForegroundColor Yellow
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+}
+
 if (-not (Test-Path -LiteralPath $RepoPath)) {
     throw "Repo path does not exist: $RepoPath"
 }
@@ -40,10 +62,10 @@ if ($dirty) {
 }
 
 # 1) Sync and move to integration branch.
-Run-Git -GitArgs @("fetch", "origin", "--prune")
+Run-GitWithRetry -GitArgs @("fetch", "origin", "--prune")
 Run-Git -GitArgs @("branch")
 Run-Git -GitArgs @("checkout", $IntegrationBranch)
-Run-Git -GitArgs @("pull", "origin", $IntegrationBranch)
+Run-GitWithRetry -GitArgs @("pull", "origin", $IntegrationBranch)
 
 # 2) Pause for Mac-side merge unless explicitly skipped.
 if (-not $SkipMacPause) {
@@ -51,8 +73,8 @@ if (-not $SkipMacPause) {
 }
 
 # 3) Refresh integration again to avoid stale base, then merge win branch.
-Run-Git -GitArgs @("fetch", "origin", "--prune")
-Run-Git -GitArgs @("pull", "origin", $IntegrationBranch)
+Run-GitWithRetry -GitArgs @("fetch", "origin", "--prune")
+Run-GitWithRetry -GitArgs @("pull", "origin", $IntegrationBranch)
 
 Write-Host ">> git merge --no-ff origin/$WinBranch" -ForegroundColor Cyan
 & git merge --no-ff "origin/$WinBranch"
@@ -64,7 +86,7 @@ if ($LASTEXITCODE -ne 0) {
 
 # 4) Verify and push integration.
 Run-Git -GitArgs @("status")
-Run-Git -GitArgs @("push", "origin", $IntegrationBranch)
+Run-GitWithRetry -GitArgs @("push", "origin", $IntegrationBranch)
 
 # 5) Final check and switch back to win branch.
 Run-Git -GitArgs @("status")
