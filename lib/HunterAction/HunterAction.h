@@ -15,6 +15,8 @@ struct HunterOutput {
     float risk_rid_score;
     float risk_proximity_score;
     float risk_motion_score;
+    float risk_vision_score;
+    float risk_audio_score;
     unsigned long state_since_ms;
     unsigned long pending_since_ms;
     RiskTransitionMode transition_mode;
@@ -34,6 +36,8 @@ struct HunterRiskAssessment {
     float rid_score;
     float proximity_score;
     float motion_score;
+    float vision_score;
+    float audio_score;
 };
 
 class HunterAction {
@@ -44,10 +48,23 @@ private:
     unsigned long pending_state_started_ms_;
 
     void setState(HunterState next_state, unsigned long now);
-    HunterRiskAssessment computeRiskAssessment(const RadarTrack &track, RidStatus rid_status, WhitelistStatus wl_status) const;
+    HunterRiskAssessment computeRiskAssessment(
+        const RadarTrack &track,
+        RidStatus rid_status,
+        WhitelistStatus wl_status,
+        VisionState vision_state,
+        AudioState audio_state
+    ) const;
     void applyStateTarget(HunterState target_state, unsigned long now);
 
 public:
     HunterAction();
-    HunterOutput update(const RadarTrack &track, RidStatus rid_status, WhitelistStatus wl_status, unsigned long now);
+    HunterOutput update(
+        const RadarTrack &track,
+        RidStatus rid_status,
+        WhitelistStatus wl_status,
+        VisionState vision_state,
+        AudioState audio_state,
+        unsigned long now
+    );
 };
