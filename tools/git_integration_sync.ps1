@@ -9,11 +9,14 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 function Run-Git {
-    param([string[]]$Args)
-    Write-Host ">> git $($Args -join ' ')" -ForegroundColor Cyan
-    & git @Args
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$GitArgs
+    )
+    Write-Host ">> git $($GitArgs -join ' ')" -ForegroundColor Cyan
+    & git @GitArgs
     if ($LASTEXITCODE -ne 0) {
-        throw "Command failed: git $($Args -join ' ')"
+        throw "Command failed: git $($GitArgs -join ' ')"
     }
 }
 
@@ -32,15 +35,15 @@ if ($LASTEXITCODE -ne 0) {
 }
 if ($dirty) {
     Write-Host "Working tree is not clean. Please commit/stash first." -ForegroundColor Red
-    Run-Git @("status")
+    Run-Git -GitArgs @("status")
     exit 1
 }
 
 # 1) Sync and move to integration branch.
-Run-Git @("fetch", "origin", "--prune")
-Run-Git @("branch")
-Run-Git @("checkout", $IntegrationBranch)
-Run-Git @("pull", "origin", $IntegrationBranch)
+Run-Git -GitArgs @("fetch", "origin", "--prune")
+Run-Git -GitArgs @("branch")
+Run-Git -GitArgs @("checkout", $IntegrationBranch)
+Run-Git -GitArgs @("pull", "origin", $IntegrationBranch)
 
 # 2) Pause for Mac-side merge unless explicitly skipped.
 if (-not $SkipMacPause) {
@@ -48,24 +51,24 @@ if (-not $SkipMacPause) {
 }
 
 # 3) Refresh integration again to avoid stale base, then merge win branch.
-Run-Git @("fetch", "origin", "--prune")
-Run-Git @("pull", "origin", $IntegrationBranch)
+Run-Git -GitArgs @("fetch", "origin", "--prune")
+Run-Git -GitArgs @("pull", "origin", $IntegrationBranch)
 
 Write-Host ">> git merge --no-ff origin/$WinBranch" -ForegroundColor Cyan
 & git merge --no-ff "origin/$WinBranch"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Merge conflict detected. Stopped before push. Resolve conflicts manually." -ForegroundColor Red
-    Run-Git @("status")
+    Run-Git -GitArgs @("status")
     exit 1
 }
 
 # 4) Verify and push integration.
-Run-Git @("status")
-Run-Git @("push", "origin", $IntegrationBranch)
+Run-Git -GitArgs @("status")
+Run-Git -GitArgs @("push", "origin", $IntegrationBranch)
 
 # 5) Final check and switch back to win branch.
-Run-Git @("status")
-Run-Git @("checkout", $WinBranch)
-Run-Git @("status")
+Run-Git -GitArgs @("status")
+Run-Git -GitArgs @("checkout", $WinBranch)
+Run-Git -GitArgs @("status")
 
 Write-Host "Done: integration pushed and switched back to $WinBranch" -ForegroundColor Green
