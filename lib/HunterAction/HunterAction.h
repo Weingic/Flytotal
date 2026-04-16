@@ -44,10 +44,21 @@ private:
     unsigned long pending_state_started_ms_;
 
     void setState(HunterState next_state, unsigned long now);
-    HunterRiskAssessment computeRiskAssessment(const RadarTrack &track, RidStatus rid_status, WhitelistStatus wl_status) const;
+    HunterRiskAssessment computeRiskAssessment(
+        const RadarTrack &track,
+        RidStatus rid_status,
+        WhitelistStatus wl_status,
+        VisionState vision_state
+    ) const;
     void applyStateTarget(HunterState target_state, unsigned long now);
 
 public:
     HunterAction();
-    HunterOutput update(const RadarTrack &track, RidStatus rid_status, WhitelistStatus wl_status, unsigned long now);
+    HunterOutput update(
+        const RadarTrack &track,
+        RidStatus rid_status,
+        WhitelistStatus wl_status,
+        VisionState vision_state,
+        unsigned long now
+    );
 };

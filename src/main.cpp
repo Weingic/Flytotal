@@ -124,11 +124,25 @@ struct RuntimeEventStatus {
     char event_id[32];
 };
 
+struct EventLifecycleState {
+    bool close_pending;
+    unsigned long close_pending_since_ms;
+    unsigned long cooldown_until_ms;
+    uint32_t last_closed_track_id;
+    unsigned long last_closed_ms;
+    unsigned long last_reopen_block_log_ms;
+};
+
 struct ManualServoControl {
     bool test_mode_enabled;
     bool servo_enabled;
     float pan_deg;
     float tilt_deg;
+};
+
+struct VisionOverrideControl {
+    bool enabled;
+    VisionState state;
 };
 
 struct DebugOutputControl {
@@ -238,6 +252,7 @@ float runtimeKd = GimbalConfig::PredictorKd;
 SimTrackInput simTrack = {false, 0.0f, 0.0f, 0};
 RidIdentityPacket ridIdentity = {false, {0}, {0}, {0}, 0, {0}, {0}, 0, 0};
 ManualServoControl manualServo = {false, true, GimbalConfig::CenterPanDeg, GimbalConfig::CenterTiltDeg};
+VisionOverrideControl visionOverride = {false, VISION_IDLE};
 DebugOutputControl debugOutput = {true, false, 0, 0, 0, MAIN_IDLE, STATE_SCANNING, false};
 UplinkOutputControl uplinkOutput = {true};
 SafetyControl safetyControl = {false};
@@ -273,9 +288,11 @@ LastEventSnapshot lastEventSnapshot = {
     {0}
 };
 RuntimeEventStatus runtimeEventStatus = {false, 0, 0, {0}};
+EventLifecycleState eventLifecycleState = {false, 0, 0, 0, 0, 0};
 EventObject currentEventObject = {
     false,
     EVENT_STATE_NONE,
+    {0},
     {0},
     {0},
     {0},
@@ -286,6 +303,7 @@ EventObject currentEventObject = {
     0u,
     RID_NONE,
     WL_UNKNOWN,
+    0,
     0,
     0.0f,
     0.0f,
@@ -320,6 +338,8 @@ constexpr uint32_t RiskReasonRidMissing = 1u << 4;
 constexpr uint32_t RiskReasonRidSuspicious = 1u << 5;
 constexpr uint32_t RiskReasonProximity = 1u << 6;
 constexpr uint32_t RiskReasonMotionAnomaly = 1u << 7;
+constexpr uint32_t RiskReasonVisionLocked = 1u << 8;
+constexpr uint32_t RiskReasonVisionLost = 1u << 9;
 
 constexpr WhitelistEntry RidWhitelistTable[] = {
     {"SIM-RID", "TeamA", "LegalDemo", true, 0, "默认合法演示目标"},
@@ -366,6 +386,26 @@ RidStatus parseRidStatus(const String &token) {
         return RID_INVALID;
     }
     return RID_NONE;
+}
+
+bool parseVisionStateToken(const String &token, VisionState &state) {
+    if (token == "IDLE") {
+        state = VISION_IDLE;
+        return true;
+    }
+    if (token == "SEARCHING") {
+        state = VISION_SEARCHING;
+        return true;
+    }
+    if (token == "LOCKED") {
+        state = VISION_LOCKED;
+        return true;
+    }
+    if (token == "LOST") {
+        state = VISION_LOST;
+        return true;
+    }
+    return false;
 }
 
 void copyRidTextField(char *destination, size_t destination_size, const String &source) {
@@ -1056,6 +1096,12 @@ void printRiskReasonFlags(uint32_t flags) {
     if (flags & RiskReasonMotionAnomaly) {
         print_flag("MOTION_ANOMALY");
     }
+    if (flags & RiskReasonVisionLocked) {
+        print_flag("VISION_LOCKED");
+    }
+    if (flags & RiskReasonVisionLost) {
+        print_flag("VISION_LOST");
+    }
 }
 
 bool parseTrackCoordinates(const String &value, float &x_mm, float &y_mm) {
@@ -1251,6 +1297,28 @@ void clearSimTrack() {
     portEXIT_CRITICAL(&dataMutex);
 }
 
+void setVisionOverride(VisionState state) {
+    portENTER_CRITICAL(&dataMutex);
+    visionOverride.enabled = true;
+    visionOverride.state = state;
+    portEXIT_CRITICAL(&dataMutex);
+}
+
+void clearVisionOverride() {
+    portENTER_CRITICAL(&dataMutex);
+    visionOverride.enabled = false;
+    visionOverride.state = VISION_IDLE;
+    portEXIT_CRITICAL(&dataMutex);
+}
+
+VisionOverrideControl getVisionOverrideSnapshot() {
+    VisionOverrideControl snapshot = {};
+    portENTER_CRITICAL(&dataMutex);
+    snapshot = visionOverride;
+    portEXIT_CRITICAL(&dataMutex);
+    return snapshot;
+}
+
 bool getSimTrackSnapshot(SimTrackInput &snapshot) {
     portENTER_CRITICAL(&dataMutex);
     snapshot = simTrack;
@@ -1277,6 +1345,46 @@ bool isEventEligible(const SystemData &snapshot, unsigned long now) {
 
     RiskLevel level = deriveRiskLevel(snapshot);
     return level == RISK_SUSPICIOUS || level == RISK_HIGH_RISK || level == RISK_EVENT;
+}
+
+bool shouldKeepEventOpen(const SystemData &snapshot, unsigned long now, EventLifecycleState &lifecycle) {
+    if (!snapshot.radar_track.is_active) {
+        lifecycle.close_pending = false;
+        lifecycle.close_pending_since_ms = 0;
+        return false;
+    }
+
+    if (isEventEligible(snapshot, now)) {
+        lifecycle.close_pending = false;
+        lifecycle.close_pending_since_ms = 0;
+        return true;
+    }
+
+    if (!lifecycle.close_pending) {
+        lifecycle.close_pending = true;
+        lifecycle.close_pending_since_ms = now;
+        return true;
+    }
+
+    return (now - lifecycle.close_pending_since_ms) < EventConfig::CloseHoldMs;
+}
+
+bool canOpenEventContext(const SystemData &snapshot, unsigned long now, EventLifecycleState &lifecycle) {
+    if (!isEventEligible(snapshot, now)) {
+        return false;
+    }
+
+    if (now < lifecycle.cooldown_until_ms) {
+        return false;
+    }
+
+    if (lifecycle.last_closed_track_id != 0 &&
+        lifecycle.last_closed_track_id == snapshot.radar_track.track_id &&
+        (now - lifecycle.last_closed_ms) < EventConfig::SameTrackReopenBlockMs) {
+        return false;
+    }
+
+    return true;
 }
 
 bool hasEventContext(const EventContext &context) {
@@ -1436,16 +1544,28 @@ void resetRuntimeEventStatus(const char *close_reason = nullptr) {
     runtimeEventStatus.track_id = 0;
     runtimeEventStatus.opened_ms = 0;
     runtimeEventStatus.event_id[0] = '\0';
+    eventLifecycleState.close_pending = false;
+    eventLifecycleState.close_pending_since_ms = 0;
+    if (close_reason != nullptr && close_reason[0] != '\0' && had_event_context) {
+        eventLifecycleState.cooldown_until_ms = millis() + EventConfig::ReopenCooldownMs;
+        eventLifecycleState.last_closed_track_id = currentEventObject.track_id;
+        eventLifecycleState.last_closed_ms = millis();
+    }
     if (close_reason != nullptr && close_reason[0] != '\0' && had_event_context) {
         currentEventObject.active = false;
         currentEventObject.event_state = EVENT_STATE_CLOSED;
         copyEventId(currentEventObject.close_reason, sizeof(currentEventObject.close_reason), close_reason);
+        if (currentEventObject.capture_path[0] == '\0') {
+            copyEventId(currentEventObject.capture_path, sizeof(currentEventObject.capture_path), "NONE");
+        }
+        currentEventObject.close_time_ms = millis();
     } else {
         currentEventObject.active = false;
         currentEventObject.event_state = EVENT_STATE_NONE;
         currentEventObject.event_id[0] = '\0';
         currentEventObject.node_id[0] = '\0';
         currentEventObject.close_reason[0] = '\0';
+        currentEventObject.capture_path[0] = '\0';
         currentEventObject.track_id = 0;
         currentEventObject.risk_score = 0.0f;
         currentEventObject.risk_level = RISK_NONE;
@@ -1454,6 +1574,7 @@ void resetRuntimeEventStatus(const char *close_reason = nullptr) {
         currentEventObject.rid_status = RID_NONE;
         currentEventObject.wl_status = WL_UNKNOWN;
         currentEventObject.start_time_ms = 0;
+        currentEventObject.close_time_ms = 0;
         currentEventObject.last_x_mm = 0.0f;
         currentEventObject.last_y_mm = 0.0f;
         currentEventObject.last_vx_mm_s = 0.0f;
@@ -1476,8 +1597,12 @@ void syncRuntimeEventStatus(const SystemData &snapshot, const EventContext &cont
         currentEventObject.active = true;
         currentEventObject.event_state = EVENT_STATE_OPEN;
         currentEventObject.close_reason[0] = '\0';
+        currentEventObject.close_time_ms = 0;
         copyEventId(currentEventObject.event_id, sizeof(currentEventObject.event_id), context.event_id);
         copyEventId(currentEventObject.node_id, sizeof(currentEventObject.node_id), NodeConfig::NodeId);
+        if (currentEventObject.capture_path[0] == '\0') {
+            copyEventId(currentEventObject.capture_path, sizeof(currentEventObject.capture_path), "NONE");
+        }
         currentEventObject.track_id = snapshot.radar_track.track_id;
         currentEventObject.risk_score = snapshot.risk_score;
         currentEventObject.risk_level = deriveRiskLevel(snapshot);
@@ -1500,8 +1625,14 @@ void syncRuntimeEventStatus(const SystemData &snapshot, const EventContext &cont
             if (!isTerminalEventCloseReason(currentEventObject.close_reason)) {
                 copyEventId(currentEventObject.close_reason, sizeof(currentEventObject.close_reason), close_reason);
             }
+            if (currentEventObject.capture_path[0] == '\0') {
+                copyEventId(currentEventObject.capture_path, sizeof(currentEventObject.capture_path), "NONE");
+            }
+            currentEventObject.close_time_ms = snapshot.timestamp_ms;
         } else if (currentEventObject.event_state == EVENT_STATE_NONE) {
             currentEventObject.close_reason[0] = '\0';
+            currentEventObject.capture_path[0] = '\0';
+            currentEventObject.close_time_ms = 0;
         }
         currentEventObject.risk_score = snapshot.risk_score;
         currentEventObject.risk_level = deriveRiskLevel(snapshot);
@@ -1523,6 +1654,20 @@ RuntimeEventStatus getRuntimeEventStatusSnapshot() {
     snapshot = runtimeEventStatus;
     portEXIT_CRITICAL(&dataMutex);
     return snapshot;
+}
+
+EventLifecycleState getEventLifecycleStateSnapshot() {
+    EventLifecycleState snapshot = {};
+    portENTER_CRITICAL(&dataMutex);
+    snapshot = eventLifecycleState;
+    portEXIT_CRITICAL(&dataMutex);
+    return snapshot;
+}
+
+void setEventLifecycleState(const EventLifecycleState &state) {
+    portENTER_CRITICAL(&dataMutex);
+    eventLifecycleState = state;
+    portEXIT_CRITICAL(&dataMutex);
 }
 
 EventObject getCurrentEventObjectSnapshot() {
@@ -1633,6 +1778,8 @@ void printNormalizedStateFields(const UnifiedOutputSnapshot &snapshot) {
     Serial.print(snapshot.track_confirmed ? 1 : 0);
     Serial.print(",risk_score=");
     Serial.print(snapshot.risk_score, 1);
+    Serial.print(",reason_flags=");
+    Serial.print(snapshot.risk_reason_flags);
     Serial.print(",risk_base=");
     Serial.print(snapshot.risk_base_score, 1);
     Serial.print(",risk_persistence=");
@@ -2073,6 +2220,7 @@ void emitLastEventSnapshot() {
 
 void emitEventStatus() {
     RuntimeEventStatus eventSnapshot = getRuntimeEventStatusSnapshot();
+    EventLifecycleState lifecycleSnapshot = getEventLifecycleStateSnapshot();
     EventObject currentEventSnapshot = getCurrentEventObjectSnapshot();
     LastEventSnapshot lastSnapshot = {};
     SystemData systemSnapshot = {};
@@ -2106,6 +2254,14 @@ void emitEventStatus() {
     Serial.print(eventStateName(currentEventSnapshot.event_state));
     Serial.print(",current_event_close_reason=");
     Serial.print(currentEventSnapshot.close_reason[0] != '\0' ? currentEventSnapshot.close_reason : "NONE");
+    Serial.print(",close_reason=");
+    Serial.print(currentEventSnapshot.close_reason[0] != '\0' ? currentEventSnapshot.close_reason : "NONE");
+    Serial.print(",capture_path=");
+    Serial.print(currentEventSnapshot.capture_path[0] != '\0' ? currentEventSnapshot.capture_path : "NONE");
+    Serial.print(",ts_open=");
+    Serial.print(currentEventSnapshot.start_time_ms);
+    Serial.print(",ts_close=");
+    Serial.print(currentEventSnapshot.close_time_ms);
     Serial.print(",current_event_node_id=");
     Serial.print(currentEventSnapshot.node_id[0] != '\0' ? currentEventSnapshot.node_id : "NONE");
     Serial.print(",current_event_risk_score=");
@@ -2122,6 +2278,20 @@ void emitEventStatus() {
     Serial.print(ridStateName(currentEventSnapshot.rid_status));
     Serial.print(",current_event_start_time=");
     Serial.print(currentEventSnapshot.start_time_ms);
+    Serial.print(",current_event_wl_status=");
+    Serial.print(whitelistStatusName(currentEventSnapshot.wl_status));
+    Serial.print(",current_event_reason_flags=");
+    Serial.print(currentEventSnapshot.risk_reason_flags);
+    Serial.print(",event_cooldown_until_ms=");
+    Serial.print(lifecycleSnapshot.cooldown_until_ms);
+    Serial.print(",event_close_pending=");
+    Serial.print(lifecycleSnapshot.close_pending ? 1 : 0);
+    Serial.print(",event_close_pending_since_ms=");
+    Serial.print(lifecycleSnapshot.close_pending_since_ms);
+    Serial.print(",event_last_closed_track_id=");
+    Serial.print(lifecycleSnapshot.last_closed_track_id);
+    Serial.print(",event_last_closed_ms=");
+    Serial.print(lifecycleSnapshot.last_closed_ms);
     Serial.print(",current_event_last_x=");
     Serial.print(currentEventSnapshot.last_x_mm, 1);
     Serial.print(",current_event_last_y=");
@@ -2240,8 +2410,85 @@ void emitRiskStatus() {
     Serial.print(unified.event_active ? 1 : 0);
     Serial.print(",event_id=");
     Serial.print(unified.event_id);
+    EventObject currentEventSnapshot = getCurrentEventObjectSnapshot();
+    Serial.print(",event_state=");
+    Serial.print(eventStateName(currentEventSnapshot.event_state));
+    Serial.print(",reason_flags=");
+    Serial.print(unified.risk_reason_flags);
     Serial.print(",timestamp=");
     Serial.println(unified.timestamp_ms);
+}
+
+void emitEventLifecycleLog(
+    const char *action,
+    const SystemData &snapshot,
+    const EventContext *context = nullptr,
+    const char *detail = nullptr
+) {
+    Serial.print("EVENT,LIFECYCLE,node=");
+    Serial.print(NodeConfig::NodeId);
+    Serial.print(",ts=");
+    Serial.print(snapshot.timestamp_ms);
+    Serial.print(",action=");
+    Serial.print(action != nullptr ? action : "NONE");
+    Serial.print(",track_id=");
+    Serial.print(snapshot.radar_track.track_id);
+    Serial.print(",risk_score=");
+    Serial.print(snapshot.risk_score, 1);
+    Serial.print(",rid_status=");
+    Serial.print(ridStateName(snapshot.rid_status));
+    Serial.print(",wl_status=");
+    Serial.print(whitelistStatusName(snapshot.wl_status));
+    Serial.print(",reason_flags=");
+    Serial.print(snapshot.risk_reason_flags);
+    bool context_open = context != nullptr && context->active && context->event_id[0] != '\0';
+    Serial.print(",event_state=");
+    Serial.print(context_open ? "OPEN" : "CLOSED");
+    Serial.print(",event_id=");
+    if (context_open) {
+        Serial.print(context->event_id);
+    } else {
+        Serial.print("NONE");
+    }
+    if (detail != nullptr && detail[0] != '\0') {
+        Serial.print(",detail=");
+        Serial.print(detail);
+    }
+    Serial.println();
+}
+
+void emitVisionStatus() {
+    SystemData snapshot = {};
+    EventObject currentEventSnapshot = {};
+    portENTER_CRITICAL(&dataMutex);
+    snapshot = globalData;
+    portEXIT_CRITICAL(&dataMutex);
+    currentEventSnapshot = getCurrentEventObjectSnapshot();
+
+    Serial.print("VISION,STATUS,node=");
+    Serial.print(NodeConfig::NodeId);
+    Serial.print(",zone=");
+    Serial.print(NodeConfig::NodeZone);
+    Serial.print(",vision_state=");
+    Serial.print(visionStateName(snapshot.vision_state));
+    Serial.print(",rid_status=");
+    Serial.print(ridStateName(snapshot.rid_status));
+    Serial.print(",wl_status=");
+    Serial.print(whitelistStatusName(snapshot.wl_status));
+    Serial.print(",reason_flags=");
+    Serial.print(snapshot.risk_reason_flags);
+    Serial.print(",event_state=");
+    Serial.print(eventStateName(currentEventSnapshot.event_state));
+    Serial.print(",x_mm=");
+    Serial.print(snapshot.radar_track.x_mm, 1);
+    Serial.print(",y_mm=");
+    Serial.print(snapshot.radar_track.y_mm, 1);
+    Serial.print(",gimbal_state=");
+    Serial.print(gimbalStateName(snapshot.gimbal_state));
+    Serial.print(",risk_score=");
+    Serial.print(snapshot.risk_score, 1);
+    Serial.print(",timestamp=");
+    Serial.println(snapshot.timestamp_ms);
 }
 
 void emitRidStatus() {
@@ -2553,6 +2800,7 @@ void printHostCommandHelp() {
     Serial.println("    RID,STATUS | RID,CLEAR");
     Serial.println("    RID,MSG,rid_id,device_type,source,timestamp_ms,auth_status,whitelist_tag[,signal_strength]");
     Serial.println("    WL,STATUS | WL,LIST");
+    Serial.println("    VISION,LOCKED | VISION,LOST | VISION,IDLE | VISION,STATUS");
     Serial.println("    KP,value");
     Serial.println("    KD,value");
     Serial.println("    HANDOVER,target_node | HANDOVER,STATUS | HANDOVER,CLEAR");
@@ -3014,6 +3262,34 @@ void handleHostCommand(const String &line) {
         } else {
             Serial.println("Invalid WL command. Use WL,STATUS or WL,LIST.");
         }
+    } else if (command == "VISION") {
+        if (value.length() == 0 || value == "STATUS") {
+            emitVisionStatus();
+            return;
+        }
+
+        VisionState requested_state = VISION_IDLE;
+        if (!parseVisionStateToken(value, requested_state)) {
+            Serial.println("Invalid VISION command. Use VISION,LOCKED|LOST|IDLE|SEARCHING|STATUS.");
+            return;
+        }
+
+        if (requested_state == VISION_IDLE) {
+            clearVisionOverride();
+        } else {
+            setVisionOverride(requested_state);
+        }
+
+        portENTER_CRITICAL(&dataMutex);
+        globalData.vision_state = requested_state;
+        globalData.vision_locked = requested_state == VISION_LOCKED;
+        globalData.capture_ready = globalData.vision_locked && globalData.trigger_capture;
+        globalData.timestamp_ms = millis();
+        globalData.trigger_flags = computeTriggerFlags(globalData);
+        portEXIT_CRITICAL(&dataMutex);
+
+        Serial.print("VISION simulation updated: ");
+        Serial.println(visionStateName(requested_state));
     } else if (command == "SAFE") {
         if (value == "ON") {
             setSafeMode(true);
@@ -3275,6 +3551,7 @@ void handleHostCommand(const String &line) {
         globalData.trigger_flags = computeTriggerFlags(globalData);
         portEXIT_CRITICAL(&dataMutex);
         clearSimTrack();
+        clearVisionOverride();
         clearRidIdentityPacket(0);
         runtimeKp = GimbalConfig::PredictorKp;
         runtimeKd = GimbalConfig::PredictorKd;
@@ -3495,6 +3772,7 @@ void emitCloudEvent(
     const char *close_reason = nullptr
 ) {
     RuntimeEventStatus eventStatusSnapshot = getRuntimeEventStatusSnapshot();
+    EventObject currentEventSnapshot = getCurrentEventObjectSnapshot();
     UnifiedOutputSnapshot unified = buildUnifiedOutputSnapshot(snapshot, eventStatusSnapshot);
     cacheLastEventSnapshot(snapshot, now, reason, event_context, handover_target, close_reason);
 
@@ -3542,6 +3820,14 @@ void emitCloudEvent(
     Serial.print(snapshot.trigger_guardian ? 1 : 0);
     Serial.print(",event_trigger_reasons=");
     printEventTriggerReasonFlags(unified.trigger_flags);
+    Serial.print(",reason_flags=");
+    Serial.print(snapshot.risk_reason_flags);
+    Serial.print(",capture_path=");
+    Serial.print(currentEventSnapshot.capture_path[0] != '\0' ? currentEventSnapshot.capture_path : "NONE");
+    Serial.print(",ts_open=");
+    Serial.print(currentEventSnapshot.start_time_ms);
+    Serial.print(",ts_close=");
+    Serial.print(currentEventSnapshot.close_time_ms);
     Serial.print(",x=");
     Serial.print(snapshot.radar_track.x_mm, 1);
     Serial.print(",y=");
@@ -3601,7 +3887,13 @@ void TrackingTask(void *pvParameters) {
     HunterState lastHunterState = HUNTER_IDLE;
     GimbalState lastGimbalState = STATE_SCANNING;
     VisionState lastVisionState = VISION_IDLE;
+    VisionState stableVisionState = VISION_IDLE;
+    VisionState pendingVisionState = VISION_IDLE;
+    unsigned long pendingVisionSinceMs = 0;
     unsigned long lastVisionLostMs = 0;
+    unsigned long lastCaptureReadyMs = 0;
+    uint8_t captureCountInEvent = 0;
+    char captureBudgetEventId[32] = {0};
 
     while (1) {
         pollHostCommands();
@@ -3618,9 +3910,14 @@ void TrackingTask(void *pvParameters) {
         rid_snapshot = refreshRidRuntime(track_snapshot, now);
         portENTER_CRITICAL(&dataMutex);
         wl_snapshot = globalData.wl_status;
+        VisionState vision_input_state = globalData.vision_state;
         portEXIT_CRITICAL(&dataMutex);
+        VisionOverrideControl visionOverrideSnapshot = getVisionOverrideSnapshot();
+        if (visionOverrideSnapshot.enabled) {
+            vision_input_state = visionOverrideSnapshot.state;
+        }
         processServoDiagnostic(now);
-        HunterOutput hunter_output = myHunter.update(track_snapshot, rid_snapshot, wl_snapshot, now);
+        HunterOutput hunter_output = myHunter.update(track_snapshot, rid_snapshot, wl_snapshot, vision_input_state, now);
         RuntimeEventStatus eventStatusSnapshot = getRuntimeEventStatusSnapshot();
         UplinkState uplinkStateSnapshot = UPLINK_READY;
         bool currentEventActiveSnapshot = false;
@@ -3639,35 +3936,92 @@ void TrackingTask(void *pvParameters) {
         char ridAuthStatusSnapshot[16] = {0};
         char ridWhitelistTagSnapshot[16] = {0};
         int ridSignalStrengthSnapshot = 0;
-        VisionState nextVisionState = VISION_IDLE;
-        bool nextVisionLocked = false;
+        VisionState desiredVisionState = VISION_IDLE;
+        VisionState nextVisionState = stableVisionState;
+        bool nextVisionLocked = nextVisionState == VISION_LOCKED;
 
-        if (!track_snapshot.is_active) {
+        if (visionOverrideSnapshot.enabled) {
+            desiredVisionState = visionOverrideSnapshot.state;
+        } else if (!track_snapshot.is_active) {
             bool holdLostState = (lastVisionState == VISION_SEARCHING || lastVisionState == VISION_LOCKED);
             if (holdLostState) {
                 lastVisionLostMs = now;
-                nextVisionState = VISION_LOST;
+                desiredVisionState = VISION_LOST;
             } else if (lastVisionState == VISION_LOST &&
                        lastVisionLostMs != 0 &&
                        (now - lastVisionLostMs) < TrackingConfig::LostRecoveryTimeoutMs) {
-                nextVisionState = VISION_LOST;
+                desiredVisionState = VISION_LOST;
             } else {
-                nextVisionState = VISION_IDLE;
+                desiredVisionState = VISION_IDLE;
             }
         } else if (track_snapshot.is_confirmed) {
             if (hunter_output.trigger_capture) {
-                nextVisionState = VISION_LOCKED;
-                nextVisionLocked = true;
+                desiredVisionState = VISION_LOCKED;
             } else {
-                nextVisionState = VISION_SEARCHING;
+                desiredVisionState = VISION_SEARCHING;
             }
             lastVisionLostMs = 0;
         } else {
-            nextVisionState = VISION_IDLE;
+            desiredVisionState = VISION_IDLE;
             lastVisionLostMs = 0;
         }
 
-        bool nextCaptureReady = nextVisionLocked && hunter_output.trigger_capture;
+        if (visionOverrideSnapshot.enabled) {
+            stableVisionState = desiredVisionState;
+            pendingVisionState = desiredVisionState;
+            pendingVisionSinceMs = now;
+        } else if (desiredVisionState == stableVisionState) {
+            pendingVisionState = desiredVisionState;
+            pendingVisionSinceMs = now;
+        } else {
+            if (pendingVisionState != desiredVisionState) {
+                pendingVisionState = desiredVisionState;
+                pendingVisionSinceMs = now;
+            }
+
+            unsigned long holdMs = TrackingConfig::VisionStateSwitchHoldMs;
+            if (desiredVisionState == VISION_LOCKED) {
+                holdMs = TrackingConfig::VisionLockedHoldMs;
+            } else if (desiredVisionState == VISION_LOST) {
+                holdMs = TrackingConfig::VisionLostHoldMs;
+            }
+
+            if ((now - pendingVisionSinceMs) >= holdMs) {
+                stableVisionState = pendingVisionState;
+            }
+        }
+
+        nextVisionState = stableVisionState;
+        nextVisionLocked = nextVisionState == VISION_LOCKED;
+
+        bool capturePolicyHighRisk =
+            EventConfig::CaptureInHighRisk &&
+            (hunter_output.state == HUNTER_HIGH_RISK ||
+             hunter_output.state == HUNTER_EVENT_LOCKED ||
+             hunter_output.risk_score >= HunterConfig::HighRiskThreshold);
+        bool capturePolicyEvent = EventConfig::CaptureInEvent && eventStatusSnapshot.active;
+        bool capturePolicyEligible = (capturePolicyHighRisk || capturePolicyEvent) && hunter_output.trigger_capture;
+
+        if (!eventStatusSnapshot.active) {
+            captureCountInEvent = 0;
+            captureBudgetEventId[0] = '\0';
+        } else if (strcmp(captureBudgetEventId, eventStatusSnapshot.event_id) != 0) {
+            copyEventId(captureBudgetEventId, sizeof(captureBudgetEventId), eventStatusSnapshot.event_id);
+            captureCountInEvent = 0;
+        }
+
+        bool captureBudgetAvailable = true;
+        if (eventStatusSnapshot.active) {
+            captureBudgetAvailable = captureCountInEvent < EventConfig::CaptureMaxPerEvent;
+        }
+        bool captureRateAvailable = (now - lastCaptureReadyMs) >= EventConfig::CaptureMinIntervalMs;
+        bool nextCaptureReady = nextVisionLocked && capturePolicyEligible && captureBudgetAvailable && captureRateAvailable;
+        if (nextCaptureReady) {
+            lastCaptureReadyMs = now;
+            if (eventStatusSnapshot.active && captureCountInEvent < EventConfig::CaptureMaxPerEvent) {
+                captureCountInEvent++;
+            }
+        }
 
         portENTER_CRITICAL(&dataMutex);
         globalData.hunter_state = hunter_output.state;
@@ -3853,22 +4207,39 @@ void CloudTask(void *pvParameters) {
             copyEventId(previousEventId, sizeof(previousEventId), eventContext.event_id);
         }
 
+        EventLifecycleState lifecycle = getEventLifecycleStateSnapshot();
         const char *eventCloseReason = nullptr;
-        bool eventEligible = isEventEligible(snapshot, now);
         EventContext closingEventContext = eventContext;
-        if (!eventEligible && hadEventContext && snapshot.radar_track.is_active && previousEventId[0] != '\0') {
+        bool keepEventOpen = hadEventContext ? shouldKeepEventOpen(snapshot, now, lifecycle) : false;
+        if (hadEventContext && !keepEventOpen && previousEventId[0] != '\0') {
+            eventCloseReason = snapshot.radar_track.is_active ? "RISK_DOWNGRADE" : "TRACK_LOST";
             setUplinkState(UPLINK_SENDING, now);
             stageOutputSnapshot(snapshot, UPLINK_SENDING, now);
-            emitCloudEvent(snapshot, now, "EVENT_CLOSED", eventContext, nullptr, "RISK_DOWNGRADE");
+            emitCloudEvent(snapshot, now, "EVENT_CLOSED", eventContext, nullptr, eventCloseReason);
             setUplinkState(UPLINK_OK, now);
             uplinkFrameSent = true;
             recordSummaryEventClosed(previousEventId);
             closeEventContext(eventContext);
-            eventCloseReason = "RISK_DOWNGRADE";
+            lifecycle.close_pending = false;
+            lifecycle.close_pending_since_ms = 0;
+            lifecycle.cooldown_until_ms = now + EventConfig::ReopenCooldownMs;
+            lifecycle.last_closed_track_id = closingEventContext.track_id;
+            lifecycle.last_closed_ms = now;
+            emitEventLifecycleLog("CLOSE", snapshot, nullptr, eventCloseReason);
         }
 
-        if (eventEligible) {
+        bool eventEligible = isEventEligible(snapshot, now);
+        bool canOpen = canOpenEventContext(snapshot, now, lifecycle);
+        if (!hasEventContext(eventContext) && canOpen) {
             ensureEventContext(snapshot, now, eventContext);
+            lifecycle.close_pending = false;
+            lifecycle.close_pending_since_ms = 0;
+        } else if (!hasEventContext(eventContext) && eventEligible && !canOpen) {
+            if (now - lifecycle.last_reopen_block_log_ms >= 1000) {
+                lifecycle.last_reopen_block_log_ms = now;
+                const char *blockReason = now < lifecycle.cooldown_until_ms ? "COOLDOWN" : "SAME_TRACK_REOPEN_BLOCK";
+                emitEventLifecycleLog("OPEN_BLOCKED", snapshot, nullptr, blockReason);
+            }
         }
 
         if (!hadEventContext && hasEventContext(eventContext)) {
@@ -3878,12 +4249,15 @@ void CloudTask(void *pvParameters) {
             emitCloudEvent(snapshot, now, "EVENT_OPENED", eventContext);
             setUplinkState(UPLINK_OK, now);
             uplinkFrameSent = true;
+            emitEventLifecycleLog("OPEN", snapshot, &eventContext, "EVENT_OPENED");
         } else if (hadEventContext &&
                    hasEventContext(eventContext) &&
                    strcmp(previousEventId, eventContext.event_id) != 0) {
             recordSummaryEventClosed(previousEventId);
             recordSummaryEventOpened(eventContext);
+            emitEventLifecycleLog("SWITCH", snapshot, &eventContext, "NEW_EVENT_ID");
         }
+        setEventLifecycleState(lifecycle);
         syncRuntimeEventStatus(snapshot, eventContext, eventCloseReason);
         if (eventCloseReason != nullptr && strcmp(eventCloseReason, "RISK_DOWNGRADE") == 0) {
             cacheLastEventSnapshot(snapshot, now, "EVENT_CLOSED", closingEventContext, nullptr, "RISK_DOWNGRADE");
@@ -3930,6 +4304,7 @@ void CloudTask(void *pvParameters) {
 
         if (snapshot.radar_track.is_active != lastTrackActive) {
             EventContext trackChangeEventContext = eventContext;
+            EventLifecycleState lifecycle = getEventLifecycleStateSnapshot();
             recordSummaryTrackActiveChange(snapshot.radar_track.is_active, snapshot.radar_track, eventContext);
             setUplinkState(UPLINK_SENDING, now);
             stageOutputSnapshot(snapshot, UPLINK_SENDING, now);
@@ -3949,8 +4324,15 @@ void CloudTask(void *pvParameters) {
                     recordSummaryEventClosed(eventContext.event_id);
                 }
                 closeEventContext(eventContext);
+                lifecycle.close_pending = false;
+                lifecycle.close_pending_since_ms = 0;
+                lifecycle.cooldown_until_ms = now + EventConfig::ReopenCooldownMs;
+                lifecycle.last_closed_track_id = trackChangeEventContext.track_id;
+                lifecycle.last_closed_ms = now;
+                setEventLifecycleState(lifecycle);
                 syncRuntimeEventStatus(snapshot, eventContext, "TRACK_LOST");
                 cacheLastEventSnapshot(snapshot, now, "TRACK_LOST", trackChangeEventContext, nullptr, "TRACK_LOST");
+                emitEventLifecycleLog("CLOSE", snapshot, nullptr, "TRACK_LOST");
             }
         }
 

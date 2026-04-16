@@ -1,7 +1,9 @@
-﻿# ?????????????? API ??????????/??/?????????????????
+# ?????????????? API ??????????/??/?????????????????
+from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import mimetypes
 import time
@@ -14,6 +16,34 @@ from urllib.parse import parse_qs, quote, urlparse
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DASHBOARD_FILE = Path(__file__).with_name("vision_dashboard.html")
 MIN_REAL_EPOCH_MS = 946684800000  # 2000-01-01
+
+# ---------------------------------------------------------------------------
+# 证据链 hash（与 evidence_hash_证据链哈希.py 保持同步）
+# ---------------------------------------------------------------------------
+_EVIDENCE_HASH_FIELDS: tuple[str, ...] = (
+    "event_id", "track_id", "risk_score", "rid_status", "wl_status",
+    "reason_flags", "capture_path", "ts_open", "ts_close", "close_reason",
+)
+_EVIDENCE_HASH_EXCLUDED: frozenset[str] = frozenset({"evidence_hash", "hash_fields", "hash_algorithm"})
+
+
+def _compute_evidence_hash(evidence: dict) -> str:
+    """计算证据对象 SHA-256 hash（字段顺序与 Win 侧冻结保持一致）。"""
+    payload: dict = {}
+    for key in _EVIDENCE_HASH_FIELDS:
+        if key in _EVIDENCE_HASH_EXCLUDED:
+            continue
+        payload[key] = evidence.get(key, None)
+    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _attach_evidence_hash(evidence: dict) -> dict:
+    """向证据 dict 写入 evidence_hash / hash_fields / hash_algorithm（in-place）。"""
+    evidence["evidence_hash"] = _compute_evidence_hash(evidence)
+    evidence["hash_fields"] = list(_EVIDENCE_HASH_FIELDS)
+    evidence["hash_algorithm"] = "sha256"
+    return evidence
 MOCK_IMAGE_URL = (
     "data:image/svg+xml;utf8,"
     + quote(
@@ -255,6 +285,21 @@ def build_event_object_v1(
     capture_path = pick_capture_path(event_record, captures)
     event_state = str(event_record.get("event_state", event_record.get("event_status", "NONE")) or "NONE").strip() or "NONE"
 
+    # 事件生命周期时间戳（与 Win 侧证据链字段对齐）
+    ts_open = safe_int(
+        event_record.get(
+            "ts_open",
+            event_record.get("start_time_ms", event_record.get("current_event_start_time", 0)),
+        ),
+        0,
+    )
+    ts_close = safe_int(event_record.get("ts_close", event_record.get("close_time_ms", 0)), 0)
+    close_reason = str(event_record.get("close_reason", event_record.get("event_close_reason", "NONE")) or "NONE").strip() or "NONE"
+
+    # 风险来源标志 + wl_status（用于证据 hash）
+    reason_flags = str(event_record.get("reason_flags", trigger_flags) or "NONE").strip() or "NONE"
+    wl_status = whitelist_status  # 对齐 evidence_hash 字段名
+
     return {
         "schema_version": "event_object_v1",
         "event_id": event_id,
@@ -264,11 +309,16 @@ def build_event_object_v1(
         "risk_level": risk_level,
         "hunter_state": hunter_state,
         "rid_status": rid_status,
+        "wl_status": wl_status,
         "whitelist_status": whitelist_status,
         "vision_state": vision_state,
         "trigger_flags": trigger_flags,
+        "reason_flags": reason_flags,
         "start_time": start_time,
         "update_time": update_time,
+        "ts_open": ts_open,
+        "ts_close": ts_close,
+        "close_reason": close_reason,
         "x": round(x, 2),
         "y": round(y, 2),
         "capture_path": capture_path,
@@ -543,11 +593,22 @@ def build_node_event_export_payload(
     if not safe_event_id:
         safe_event_id = "NONE"
 
+    # 自动计算证据链 hash（基于 event_object_v1 字段集）
+    event_obj_v1 = detail.get("event_object_v1", {}) if isinstance(detail, dict) else {}
+    evidence_hash = ""
+    if isinstance(event_obj_v1, dict) and event_obj_v1.get("event_id", "NONE") not in ("", "NONE"):
+        evidence_hash = _compute_evidence_hash(event_obj_v1)
+        if isinstance(event_obj_v1, dict):
+            event_obj_v1["evidence_hash"] = evidence_hash
+            event_obj_v1["hash_fields"] = list(_EVIDENCE_HASH_FIELDS)
+            event_obj_v1["hash_algorithm"] = "sha256"
+
     export_payload = {
         "ok": True,
         "available": bool(detail.get("available")),
         "export_generated_ms": export_generated_ms,
         "event_id": effective_event_id,
+        "evidence_hash": evidence_hash,
         "event_detail": detail,
         "node_status_snapshot": node_status,
         "capture_match_mode": normalize_capture_match_mode(capture_match_mode),
@@ -1125,6 +1186,62 @@ def is_mock_mode(query: dict[str, list[str]]) -> bool:
     return mode in {"mock", "simulate", "sim", "demo"}
 
 
+def compute_vision_contribution(
+    vision_state: str,
+    wl_status: str,
+    risk_score: float | None = None,
+) -> dict[str, object]:
+    """根据视觉状态和白名单状态推导视觉对风险分的贡献。
+
+    规则镜像自 Win 侧 HunterAction 的约定（Day 2 A2 任务）：
+      VISION_LOCKED + WL_ALLOWED  → 降风险（负贡献），合作目标已锁定
+      VISION_LOCKED + 非 WL_ALLOWED → 中性（0），非合作目标不降风险
+      VISION_LOST                  → 小幅惩罚（正贡献），目标丢失场景
+      VISION_SEARCHING             → 微小惩罚，搜索中
+      其他 / IDLE / NONE           → 无贡献
+
+    score_delta 正数 = 加风险，负数 = 降风险，None = 未计算。
+    """
+    v = str(vision_state or "NONE").strip().upper()
+    wl = str(wl_status or "WL_UNKNOWN").strip().upper()
+
+    if v in ("VISION_LOCKED", "LOCKED"):
+        if wl == "WL_ALLOWED":
+            return {
+                "vision_state": v,
+                "score_delta": -8.0,
+                "note": "合作目标锁定，降低风险",
+                "wl_status": wl,
+            }
+        else:
+            return {
+                "vision_state": v,
+                "score_delta": 0.0,
+                "note": f"非合作目标锁定（{wl}），不降风险",
+                "wl_status": wl,
+            }
+    if v in ("VISION_LOST", "LOST"):
+        return {
+            "vision_state": v,
+            "score_delta": 4.0,
+            "note": "目标丢失，小幅加风险",
+            "wl_status": wl,
+        }
+    if v in ("VISION_SEARCHING", "SEARCHING"):
+        return {
+            "vision_state": v,
+            "score_delta": 1.0,
+            "note": "视觉搜索中",
+            "wl_status": wl,
+        }
+    return {
+        "vision_state": v,
+        "score_delta": None,
+        "note": "视觉无贡献",
+        "wl_status": wl,
+    }
+
+
 def build_mock_bundle() -> dict[str, object]:
     now_ms = int(time.time() * 1000)
     scenario_name = "standard_acceptance"
@@ -1483,6 +1600,12 @@ def build_mock_bundle() -> dict[str, object]:
             "uplink_enabled": 1,
             "idle_ready": 1,
             "data_source_mode": "mock",
+            "vision_state": "VISION_LOCKED",
+            "vision_contribution": compute_vision_contribution(
+                vision_state="VISION_LOCKED",
+                wl_status="WL_ALLOWED",
+                risk_score=17.0,
+            ),
         },
         "node_events": {
             "ok": True,
@@ -1854,16 +1977,17 @@ def create_handler(
                     self.send_json(mock_bundle.get("node_status", {"ok": True, "available": False}))
                     return
                 node_payload = load_json_file(node_status_file)
-                # 注入视觉贡献字段：从 vision bridge 的 status 文件读取当前 vision_state，
-                # 拼装成 vision_contribution 子对象，供网页风险区显示。
+                # 从 vision bridge 的 status 文件读取当前视觉状态，注入视觉贡献字段
+                # （供网页风险区显示；score_delta 由 compute_vision_contribution 计算）。
                 vision_payload = load_json_file(status_file)
-                vision_state_raw = str(vision_payload.get("vision_state", "NONE") or "NONE").strip().upper() or "NONE"
-                node_payload["vision_state"] = vision_state_raw
-                node_payload["vision_contribution"] = {
-                    "vision_state": vision_state_raw,
-                    "score_delta": None,   # Win 侧 risk_score 接入后由固件填入，目前留 null
-                    "note": "视觉贡献计算待 Win 侧固件接入后启用",
-                }
+                v_state = str(vision_payload.get("vision_state", "NONE") or "NONE").strip().upper() or "NONE"
+                wl = str(
+                    node_payload.get("wl_status",
+                        node_payload.get("whitelist_status", "WL_UNKNOWN"))
+                    or "WL_UNKNOWN"
+                ).strip().upper() or "WL_UNKNOWN"
+                node_payload["vision_state"] = v_state
+                node_payload["vision_contribution"] = compute_vision_contribution(v_state, wl)
                 self.send_json(node_payload)
                 return
             if parsed.path == "/api/node-events":

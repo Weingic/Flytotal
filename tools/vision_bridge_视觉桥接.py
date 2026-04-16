@@ -1,4 +1,6 @@
 # ?????????????????????????????????????????????????
+from __future__ import annotations
+
 import argparse
 import csv
 import json
@@ -428,17 +430,68 @@ def radar_to_frame(
 ) -> tuple[int, int]:
     """将雷达坐标 (x_mm, y_mm) 映射到画面像素坐标。
 
-    约定：
+    约定（与固件侧对齐，Win 定稿后只需改此处）：
       x_mm 范围 [-radar_range_x_mm/2, +radar_range_x_mm/2] → 画面 [0, frame_w]
       y_mm 范围 [0, radar_range_y_mm]                       → 画面 [frame_h, 0]（远端在上）
-
-    如果固件坐标系不同，只需调整这里的映射即可，调用方不变。
     """
     px = int((x_mm / radar_range_x_mm + 0.5) * frame_w)
     py = int((1.0 - y_mm / radar_range_y_mm) * frame_h)
-    px = max(0, min(frame_w - 1, px))
-    py = max(0, min(frame_h - 1, py))
-    return px, py
+    return max(0, min(frame_w - 1, px)), max(0, min(frame_h - 1, py))
+
+
+class VisionStateReporter:
+    """封装视觉状态回写逻辑（去抖 + 状态输出）。
+
+    当前阶段只打印串口命令格式到 stdout，不真正发串口。
+    Win 侧串口接口定稿后，只需替换 _emit() 内部实现。
+
+    去抖规则：
+      同一状态需连续保持 debounce_frames 帧才被确认并上报。
+      避免 LOCKED/LOST/LOCKED 来回抖动。
+    """
+
+    COMMANDS = {
+        VISION_LOCKED: "VISION,LOCKED",
+        VISION_LOST:   "VISION,LOST",
+        VISION_IDLE:   "VISION,IDLE",
+    }
+
+    def __init__(self, debounce_frames: int = 3) -> None:
+        self._debounce_frames = max(1, debounce_frames)
+        self._candidate: str = VISION_IDLE
+        self._candidate_count: int = 0
+        self._confirmed: str = VISION_IDLE
+        self._last_emitted: str = ""
+
+    def update(self, new_state: str) -> str | None:
+        """输入当前帧的视觉状态，返回本帧实际确认的状态（去抖后）。
+
+        如果状态发生跳变，返回新状态并打印串口命令；否则返回 None。
+        """
+        if new_state == self._candidate:
+            self._candidate_count += 1
+        else:
+            self._candidate = new_state
+            self._candidate_count = 1
+
+        if self._candidate_count >= self._debounce_frames:
+            if self._candidate != self._confirmed:
+                self._confirmed = self._candidate
+                self._emit(self._confirmed)
+                return self._confirmed
+
+        return None
+
+    def status_command(self) -> str:
+        """返回 VISION,STATUS 命令格式的当前状态字符串。"""
+        return f"VISION,STATUS,state={self._confirmed}"
+
+    def confirmed_state(self) -> str:
+        return self._confirmed
+
+    def _emit(self, state: str) -> None:
+        cmd = self.COMMANDS.get(state, "VISION,IDLE")
+        print(f"VISION_CMD,{cmd},confirmed_state={state}")
 
 
 def is_high_risk_level(level: str) -> bool:
@@ -815,24 +868,18 @@ def draw_guide_box(
     )
 
     # 黄色引导框 (BGR: 0, 255, 255)
-    color_yellow = (0, 255, 255)
-    pt1 = (cx - box_half_px, cy - box_half_px)
-    pt2 = (cx + box_half_px, cy + box_half_px)
-    cv.rectangle(frame, pt1, pt2, color_yellow, 2)
-    cv.circle(frame, (cx, cy), 4, color_yellow, -1)
-
-    # 右上角标注引导框信息
-    label = f"GUIDE ({gimbal.x_mm:.0f},{gimbal.y_mm:.0f})mm"
+    yellow = (0, 255, 255)
+    cv.rectangle(frame, (cx - box_half_px, cy - box_half_px), (cx + box_half_px, cy + box_half_px), yellow, 2)
+    cv.circle(frame, (cx, cy), 4, yellow, -1)
     cv.putText(
         frame,
-        label,
+        f"GUIDE ({gimbal.x_mm:.0f},{gimbal.y_mm:.0f})mm",
         (cx - box_half_px, cy - box_half_px - 8),
         cv.FONT_HERSHEY_SIMPLEX,
         0.5,
-        color_yellow,
+        yellow,
         1,
     )
-
     return frame
 
 
@@ -1039,6 +1086,7 @@ def main() -> int:
     last_capture_hint_time = 0.0
     last_node_signals = load_node_runtime_signals(args.node_status_file)
     current_gimbal_signals = load_gimbal_signals(args.node_status_file)
+    vision_reporter = VisionStateReporter(debounce_frames=3)
     pending_policy_captures: list[dict[str, object]] = []
 
     print("Vision bridge started.")
@@ -1167,6 +1215,7 @@ def main() -> int:
             now = time.time()
             current_node_signals = load_node_runtime_signals(args.node_status_file)
             current_gimbal_signals = load_gimbal_signals(args.node_status_file)
+            vision_reporter.update(current_state)
             pending_window_s = max(0.0, float(args.policy_capture_pending_window_s))
             if pending_window_s > 0:
                 pending_policy_captures = [
