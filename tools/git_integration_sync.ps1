@@ -2,7 +2,8 @@ param(
     [string]$RepoPath = "C:\Users\WZwai\Documents\PlatformIO\Projects\Flytotal",
     [string]$IntegrationBranch = "integration/multimodal-v1.2",
     [string]$WinBranch = "feat/win-codex",
-    [switch]$SkipMacPause
+    [switch]$SkipMacPause,
+    [string]$RunnerBranch = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -42,6 +43,16 @@ function Run-GitWithRetry {
     }
 }
 
+function Get-RunnerBranchName {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BaseBranch
+    )
+
+    $sanitized = $BaseBranch.Replace("/", "_").Replace("\", "_").Replace(".", "_")
+    return "runner/$sanitized"
+}
+
 if (-not (Test-Path -LiteralPath $RepoPath)) {
     throw "Repo path does not exist: $RepoPath"
 }
@@ -49,6 +60,10 @@ if (-not (Test-Path -LiteralPath $RepoPath)) {
 Set-Location -LiteralPath $RepoPath
 
 Write-Host "Repository: $RepoPath" -ForegroundColor Yellow
+
+if ([string]::IsNullOrWhiteSpace($RunnerBranch)) {
+    $RunnerBranch = Get-RunnerBranchName -BaseBranch $IntegrationBranch
+}
 
 # 0) Ensure working tree is clean before integration flow.
 $dirty = & git status --porcelain
@@ -61,20 +76,19 @@ if ($dirty) {
     exit 1
 }
 
-# 1) Sync and move to integration branch.
+# 1) Sync and move to a worktree-safe runner branch based on origin/integration.
 Run-GitWithRetry -GitArgs @("fetch", "origin", "--prune")
 Run-Git -GitArgs @("branch")
-Run-Git -GitArgs @("checkout", $IntegrationBranch)
-Run-GitWithRetry -GitArgs @("pull", "origin", $IntegrationBranch)
+Run-Git -GitArgs @("checkout", "-B", $RunnerBranch, "origin/$IntegrationBranch")
 
 # 2) Pause for Mac-side merge unless explicitly skipped.
 if (-not $SkipMacPause) {
     Read-Host "Complete Mac-side merge+push to origin/$IntegrationBranch, then press Enter to continue"
 }
 
-# 3) Refresh integration again to avoid stale base, then merge win branch.
+# 3) Refresh integration again to avoid stale base, then rebuild runner branch and merge win branch.
 Run-GitWithRetry -GitArgs @("fetch", "origin", "--prune")
-Run-GitWithRetry -GitArgs @("pull", "origin", $IntegrationBranch)
+Run-Git -GitArgs @("checkout", "-B", $RunnerBranch, "origin/$IntegrationBranch")
 
 Write-Host ">> git merge --no-ff origin/$WinBranch" -ForegroundColor Cyan
 & git merge --no-ff "origin/$WinBranch"
