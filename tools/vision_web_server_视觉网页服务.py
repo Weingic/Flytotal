@@ -1,7 +1,9 @@
-﻿# ?????????????? API ??????????/??/?????????????????
+# ?????????????? API ??????????/??/?????????????????
+from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import mimetypes
 import time
@@ -14,6 +16,34 @@ from urllib.parse import parse_qs, quote, urlparse
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DASHBOARD_FILE = Path(__file__).with_name("vision_dashboard.html")
 MIN_REAL_EPOCH_MS = 946684800000  # 2000-01-01
+
+# ---------------------------------------------------------------------------
+# 证据链 hash（与 evidence_hash_证据链哈希.py 保持同步）
+# ---------------------------------------------------------------------------
+_EVIDENCE_HASH_FIELDS: tuple[str, ...] = (
+    "event_id", "track_id", "risk_score", "rid_status", "wl_status",
+    "reason_flags", "capture_path", "ts_open", "ts_close", "close_reason",
+)
+_EVIDENCE_HASH_EXCLUDED: frozenset[str] = frozenset({"evidence_hash", "hash_fields", "hash_algorithm"})
+
+
+def _compute_evidence_hash(evidence: dict) -> str:
+    """计算证据对象 SHA-256 hash（字段顺序与 Win 侧冻结保持一致）。"""
+    payload: dict = {}
+    for key in _EVIDENCE_HASH_FIELDS:
+        if key in _EVIDENCE_HASH_EXCLUDED:
+            continue
+        payload[key] = evidence.get(key, None)
+    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _attach_evidence_hash(evidence: dict) -> dict:
+    """向证据 dict 写入 evidence_hash / hash_fields / hash_algorithm（in-place）。"""
+    evidence["evidence_hash"] = _compute_evidence_hash(evidence)
+    evidence["hash_fields"] = list(_EVIDENCE_HASH_FIELDS)
+    evidence["hash_algorithm"] = "sha256"
+    return evidence
 MOCK_IMAGE_URL = (
     "data:image/svg+xml;utf8,"
     + quote(
@@ -255,6 +285,21 @@ def build_event_object_v1(
     capture_path = pick_capture_path(event_record, captures)
     event_state = str(event_record.get("event_state", event_record.get("event_status", "NONE")) or "NONE").strip() or "NONE"
 
+    # 事件生命周期时间戳（与 Win 侧证据链字段对齐）
+    ts_open = safe_int(
+        event_record.get(
+            "ts_open",
+            event_record.get("start_time_ms", event_record.get("current_event_start_time", 0)),
+        ),
+        0,
+    )
+    ts_close = safe_int(event_record.get("ts_close", event_record.get("close_time_ms", 0)), 0)
+    close_reason = str(event_record.get("close_reason", event_record.get("event_close_reason", "NONE")) or "NONE").strip() or "NONE"
+
+    # 风险来源标志 + wl_status（用于证据 hash）
+    reason_flags = str(event_record.get("reason_flags", trigger_flags) or "NONE").strip() or "NONE"
+    wl_status = whitelist_status  # 对齐 evidence_hash 字段名
+
     return {
         "schema_version": "event_object_v1",
         "event_id": event_id,
@@ -264,11 +309,16 @@ def build_event_object_v1(
         "risk_level": risk_level,
         "hunter_state": hunter_state,
         "rid_status": rid_status,
+        "wl_status": wl_status,
         "whitelist_status": whitelist_status,
         "vision_state": vision_state,
         "trigger_flags": trigger_flags,
+        "reason_flags": reason_flags,
         "start_time": start_time,
         "update_time": update_time,
+        "ts_open": ts_open,
+        "ts_close": ts_close,
+        "close_reason": close_reason,
         "x": round(x, 2),
         "y": round(y, 2),
         "capture_path": capture_path,
@@ -543,11 +593,22 @@ def build_node_event_export_payload(
     if not safe_event_id:
         safe_event_id = "NONE"
 
+    # 自动计算证据链 hash（基于 event_object_v1 字段集）
+    event_obj_v1 = detail.get("event_object_v1", {}) if isinstance(detail, dict) else {}
+    evidence_hash = ""
+    if isinstance(event_obj_v1, dict) and event_obj_v1.get("event_id", "NONE") not in ("", "NONE"):
+        evidence_hash = _compute_evidence_hash(event_obj_v1)
+        if isinstance(event_obj_v1, dict):
+            event_obj_v1["evidence_hash"] = evidence_hash
+            event_obj_v1["hash_fields"] = list(_EVIDENCE_HASH_FIELDS)
+            event_obj_v1["hash_algorithm"] = "sha256"
+
     export_payload = {
         "ok": True,
         "available": bool(detail.get("available")),
         "export_generated_ms": export_generated_ms,
         "event_id": effective_event_id,
+        "evidence_hash": evidence_hash,
         "event_detail": detail,
         "node_status_snapshot": node_status,
         "capture_match_mode": normalize_capture_match_mode(capture_match_mode),

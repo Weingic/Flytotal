@@ -1,0 +1,40 @@
+{
+  "scenario_name": "test",
+  "session_log": "/var/folders/4r/qcrv8tx96jv4tkqvkm98ldnc0000gn/T/tmp7_mdq4rr.jsonl",
+  "sample_count": 3,
+  "latency_ms_mean": 1200,
+  "latency_ms_min": 1200,
+  "latency_ms_max": 1200,
+  "latency_ms_p50": 1200,
+  "latency_ms_p95": 1200.0,
+  "samples": [
+    {
+      "injection_ts_ms": 1776318503942,
+      "event_ts_ms": 1776318505142,
+      "latency_ms": 1200,
+      "event_id": "EV_000",
+      "reason": "EVENT_OPENED",
+      "scenario_name": "test"
+    },
+    {
+      "injection_ts_ms": 1776318508942,
+      "event_ts_ms": 1776318510142,
+      "latency_ms": 1200,
+      "event_id": "EV_001",
+      "reason": "EVENT_OPENED",
+      "scenario_name": "test"
+    },
+    {
+      "injection_ts_ms": 1776318513942,
+      "event_ts_ms": 1776318515142,
+      "latency_ms": 1200,
+      "event_id": "EV_002",
+      "reason": "EVENT_OPENED",
+      "scenario_name": "test"
+    }
+  ],
+  "note": "samples=3,mean=1200ms,p95=1200ms",
+  "passed": true,
+  "result_label": "PASS",
+  "max_allowed_ms": 3000
+}

@@ -6,6 +6,15 @@
 #   python tools/false_alarm_baseline_误报率基线测试.py --mode empty --duration 60
 #   python tools/false_alarm_baseline_误报率基线测试.py --mode static_disturbance --duration 60
 #   python tools/false_alarm_baseline_误报率基线测试.py --mode empty --node-events-file captures/latest_node_events.json
+#
+#   # 自测模式（无需真机文件，用合成数据验证框架逻辑）：
+#   python tools/false_alarm_baseline_误报率基线测试.py --mock
+#   python tools/false_alarm_baseline_误报率基线测试.py --mock --mock-inject-false-alarms 2
+#
+#   # 批量跑全部场景：
+#   python tools/false_alarm_baseline_误报率基线测试.py --batch
+from __future__ import annotations
+
 import argparse
 import json
 import time
@@ -235,6 +244,169 @@ def write_result(output_file: Path, result: FalseAlarmResult) -> None:
     print(f"[false_alarm] 结果已写入 {output_file}")
 
 
+def print_table(results: list[FalseAlarmResult]) -> None:
+    """打印 ASCII 统计表（单次或批量结果均可用）。"""
+    header = f"{'场景':<22} {'状态':<6} {'观测':>6} {'期望':>6} {'误报':>6} {'误报率':>8} {'时长(s)':>8}"
+    sep = "-" * len(header)
+    print(sep)
+    print(header)
+    print(sep)
+    for r in results:
+        flag = "PASS" if r.passed() else "FAIL"
+        print(f"{r.scenario:<22} {flag:<6} {r.observed_event_count:>6} "
+              f"{r.expected_event_count:>6} {r.false_alarm_count:>6} "
+              f"{r.false_alarm_rate:>7.2%} {r.duration_s:>8.0f}")
+    print(sep)
+
+
+def write_table_csv(output_file: Path, results: list[FalseAlarmResult]) -> None:
+    """将统计结果写为 CSV。"""
+    import csv as _csv
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    fields = ["scenario", "passed", "observed_event_count", "expected_event_count",
+              "false_alarm_count", "false_alarm_rate", "duration_s", "started_ms", "finished_ms", "note"]
+    with output_file.open("w", newline="", encoding="utf-8") as fp:
+        writer = _csv.DictWriter(fp, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        for r in results:
+            row = asdict(r)
+            row["passed"] = r.passed()
+            writer.writerow(row)
+    print(f"[false_alarm] CSV 已写入 {output_file}")
+
+
+def append_history(history_file: Path, result: FalseAlarmResult) -> None:
+    """将本次结果追加到 JSONL 历史文件（每行一条记录）。"""
+    history_file.parent.mkdir(parents=True, exist_ok=True)
+    payload = asdict(result)
+    payload["passed"] = result.passed()
+    payload["result_label"] = "PASS" if result.passed() else "FAIL"
+    with history_file.open("a", encoding="utf-8") as fp:
+        fp.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    print(f"[false_alarm] 历史已追加 {history_file}")
+
+
+# ---------------------------------------------------------------------------
+# Mock 自测
+# ---------------------------------------------------------------------------
+
+def _make_mock_event_records(
+    since_ms: int,
+    count: int,
+    prefix: str = "MOCK_EV",
+) -> list[EventRecord]:
+    """生成合成 EventRecord 列表，用于 mock 自测。"""
+    records: list[EventRecord] = []
+    for i in range(count):
+        ts = since_ms + i * 1000
+        records.append(EventRecord(
+            event_id=f"{prefix}_{i:04d}",
+            reason="EVENT_OPENED",
+            risk_score=float(50 + i),
+            event_status="OPEN",
+            timestamp_ms=ts,
+            source="mock",
+        ))
+    return records
+
+
+def run_mock_self_test(inject_false_alarms: int = 0) -> bool:
+    """运行框架自测，返回 True 表示测试通过。
+
+    inject_false_alarms=0：注入 0 个事件，期望 PASS
+    inject_false_alarms>0：注入 N 个假事件，期望 FAIL（验证 FAIL 路径）
+    """
+    print(f"\n[false_alarm][mock] 开始自测，inject_false_alarms={inject_false_alarms}")
+    since_ms = int(time.time() * 1000) - 10_000
+    finished_ms = int(time.time() * 1000)
+
+    mock_events = _make_mock_event_records(since_ms, inject_false_alarms, prefix="FA_MOCK")
+    deduped = deduplicate_events(mock_events)
+
+    expected = 0
+    observed = len(deduped)
+    false_alarms = max(0, observed - expected)
+    rate = false_alarms / max(observed, 1) if observed > 0 else 0.0
+
+    result = FalseAlarmResult(
+        scenario=SCENARIO_EMPTY,
+        duration_s=0.0,
+        started_ms=since_ms,
+        finished_ms=finished_ms,
+        expected_event_count=expected,
+        observed_event_count=observed,
+        false_alarm_count=false_alarms,
+        false_alarm_rate=round(rate, 4),
+        events=[asdict(ev) for ev in deduped],
+        note=f"mock_self_test,inject={inject_false_alarms}",
+    )
+
+    if inject_false_alarms == 0:
+        # 期望 PASS
+        ok = result.passed()
+        status = "PASS" if ok else "FAIL(unexpected)"
+    else:
+        # 期望 FAIL（注入了假事件，验证 FAIL 路径）
+        ok = not result.passed()
+        status = "PASS(FAIL路径验证成功)" if ok else "FAIL(未检测到注入事件)"
+
+    print(f"[false_alarm][mock] 自测结果={status} "
+          f"observed={observed} false_alarms={false_alarms}")
+    return ok
+
+
+# ---------------------------------------------------------------------------
+# 批量运行
+# ---------------------------------------------------------------------------
+
+def run_batch(
+    node_events_file: Path,
+    event_store_file: Path,
+    output_dir: Path,
+    history_file: Path,
+    verbose: bool = False,
+) -> bool:
+    """批量运行所有预设场景，汇总结果。"""
+    all_passed = True
+    batch_results: list[FalseAlarmResult] = []
+
+    for scenario in VALID_SCENARIOS:
+        print(f"\n[false_alarm][batch] 运行场景: {scenario}")
+        result = run_scenario(
+            scenario=scenario,
+            duration_s=0,   # 离线模式
+            node_events_file=node_events_file,
+            event_store_file=event_store_file,
+            verbose=verbose,
+        )
+        print_result(result)
+
+        out_file = output_dir / f"false_alarm_{scenario}.json"
+        write_result(out_file, result)
+        append_history(history_file, result)
+
+        if not result.passed():
+            all_passed = False
+        batch_results.append(result)
+
+    print()
+    print_table(batch_results)
+
+    summary = [
+        {"scenario": r.scenario, "passed": r.passed(),
+         "false_alarm_count": r.false_alarm_count, "observed": r.observed_event_count}
+        for r in batch_results
+    ]
+    summary_file = output_dir / "false_alarm_batch_summary.json"
+    summary_file.parent.mkdir(parents=True, exist_ok=True)
+    summary_file.write_text(
+        json.dumps({"passed": all_passed, "scenarios": summary}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    print(f"[false_alarm][batch] 汇总已写入 {summary_file}")
+    return all_passed
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -253,13 +425,62 @@ def main() -> int:
                         default=Path("captures/latest_node_event_store.json"))
     parser.add_argument("--output-file", type=Path,
                         default=Path("captures/false_alarm_result.json"))
+    parser.add_argument("--history-file", type=Path,
+                        default=Path("captures/false_alarm_history.jsonl"),
+                        help="JSONL 历史追加文件（每次运行都追加一条）")
+    parser.add_argument("--no-history", action="store_true",
+                        help="不追加历史记录")
+    parser.add_argument("--mock", action="store_true",
+                        help="框架自测模式：用合成数据验证逻辑，无需真机文件")
+    parser.add_argument("--mock-inject-false-alarms", type=int, default=0,
+                        help="mock 模式下注入的假事件数（>0 验证 FAIL 路径）")
+    parser.add_argument("--batch", action="store_true",
+                        help="批量模式：依次运行所有预设场景（离线）")
+    parser.add_argument("--batch-output-dir", type=Path,
+                        default=Path("captures"),
+                        help="批量模式输出目录")
+    parser.add_argument("--table", action="store_true",
+                        help="打印 ASCII 统计表（单场景/批量均可用）")
+    parser.add_argument("--csv", type=Path, default=None,
+                        help="将结果导出为 CSV（指定输出路径）")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
+    # --mock 自测模式
+    if args.mock:
+        ok = run_mock_self_test(inject_false_alarms=args.mock_inject_false_alarms)
+        return 0 if ok else 1
+
     node_events_file = resolve_path(args.node_events_file)
     event_store_file = resolve_path(args.event_store_file)
-    output_file = resolve_path(args.output_file)
+    history_file = resolve_path(args.history_file)
 
+    # --batch 批量模式
+    if args.batch:
+        output_dir = resolve_path(args.batch_output_dir)
+        ok = run_batch(
+            node_events_file=node_events_file,
+            event_store_file=event_store_file,
+            output_dir=output_dir,
+            history_file=history_file,
+            verbose=args.verbose,
+        )
+        if args.csv:
+            # batch 模式下逐个读回 JSON 重建结果列表写 CSV（汇总用）
+            all_res: list[FalseAlarmResult] = []
+            for sc in VALID_SCENARIOS:
+                fp = output_dir / f"false_alarm_{sc}.json"
+                if fp.exists():
+                    import dataclasses
+                    d = json.loads(fp.read_text(encoding="utf-8"))
+                    # 只保留 FalseAlarmResult 所需字段
+                    fields_keep = {f.name for f in dataclasses.fields(FalseAlarmResult)}
+                    all_res.append(FalseAlarmResult(**{k: v for k, v in d.items() if k in fields_keep}))
+            write_table_csv(resolve_path(args.csv), all_res)
+        return 0 if ok else 1
+
+    # 单场景模式
+    output_file = resolve_path(args.output_file)
     result = run_scenario(
         scenario=args.mode,
         duration_s=args.duration,
@@ -269,7 +490,14 @@ def main() -> int:
         verbose=args.verbose,
     )
     print_result(result)
+    if args.table:
+        print()
+        print_table([result])
     write_result(output_file, result)
+    if args.csv:
+        write_table_csv(resolve_path(args.csv), [result])
+    if not args.no_history:
+        append_history(history_file, result)
     return 0 if result.passed() else 1
 
 

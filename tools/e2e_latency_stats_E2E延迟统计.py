@@ -8,9 +8,19 @@
 #
 # 离线分析模式（读已有 session log，不需要真机）：
 #   python tools/e2e_latency_stats_E2E延迟统计.py --session-log <path>
+#
+# 框架自测（合成数据，无需真机）：
+#   python tools/e2e_latency_stats_E2E延迟统计.py --mock
+#   python tools/e2e_latency_stats_E2E延迟统计.py --mock --mock-latency-ms 1200
+#
+# 批量汇总目录下所有 session log：
+#   python tools/e2e_latency_stats_E2E延迟统计.py --batch --session-log-dir captures/session_logs
+from __future__ import annotations
+
 import argparse
 import json
 import statistics
+import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
@@ -268,6 +278,41 @@ def print_result(result: E2ELatencyResult, max_allowed_ms: int = 3000) -> None:
         print("  无有效样本（检查 session log 中是否有 track_point_sent 和 node_event 记录）")
 
 
+def print_table(results: list[E2ELatencyResult], max_allowed_ms: int = 3000) -> None:
+    """打印 ASCII 统计表（单次或批量结果均可用）。"""
+    header = (f"{'场景':<22} {'状态':<6} {'样本':>5} {'均值ms':>7} "
+              f"{'最小ms':>7} {'最大ms':>7} {'P50ms':>7} {'P95ms':>7} {'阈值ms':>7}")
+    sep = "-" * len(header)
+    print(sep)
+    print(header)
+    print(sep)
+    for r in results:
+        flag = "PASS" if r.passed(max_allowed_ms) else "FAIL"
+        print(f"{r.scenario_name:<22} {flag:<6} {r.sample_count:>5} "
+              f"{r.latency_ms_mean:>7.0f} {r.latency_ms_min:>7} {r.latency_ms_max:>7} "
+              f"{r.latency_ms_p50:>7.0f} {r.latency_ms_p95:>7.0f} {max_allowed_ms:>7}")
+    print(sep)
+
+
+def write_table_csv(output_file: Path, results: list[E2ELatencyResult], max_allowed_ms: int = 3000) -> None:
+    """将延迟统计结果写为 CSV。"""
+    import csv as _csv
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    fields = ["scenario_name", "passed", "sample_count", "latency_ms_mean",
+              "latency_ms_min", "latency_ms_max", "latency_ms_p50", "latency_ms_p95",
+              "max_allowed_ms", "session_log", "note"]
+    with output_file.open("w", newline="", encoding="utf-8") as fp:
+        writer = _csv.DictWriter(fp, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        for r in results:
+            row = asdict(r)
+            row["passed"] = r.passed(max_allowed_ms)
+            row["max_allowed_ms"] = max_allowed_ms
+            row.pop("samples", None)
+            writer.writerow(row)
+    print(f"[e2e] CSV 已写入 {output_file}")
+
+
 def write_result(output_file: Path, result: E2ELatencyResult, max_allowed_ms: int) -> None:
     output_file.parent.mkdir(parents=True, exist_ok=True)
     payload = asdict(result)
@@ -278,6 +323,135 @@ def write_result(output_file: Path, result: E2ELatencyResult, max_allowed_ms: in
     temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     temp.replace(output_file)
     print(f"[e2e] 结果已写入 {output_file}")
+
+
+# ---------------------------------------------------------------------------
+# Mock 自测
+# ---------------------------------------------------------------------------
+
+def _build_mock_session_log(
+    base_ts_ms: int,
+    sample_count: int,
+    latency_ms: int,
+    scenario: str = "mock_scenario",
+) -> list[dict[str, Any]]:
+    """生成合成 session log 记录列表（JSONL 每行等价的 dict）。
+
+    结构：每对 (track_point_sent, node_event) 间隔 latency_ms。
+    """
+    records: list[dict[str, Any]] = []
+    for i in range(sample_count):
+        inj_ts = base_ts_ms + i * 5000
+        ev_ts = inj_ts + latency_ms
+        # 注入点
+        records.append({
+            "event_type": EVENT_TYPE_TRACK_INJECT,
+            "ts_ms": inj_ts,
+            "scenario_name": scenario,
+            "payload": {"x_mm": float(i * 100), "y_mm": float(i * 200), "point_index": i},
+        })
+        # 事件输出
+        records.append({
+            "event_type": EVENT_TYPE_NODE_EVENT,
+            "ts_ms": ev_ts,
+            "scenario_name": scenario,
+            "payload": {
+                "event_id": f"MOCK_{i:04d}",
+                "reason": "EVENT_OPENED",
+                "risk_score": float(50 + i),
+            },
+        })
+    return records
+
+
+def run_mock_self_test(
+    sample_count: int = 5,
+    latency_ms: int = 800,
+    max_allowed_ms: int = 3000,
+) -> bool:
+    """运行 E2E 框架自测，返回 True 表示通过。"""
+    print(f"\n[e2e][mock] 开始自测 sample_count={sample_count} latency_ms={latency_ms}")
+    base_ts = int(time.time() * 1000) - sample_count * 5000
+
+    records = _build_mock_session_log(base_ts, sample_count, latency_ms)
+    injections = extract_injection_points(records)
+    outputs = extract_event_outputs(records)
+    print(f"[e2e][mock] 注入点={len(injections)} 事件输出={len(outputs)}")
+
+    samples = pair_latencies(injections, outputs)
+    result = compute_stats(samples, "mock", "mock_scenario")
+    print_result(result, max_allowed_ms)
+
+    # 验证配对数量与均值
+    count_ok = result.sample_count == sample_count
+    mean_ok = abs(result.latency_ms_mean - latency_ms) < 10  # 允许 10ms 误差
+    pass_ok = result.passed(max_allowed_ms)
+    ok = count_ok and mean_ok and pass_ok
+
+    status = "PASS" if ok else "FAIL"
+    print(f"[e2e][mock] 自测结果={status} "
+          f"count_ok={count_ok} mean_ok={mean_ok} pass_ok={pass_ok}")
+    return ok
+
+
+# ---------------------------------------------------------------------------
+# 批量处理
+# ---------------------------------------------------------------------------
+
+def run_batch(
+    log_dir: Path,
+    output_dir: Path,
+    max_allowed_ms: int = 3000,
+    max_window_ms: int = 30_000,
+) -> bool:
+    """扫描目录下所有 .jsonl session log，逐一统计，输出汇总。"""
+    candidates = sorted(log_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
+    if not candidates:
+        print(f"[e2e][batch] 目录下无 .jsonl 文件: {log_dir}")
+        return False
+
+    all_passed = True
+    batch_results: list[E2ELatencyResult] = []
+
+    for log_path in candidates:
+        print(f"\n[e2e][batch] 处理: {log_path.name}")
+        records = load_session_log(log_path)
+        if not records:
+            print(f"[e2e][batch] 跳过（空文件）: {log_path.name}")
+            continue
+
+        scenario_name = str(records[0].get("scenario_name", "unknown")) if records else "unknown"
+        injections = extract_injection_points(records)
+        outputs = extract_event_outputs(records)
+        samples = pair_latencies(injections, outputs, max_window_ms=max_window_ms)
+        result = compute_stats(samples, str(log_path), scenario_name)
+        print_result(result, max_allowed_ms)
+
+        out_file = output_dir / f"e2e_{log_path.stem}.json"
+        write_result(out_file, result, max_allowed_ms)
+
+        if not result.passed(max_allowed_ms):
+            all_passed = False
+        batch_results.append(result)
+
+    print()
+    print_table(batch_results, max_allowed_ms)
+
+    summary = [
+        {"log": r.session_log, "scenario": r.scenario_name,
+         "passed": r.passed(max_allowed_ms), "sample_count": r.sample_count,
+         "latency_ms_mean": r.latency_ms_mean, "latency_ms_p95": r.latency_ms_p95}
+        for r in batch_results
+    ]
+
+    summary_file = output_dir / "e2e_batch_summary.json"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    summary_file.write_text(
+        json.dumps({"passed": all_passed, "logs": summary}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    print(f"[e2e][batch] 汇总已写入 {summary_file}")
+    return all_passed
 
 
 # ---------------------------------------------------------------------------
@@ -297,9 +471,45 @@ def main() -> int:
                         help="P95 延迟合格阈值（ms），默认 3000ms")
     parser.add_argument("--max-window-ms", type=int, default=30_000,
                         help="注入→事件最大有效配对窗口（ms），默认 30000ms")
+    parser.add_argument("--mock", action="store_true",
+                        help="框架自测模式：用合成数据验证逻辑，无需真机文件")
+    parser.add_argument("--mock-sample-count", type=int, default=5,
+                        help="mock 模式合成样本数（默认 5）")
+    parser.add_argument("--mock-latency-ms", type=int, default=800,
+                        help="mock 模式合成延迟（ms，默认 800）")
+    parser.add_argument("--batch", action="store_true",
+                        help="批量模式：处理 session-log-dir 下所有 .jsonl 文件并汇总")
+    parser.add_argument("--batch-output-dir", type=Path,
+                        default=Path("captures"),
+                        help="批量模式输出目录")
+    parser.add_argument("--table", action="store_true",
+                        help="打印 ASCII 统计表")
+    parser.add_argument("--csv", type=Path, default=None,
+                        help="将结果导出为 CSV（指定输出路径）")
     args = parser.parse_args()
 
-    # 确定 session log 路径
+    # --mock 自测模式（--table 在 mock 结果上也输出）
+    if args.mock:
+        ok = run_mock_self_test(
+            sample_count=args.mock_sample_count,
+            latency_ms=args.mock_latency_ms,
+            max_allowed_ms=args.max_latency_ms,
+        )
+        return 0 if ok else 1
+
+    # --batch 批量模式
+    if args.batch:
+        log_dir = resolve_path(args.session_log_dir)
+        output_dir = resolve_path(args.batch_output_dir)
+        ok = run_batch(
+            log_dir=log_dir,
+            output_dir=output_dir,
+            max_allowed_ms=args.max_latency_ms,
+            max_window_ms=args.max_window_ms,
+        )
+        return 0 if ok else 1
+
+    # 单文件模式：确定 session log 路径
     session_log_path: Path | None = None
     if args.session_log:
         session_log_path = resolve_path(args.session_log)
@@ -330,7 +540,12 @@ def main() -> int:
     result = compute_stats(samples, str(session_log_path), scenario_name)
 
     print_result(result, args.max_latency_ms)
+    if args.table:
+        print()
+        print_table([result], args.max_latency_ms)
     write_result(resolve_path(args.output), result, args.max_latency_ms)
+    if args.csv:
+        write_table_csv(resolve_path(args.csv), [result], args.max_latency_ms)
     return 0 if result.passed(args.max_latency_ms) else 1
 
 

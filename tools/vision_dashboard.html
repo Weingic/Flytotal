@@ -1053,6 +1053,9 @@
           <div class="fact"><span class="label">触发标志</span><div class="value" id="eventDetailTriggerValue">NONE</div></div>
           <div class="fact"><span class="label">风险来源标志</span><div class="value" id="eventDetailReasonFlagsValue">NONE</div></div>
           <div class="fact"><span class="label">风险分</span><div class="value" id="eventDetailRiskScoreValue">0.0</div></div>
+          <div class="fact"><span class="label">开启时间</span><div class="value" id="eventDetailTsOpenValue">--</div></div>
+          <div class="fact"><span class="label">关闭时间</span><div class="value" id="eventDetailTsCloseValue">--</div></div>
+          <div class="fact"><span class="label">关闭原因</span><div class="value" id="eventDetailCloseReasonValue">NONE</div></div>
           <div class="fact"><span class="label">证据 Hash</span><div class="value" id="eventDetailEvidenceHashValue" style="font-size:12px;word-break:break-all;">--</div></div>
           <div class="fact"><span class="label">详情来源</span><div class="value" id="eventDetailSourceValue">实时</div></div>
           <div class="fact"><span class="label">抓拍绑定方式</span><div class="value" id="eventDetailBindingValue">NONE</div></div>
@@ -2855,7 +2858,10 @@
       document.getElementById("eventDetailTriggerValue").textContent = "NONE";
       document.getElementById("eventDetailReasonFlagsValue").textContent = "NONE";
       document.getElementById("eventDetailRiskScoreValue").textContent = "0.0";
-      document.getElementById("eventDetailEvidenceHashValue").textContent = "--";
+      document.getElementById("eventDetailTsOpenValue").textContent = "--";
+      document.getElementById("eventDetailTsCloseValue").textContent = "--";
+      document.getElementById("eventDetailCloseReasonValue").textContent = "NONE";
+      document.getElementById("eventDetailEvidenceHashValue").innerHTML = '<span class="pill offline" style="font-size:10px;padding:1px 6px;">未计算</span>';
       document.getElementById("eventDetailSourceValue").textContent = eventDetailSourceLabel;
       document.getElementById("eventDetailBindingValue").textContent = "NONE";
       link.textContent = "--";
@@ -2915,6 +2921,9 @@
       const triggerFlags = String(eventObject.trigger_flags || eventRecord.trigger_flags || "NONE");
       const reasonFlags = String(eventObject.reason_flags || eventRecord.reason_flags || "NONE");
       const riskScore = Number(eventObject.risk_score ?? eventRecord.risk_score ?? 0);
+      const tsOpen = eventObject.ts_open || eventRecord.ts_open || 0;
+      const tsClose = eventObject.ts_close || eventRecord.ts_close || 0;
+      const closeReason = String(eventObject.close_reason || eventRecord.close_reason || eventRecord.event_close_reason || "NONE");
       const evidenceHash = String(eventObject.evidence_hash || eventRecord.evidence_hash || "--");
       const displayCapturePath = capturePath || String(eventObject.capture_path || "");
 
@@ -2932,7 +2941,24 @@
       document.getElementById("eventDetailTriggerValue").innerHTML = semanticPill(triggerFlags, "normal");
       document.getElementById("eventDetailReasonFlagsValue").textContent = reasonFlags;
       document.getElementById("eventDetailRiskScoreValue").textContent = riskScore.toFixed(1);
-      document.getElementById("eventDetailEvidenceHashValue").textContent = evidenceHash;
+      document.getElementById("eventDetailTsOpenValue").textContent = tsOpen > 0 ? formatTime(tsOpen) : "--";
+      document.getElementById("eventDetailTsCloseValue").textContent = tsClose > 0 ? formatTime(tsClose) : "--";
+      document.getElementById("eventDetailCloseReasonValue").textContent = closeReason;
+      // evidence_hash: 显示前缀 + 状态 pill；完整 hash 放 title tooltip
+      (function() {
+        const el = document.getElementById("eventDetailEvidenceHashValue");
+        if (!el) return;
+        const isValid = evidenceHash && evidenceHash !== "--" && evidenceHash.length === 64;
+        if (isValid) {
+          const prefix = evidenceHash.slice(0, 16);
+          el.innerHTML =
+            '<span class="pill ok" style="font-size:10px;padding:1px 6px;margin-right:4px;">SHA256</span>' +
+            '<span title="' + evidenceHash + '" style="font-family:monospace;cursor:default;">' +
+            prefix + '&hellip;</span>';
+        } else {
+          el.innerHTML = '<span class="pill offline" style="font-size:10px;padding:1px 6px;">未计算</span>';
+        }
+      })();
       document.getElementById("eventDetailSourceValue").textContent = eventDetailSourceLabel;
       document.getElementById("eventDetailBindingValue").textContent = `${captureBindingText}（${effectiveMode === "strict" ? "严格" : "兜底"}）`;
       if (displayCapturePath) {

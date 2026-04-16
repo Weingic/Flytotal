@@ -12,6 +12,8 @@
 #
 #   # 核验已有 hash
 #   python tools/evidence_hash_证据链哈希.py --input captures/event_evidence_xxx.json --verify
+from __future__ import annotations
+
 import argparse
 import hashlib
 import json
