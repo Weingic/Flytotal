@@ -56,6 +56,7 @@ SystemData globalData = {
     VISION_IDLE,
     false,
     false,
+    AUDIO_IDLE,
     UPLINK_READY,
     false,
     {0},
@@ -338,8 +339,9 @@ constexpr uint32_t RiskReasonRidMissing = 1u << 4;
 constexpr uint32_t RiskReasonRidSuspicious = 1u << 5;
 constexpr uint32_t RiskReasonProximity = 1u << 6;
 constexpr uint32_t RiskReasonMotionAnomaly = 1u << 7;
-constexpr uint32_t RiskReasonVisionLocked = 1u << 8;
-constexpr uint32_t RiskReasonVisionLost = 1u << 9;
+constexpr uint32_t RiskReasonAudioAnomaly = 1u << 8;
+constexpr uint32_t RiskReasonVisionLocked = 1u << 9;
+constexpr uint32_t RiskReasonVisionLost = 1u << 10;
 
 constexpr WhitelistEntry RidWhitelistTable[] = {
     {"SIM-RID", "TeamA", "LegalDemo", true, 0, "默认合法演示目标"},
@@ -403,6 +405,26 @@ bool parseVisionStateToken(const String &token, VisionState &state) {
     }
     if (token == "LOST") {
         state = VISION_LOST;
+        return true;
+    }
+    return false;
+}
+
+bool parseAudioStateToken(const String &token, AudioState &state) {
+    if (token == "IDLE") {
+        state = AUDIO_IDLE;
+        return true;
+    }
+    if (token == "NORMAL") {
+        state = AUDIO_NORMAL;
+        return true;
+    }
+    if (token == "ANOMALY") {
+        state = AUDIO_ANOMALY;
+        return true;
+    }
+    if (token == "BACKGROUND") {
+        state = AUDIO_BACKGROUND;
         return true;
     }
     return false;
@@ -796,6 +818,21 @@ const char *visionStateName(VisionState state) {
     }
 }
 
+const char *audioStateName(AudioState state) {
+    switch (state) {
+        case AUDIO_IDLE:
+            return "AUDIO_IDLE";
+        case AUDIO_NORMAL:
+            return "AUDIO_NORMAL";
+        case AUDIO_ANOMALY:
+            return "AUDIO_ANOMALY";
+        case AUDIO_BACKGROUND:
+            return "AUDIO_BACKGROUND";
+        default:
+            return "AUDIO_UNKNOWN";
+    }
+}
+
 const char *uplinkStateName(UplinkState state) {
     switch (state) {
         case UPLINK_IDLE:
@@ -1095,6 +1132,9 @@ void printRiskReasonFlags(uint32_t flags) {
     }
     if (flags & RiskReasonMotionAnomaly) {
         print_flag("MOTION_ANOMALY");
+    }
+    if (flags & RiskReasonAudioAnomaly) {
+        print_flag("AUDIO_ANOMALY");
     }
     if (flags & RiskReasonVisionLocked) {
         print_flag("VISION_LOCKED");
@@ -1724,6 +1764,7 @@ UnifiedOutputSnapshot buildUnifiedOutputSnapshot(const SystemData &snapshot, con
     unified.vision_state = snapshot.vision_state;
     unified.vision_locked = snapshot.vision_locked;
     unified.capture_ready = snapshot.capture_ready;
+    unified.audio_state = snapshot.audio_state;
     unified.uplink_state = snapshot.uplink_state;
     unified.event_active = status.active;
     copyEventId(
@@ -1816,6 +1857,8 @@ void printNormalizedStateFields(const UnifiedOutputSnapshot &snapshot) {
     Serial.print(snapshot.vision_locked ? 1 : 0);
     Serial.print(",capture_ready=");
     Serial.print(snapshot.capture_ready ? 1 : 0);
+    Serial.print(",audio_state=");
+    Serial.print(audioStateName(snapshot.audio_state));
     Serial.print(",uplink_state=");
     Serial.print(uplinkStateName(snapshot.uplink_state));
     Serial.print(",timestamp=");
@@ -2485,8 +2528,36 @@ void emitVisionStatus() {
     Serial.print(snapshot.radar_track.y_mm, 1);
     Serial.print(",gimbal_state=");
     Serial.print(gimbalStateName(snapshot.gimbal_state));
+    Serial.print(",audio_state=");
+    Serial.print(audioStateName(snapshot.audio_state));
     Serial.print(",risk_score=");
     Serial.print(snapshot.risk_score, 1);
+    Serial.print(",timestamp=");
+    Serial.println(snapshot.timestamp_ms);
+}
+
+void emitAudioStatus() {
+    SystemData snapshot = {};
+    portENTER_CRITICAL(&dataMutex);
+    snapshot = globalData;
+    portEXIT_CRITICAL(&dataMutex);
+
+    Serial.print("AUDIO,STATUS,node=");
+    Serial.print(NodeConfig::NodeId);
+    Serial.print(",zone=");
+    Serial.print(NodeConfig::NodeZone);
+    Serial.print(",audio_enabled=");
+    Serial.print(AudioConfig::AudioEnabled ? 1 : 0);
+    Serial.print(",audio_state=");
+    Serial.print(audioStateName(snapshot.audio_state));
+    Serial.print(",track_id=");
+    Serial.print(snapshot.radar_track.track_id);
+    Serial.print(",track_active=");
+    Serial.print(snapshot.radar_track.is_active ? 1 : 0);
+    Serial.print(",risk_score=");
+    Serial.print(snapshot.risk_score, 1);
+    Serial.print(",reason_flags=");
+    Serial.print(snapshot.risk_reason_flags);
     Serial.print(",timestamp=");
     Serial.println(snapshot.timestamp_ms);
 }
@@ -2801,6 +2872,7 @@ void printHostCommandHelp() {
     Serial.println("    RID,MSG,rid_id,device_type,source,timestamp_ms,auth_status,whitelist_tag[,signal_strength]");
     Serial.println("    WL,STATUS | WL,LIST");
     Serial.println("    VISION,LOCKED | VISION,LOST | VISION,IDLE | VISION,STATUS");
+    Serial.println("    AUDIO,ANOMALY | AUDIO,NORMAL | AUDIO,STATUS");
     Serial.println("    KP,value");
     Serial.println("    KD,value");
     Serial.println("    HANDOVER,target_node | HANDOVER,STATUS | HANDOVER,CLEAR");
@@ -3279,7 +3351,6 @@ void handleHostCommand(const String &line) {
         } else {
             setVisionOverride(requested_state);
         }
-
         portENTER_CRITICAL(&dataMutex);
         globalData.vision_state = requested_state;
         globalData.vision_locked = requested_state == VISION_LOCKED;
@@ -3290,6 +3361,31 @@ void handleHostCommand(const String &line) {
 
         Serial.print("VISION simulation updated: ");
         Serial.println(visionStateName(requested_state));
+    } else if (command == "AUDIO") {
+        if (value.length() == 0 || value == "STATUS") {
+            emitAudioStatus();
+            return;
+        }
+
+        AudioState requested_state = AUDIO_NORMAL;
+        if (!parseAudioStateToken(value, requested_state)) {
+            Serial.println("Invalid AUDIO command. Use AUDIO,ANOMALY|NORMAL|STATUS.");
+            return;
+        }
+
+        portENTER_CRITICAL(&dataMutex);
+        globalData.audio_state = requested_state;
+        globalData.timestamp_ms = millis();
+        globalData.trigger_flags = computeTriggerFlags(globalData);
+        portEXIT_CRITICAL(&dataMutex);
+
+        if (!AudioConfig::AudioEnabled) {
+            Serial.print("AUDIO placeholder updated while disabled: ");
+            Serial.println(audioStateName(requested_state));
+        } else {
+            Serial.print("AUDIO simulation updated: ");
+            Serial.println(audioStateName(requested_state));
+        }
     } else if (command == "SAFE") {
         if (value == "ON") {
             setSafeMode(true);
@@ -3544,6 +3640,7 @@ void handleHostCommand(const String &line) {
         globalData.vision_state = VISION_IDLE;
         globalData.vision_locked = false;
         globalData.capture_ready = false;
+        globalData.audio_state = AUDIO_IDLE;
         globalData.uplink_state = UPLINK_READY;
         globalData.event_active = false;
         globalData.event_id[0] = '\0';
@@ -3908,16 +4005,20 @@ void TrackingTask(void *pvParameters) {
 
         unsigned long now = millis();
         rid_snapshot = refreshRidRuntime(track_snapshot, now);
+        VisionState vision_input_state = VISION_IDLE;
+        AudioState audio_input_state = AUDIO_IDLE;
         portENTER_CRITICAL(&dataMutex);
         wl_snapshot = globalData.wl_status;
-        VisionState vision_input_state = globalData.vision_state;
+        vision_input_state = globalData.vision_state;
+        audio_input_state = globalData.audio_state;
         portEXIT_CRITICAL(&dataMutex);
         VisionOverrideControl visionOverrideSnapshot = getVisionOverrideSnapshot();
         if (visionOverrideSnapshot.enabled) {
             vision_input_state = visionOverrideSnapshot.state;
         }
         processServoDiagnostic(now);
-        HunterOutput hunter_output = myHunter.update(track_snapshot, rid_snapshot, wl_snapshot, vision_input_state, now);
+        HunterOutput hunter_output =
+            myHunter.update(track_snapshot, rid_snapshot, wl_snapshot, vision_input_state, audio_input_state, now);
         RuntimeEventStatus eventStatusSnapshot = getRuntimeEventStatusSnapshot();
         UplinkState uplinkStateSnapshot = UPLINK_READY;
         bool currentEventActiveSnapshot = false;
@@ -3937,6 +4038,7 @@ void TrackingTask(void *pvParameters) {
         char ridWhitelistTagSnapshot[16] = {0};
         int ridSignalStrengthSnapshot = 0;
         VisionState desiredVisionState = VISION_IDLE;
+        AudioState audioStateSnapshot = AUDIO_IDLE;
         VisionState nextVisionState = stableVisionState;
         bool nextVisionLocked = nextVisionState == VISION_LOCKED;
 
@@ -4064,6 +4166,7 @@ void TrackingTask(void *pvParameters) {
         copyEventId(ridAuthStatusSnapshot, sizeof(ridAuthStatusSnapshot), globalData.rid_auth_status);
         copyEventId(ridWhitelistTagSnapshot, sizeof(ridWhitelistTagSnapshot), globalData.rid_whitelist_tag);
         ridSignalStrengthSnapshot = globalData.rid_signal_strength;
+        audioStateSnapshot = globalData.audio_state;
         portEXIT_CRITICAL(&dataMutex);
 
         SystemData flowSnapshot = {};
@@ -4108,6 +4211,7 @@ void TrackingTask(void *pvParameters) {
         flowSnapshot.vision_state = nextVisionState;
         flowSnapshot.vision_locked = nextVisionLocked;
         flowSnapshot.capture_ready = nextCaptureReady;
+        flowSnapshot.audio_state = audioStateSnapshot;
         flowSnapshot.uplink_state = uplinkStateSnapshot;
         flowSnapshot.event_active = currentEventActiveSnapshot;
         copyEventId(flowSnapshot.event_id, sizeof(flowSnapshot.event_id), currentEventIdSnapshot);

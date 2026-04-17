@@ -35,6 +35,13 @@ enum VisionState {
     VISION_LOST
 };
 
+enum AudioState {
+    AUDIO_IDLE,
+    AUDIO_NORMAL,
+    AUDIO_ANOMALY,
+    AUDIO_BACKGROUND
+};
+
 enum UplinkState {
     UPLINK_IDLE,
     UPLINK_READY,
@@ -139,6 +146,7 @@ struct SystemData {
     VisionState vision_state;
     bool vision_locked;
     bool capture_ready;
+    AudioState audio_state;
     UplinkState uplink_state;
     bool event_active;
     char event_id[32];
@@ -190,6 +198,7 @@ struct UnifiedOutputSnapshot {
     VisionState vision_state;
     bool vision_locked;
     bool capture_ready;
+    AudioState audio_state;
     UplinkState uplink_state;
     bool event_active;
     char event_id[32];

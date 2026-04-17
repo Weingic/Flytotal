@@ -11,8 +11,17 @@ constexpr uint32_t RiskReasonRidMissing = 1u << 4;
 constexpr uint32_t RiskReasonRidSuspicious = 1u << 5;
 constexpr uint32_t RiskReasonProximity = 1u << 6;
 constexpr uint32_t RiskReasonMotionAnomaly = 1u << 7;
-constexpr uint32_t RiskReasonVisionLocked = 1u << 8;
-constexpr uint32_t RiskReasonVisionLost = 1u << 9;
+constexpr uint32_t RiskReasonAudioAnomaly = 1u << 8;
+constexpr uint32_t RiskReasonVisionLocked = 1u << 9;
+constexpr uint32_t RiskReasonVisionLost = 1u << 10;
+
+bool isAudioAbnormal(AudioState state) {
+    return state == AUDIO_ANOMALY || state == AUDIO_BACKGROUND;
+}
+
+bool isCooperativeTarget(WhitelistStatus wl_status) {
+    return wl_status == WL_ALLOWED;
+}
 
 bool isAlertState(HunterState state) {
     return state == HUNTER_SUSPICIOUS || state == HUNTER_HIGH_RISK || state == HUNTER_EVENT_LOCKED;
@@ -85,9 +94,10 @@ HunterRiskAssessment HunterAction::computeRiskAssessment(
     const RadarTrack &track,
     RidStatus rid_status,
     WhitelistStatus wl_status,
-    VisionState vision_state
+    VisionState vision_state,
+    AudioState audio_state
 ) const {
-    HunterRiskAssessment assessment = {0.0f, 0u, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    HunterRiskAssessment assessment = {0.0f, 0u, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     if (!track.is_active) {
         return assessment;
     }
@@ -163,16 +173,30 @@ HunterRiskAssessment HunterAction::computeRiskAssessment(
         assessment.reason_flags |= RiskReasonMotionAnomaly;
     }
 
-    if (vision_state == VISION_LOCKED && wl_status == WL_ALLOWED) {
-        score += HunterConfig::VisionLockedAssistScore;
+    const bool cooperative_target = isCooperativeTarget(wl_status);
+    // Vision lock only assists legal/cooperative targets, avoiding non-cooperative false de-escalation.
+    if (vision_state == VISION_LOCKED && cooperative_target) {
+        assessment.vision_score = HunterConfig::VisionLockedAssistScore;
+        score += assessment.vision_score;
         assessment.reason_flags |= RiskReasonVisionLocked;
-    } else if (vision_state == VISION_LOST) {
-        const bool high_attention_target = wl_status != WL_ALLOWED &&
-                                           (rid_status == RID_NONE || rid_status == RID_EXPIRED || rid_status == RID_INVALID);
-        if (track.is_confirmed && high_attention_target && score >= HunterConfig::VisionLostPenaltyMinScore) {
-            score += HunterConfig::VisionLostPenaltyScore;
-            assessment.reason_flags |= RiskReasonVisionLost;
-        }
+    }
+
+    // Vision lost adds penalty only in non-cooperative/high-risk contexts.
+    if (vision_state == VISION_LOST &&
+        !cooperative_target &&
+        track.is_confirmed &&
+        score >= HunterConfig::VisionLostPenaltyMinScore) {
+        assessment.vision_score += HunterConfig::VisionLostPenaltyScore;
+        score += HunterConfig::VisionLostPenaltyScore;
+        assessment.reason_flags |= RiskReasonVisionLost;
+    }
+
+    // Audio anomaly contributes only when enabled and target is non-cooperative.
+    if (AudioConfig::AudioEnabled && isAudioAbnormal(audio_state) && !cooperative_target) {
+        assessment.audio_score = audio_state == AUDIO_ANOMALY ? AudioConfig::AudioAnomalyBonusScore
+                                                              : AudioConfig::AudioBackgroundBonusScore;
+        score += assessment.audio_score;
+        assessment.reason_flags |= RiskReasonAudioAnomaly;
     }
 
     if (score < 0.0f) {
@@ -219,10 +243,11 @@ HunterOutput HunterAction::update(
     RidStatus rid_status,
     WhitelistStatus wl_status,
     VisionState vision_state,
+    AudioState audio_state,
     unsigned long now
 ) {
     HunterOutput output = {};
-    HunterRiskAssessment assessment = computeRiskAssessment(track, rid_status, wl_status, vision_state);
+    HunterRiskAssessment assessment = computeRiskAssessment(track, rid_status, wl_status, vision_state, audio_state);
     output.risk_score = assessment.score;
     output.risk_reason_flags = assessment.reason_flags;
     output.risk_base_score = assessment.base_score;
@@ -231,6 +256,8 @@ HunterOutput HunterAction::update(
     output.risk_rid_score = assessment.rid_score;
     output.risk_proximity_score = assessment.proximity_score;
     output.risk_motion_score = assessment.motion_score;
+    output.risk_vision_score = assessment.vision_score;
+    output.risk_audio_score = assessment.audio_score;
 
     if (!track.is_active) {
         setState(HUNTER_IDLE, now);
