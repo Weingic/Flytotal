@@ -67,20 +67,20 @@ constexpr float RidMissingScore = RidNoneScore;
 constexpr float RidSuspiciousScore = RidInvalidScore;
 constexpr float ProximityScore = 12.0f;
 constexpr float MotionAnomalyScore = 12.0f;
-constexpr float VisionLockedAssistScore = -10.0f;
+constexpr float VisionLockedAssistScore = -8.0f;
 constexpr float VisionLostPenaltyScore = 8.0f;
-constexpr float VisionLostPenaltyMinScore = 40.0f;
+constexpr float VisionLostPenaltyMinScore = 46.0f;
 constexpr float ProximityThresholdMm = 1500.0f;
 constexpr float MotionAnomalySpeedThresholdMmS = 350.0f;
-constexpr float SuspiciousThreshold = 40.0f;
+constexpr float SuspiciousThreshold = 42.0f;
 constexpr float HighRiskThreshold = 60.0f;
-constexpr float EventThreshold = 80.0f;
-constexpr unsigned long SuspiciousEnterHoldMs = 120;
-constexpr unsigned long HighRiskEnterHoldMs = 250;
-constexpr unsigned long EventEnterHoldMs = 500;
-constexpr unsigned long SuspiciousExitHoldMs = 500;
-constexpr unsigned long HighRiskExitHoldMs = 700;
-constexpr unsigned long EventExitHoldMs = 900;
+constexpr float EventThreshold = 76.0f;
+constexpr unsigned long SuspiciousEnterHoldMs = 180;
+constexpr unsigned long HighRiskEnterHoldMs = 320;
+constexpr unsigned long EventEnterHoldMs = 650;
+constexpr unsigned long SuspiciousExitHoldMs = 650;
+constexpr unsigned long HighRiskExitHoldMs = 900;
+constexpr unsigned long EventExitHoldMs = 1200;
 }
 
 namespace RidConfig {
@@ -97,6 +97,15 @@ constexpr unsigned long VisionStateSwitchHoldMs = 120;
 constexpr unsigned long VisionLockedHoldMs = 220;
 constexpr unsigned long VisionLostHoldMs = 350;
 constexpr unsigned long LoopDelayMs = 20;
+}
+
+namespace AudioConfig {
+// Day 4 audio placeholder enters main risk chain.
+// Keep disabled by default so legacy acceptance remains unchanged.
+constexpr bool AudioEnabled = false;
+// Risk bonus applied only when AudioEnabled=true and audio state is abnormal.
+constexpr float AudioAnomalyBonusScore = 10.0f;
+constexpr float AudioBackgroundBonusScore = 4.0f;
 }
 
 namespace CloudConfig {

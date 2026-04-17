@@ -1505,11 +1505,11 @@
     }
 
     function visionStatePill(state) {
-      const v = String(state || "NONE").toUpperCase();
-      if (v === "VISION_LOCKED"    || v === "LOCKED")    return semanticPill(v, "ok");
-      if (v === "VISION_LOST"      || v === "LOST")      return semanticPill(v, "warn");
-      if (v === "VISION_SEARCHING" || v === "SEARCHING") return semanticPill(v, "searching");
-      return semanticPill(v, "offline");
+      const value = String(state || "NONE").toUpperCase();
+      if (value === "VISION_LOCKED"    || value === "LOCKED")    return semanticPill(value, "ok");
+      if (value === "VISION_LOST"      || value === "LOST")      return semanticPill(value, "warn");
+      if (value === "VISION_SEARCHING" || value === "SEARCHING") return semanticPill(value, "searching");
+      return semanticPill(value, "offline");
     }
 
     function riskLevelPill(level) {

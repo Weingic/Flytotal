@@ -1,0 +1,17 @@
+{
+  "passed": true,
+  "scenarios": [
+    {
+      "scenario": "empty",
+      "passed": true,
+      "false_alarm_count": 0,
+      "observed": 0
+    },
+    {
+      "scenario": "static_disturbance",
+      "passed": true,
+      "false_alarm_count": 0,
+      "observed": 0
+    }
+  ]
+}

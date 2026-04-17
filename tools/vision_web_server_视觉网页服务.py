@@ -1977,7 +1977,8 @@ def create_handler(
                     self.send_json(mock_bundle.get("node_status", {"ok": True, "available": False}))
                     return
                 node_payload = load_json_file(node_status_file)
-                # 从 vision bridge 的 status 文件读取当前视觉状态，注入视觉贡献字段。
+                # 从 vision bridge 的 status 文件读取当前视觉状态，注入视觉贡献字段
+                # （供网页风险区显示；score_delta 由 compute_vision_contribution 计算）。
                 vision_payload = load_json_file(status_file)
                 v_state = str(vision_payload.get("vision_state", "NONE") or "NONE").strip().upper() or "NONE"
                 wl = str(

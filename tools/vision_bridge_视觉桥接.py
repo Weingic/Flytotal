@@ -79,11 +79,11 @@ class NodeRuntimeSignals:
 @dataclass
 class GimbalSignals:
     # 来自固件侧 node_status 的云台/视觉引导字段。
-    gimbal_state: str    # "TRACKING" / "IDLE" / "LOST"
-    track_confirmed: int # 1 = 目标已稳定确认
-    track_active: int    # 1 = 正在跟踪
-    x_mm: float
-    y_mm: float
+    gimbal_state: str    # 例如 "TRACKING" / "IDLE" / "LOST"
+    track_confirmed: int # 1 = 目标已稳定确认，0 = 未确认
+    track_active: int    # 1 = 正在跟踪，0 = 已退出
+    x_mm: float          # 雷达/视觉坐标 X（毫米）
+    y_mm: float          # 雷达/视觉坐标 Y（毫米）
 
 
 class CsvVisionLogger:
@@ -402,7 +402,7 @@ def load_node_runtime_signals(node_status_file: Path) -> NodeRuntimeSignals:
 
 
 def load_gimbal_signals(node_status_file: Path) -> GimbalSignals:
-    """从 node_status JSON 读取云台引导字段。固件侧字段缺失时返回安全默认值。"""
+    """从 node_status JSON 读取云台引导字段。固件侧尚未写入时返回安全默认值。"""
     payload = load_json_payload(node_status_file)
     if not isinstance(payload, dict):
         return GimbalSignals(gimbal_state="IDLE", track_confirmed=0, track_active=0, x_mm=0.0, y_mm=0.0)
@@ -428,11 +428,11 @@ def radar_to_frame(
     radar_range_x_mm: float = 10000.0,
     radar_range_y_mm: float = 10000.0,
 ) -> tuple[int, int]:
-    """将雷达坐标 (x_mm, y_mm) 线性映射到画面像素坐标。
+    """将雷达坐标 (x_mm, y_mm) 映射到画面像素坐标。
 
     约定（与固件侧对齐，Win 定稿后只需改此处）：
-      x_mm ∈ [-range/2, +range/2] → px ∈ [0, frame_w]
-      y_mm ∈ [0, range]           → py ∈ [frame_h, 0]（远端在上方）
+      x_mm 范围 [-radar_range_x_mm/2, +radar_range_x_mm/2] → 画面 [0, frame_w]
+      y_mm 范围 [0, radar_range_y_mm]                       → 画面 [frame_h, 0]（远端在上）
     """
     px = int((x_mm / radar_range_x_mm + 0.5) * frame_w)
     py = int((1.0 - y_mm / radar_range_y_mm) * frame_h)
@@ -490,7 +490,7 @@ class VisionStateReporter:
         return self._confirmed
 
     def _emit(self, state: str) -> None:
-        cmd = self.COMMANDS.get(state, f"VISION,IDLE")
+        cmd = self.COMMANDS.get(state, "VISION,IDLE")
         print(f"VISION_CMD,{cmd},confirmed_state={state}")
 
 
@@ -849,19 +849,25 @@ def draw_guide_box(
     radar_range_y_mm: float = 10000.0,
     box_half_px: int = 40,
 ) -> Any:
-    """叠加黄色半自动引导框。
+    """在画面上叠加黄色半自动引导框。
 
-    触发条件：gimbal_state == "TRACKING" AND track_confirmed == 1 AND track_active == 1。
+    触发条件：gimbal_state == "TRACKING" 且 track_confirmed == 1 且 track_active == 1。
+    退出条件：track_active == 0 或 gimbal_state 不为 TRACKING → 不绘制，直接返回。
     当前阶段只做提示框，不自动启动 CSRT 跟踪器。
     """
     if gimbal.gimbal_state != "TRACKING" or gimbal.track_confirmed != 1 or gimbal.track_active != 1:
         return frame
 
     cx, cy = radar_to_frame(
-        gimbal.x_mm, gimbal.y_mm, frame_w, frame_h,
-        radar_range_x_mm, radar_range_y_mm,
+        gimbal.x_mm,
+        gimbal.y_mm,
+        frame_w,
+        frame_h,
+        radar_range_x_mm,
+        radar_range_y_mm,
     )
 
+    # 黄色引导框 (BGR: 0, 255, 255)
     yellow = (0, 255, 255)
     cv.rectangle(frame, (cx - box_half_px, cy - box_half_px), (cx + box_half_px, cy + box_half_px), yellow, 2)
     cv.circle(frame, (cx, cy), 4, yellow, -1)
@@ -1431,7 +1437,9 @@ def main() -> int:
 
             display = draw_overlay(cv, frame.copy(), snapshot, show_help)
             display = draw_guide_box(
-                cv, display, current_gimbal_signals,
+                cv,
+                display,
+                current_gimbal_signals,
                 frame_w=source_width or display.shape[1],
                 frame_h=source_height or display.shape[0],
             )

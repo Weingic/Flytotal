@@ -137,7 +137,12 @@ def process_evidence_file(
     verify_mode=True  → 核验 hash，不写文件
     verify_mode=False → 计算并写入 hash
     """
-    evidence = load_json_file(input_path)
+    raw = load_json_file(input_path)
+    # 自动识别两种结构：
+    #   A. 证据导出包裹格式（event_detail.event_object_v1）
+    #   B. 裸 event_object_v1 格式
+    ev_obj = raw.get("event_detail", {}).get("event_object_v1")
+    evidence = ev_obj if isinstance(ev_obj, dict) else raw
 
     if verify_mode:
         ok, stored, recomputed = verify_hash(evidence)
