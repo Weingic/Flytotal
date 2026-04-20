@@ -106,6 +106,8 @@ constexpr bool AudioEnabled = false;
 // Risk bonus applied only when AudioEnabled=true and audio state is abnormal.
 constexpr float AudioAnomalyBonusScore = 10.0f;
 constexpr float AudioBackgroundBonusScore = 4.0f;
+// When true, AUDIO_BACKGROUND is treated as informational only and contributes no risk.
+constexpr bool IgnoreBackgroundAudio = false;
 }
 
 namespace CloudConfig {
@@ -116,6 +118,11 @@ constexpr unsigned long EventReportMs = 250;
 namespace EventConfig {
 // A short no-RID appearance is treated as suspicious, but must not be eventized immediately.
 constexpr unsigned long MissingRidEventMinDurationMs = 800;
+// Day 1 policy freeze: event open/keep/close all mirror the current suspicious threshold
+// so the refactor stays backward-compatible while exposing a single config surface.
+constexpr float OpenThreshold = HunterConfig::SuspiciousThreshold;
+constexpr float KeepThreshold = HunterConfig::SuspiciousThreshold;
+constexpr float CloseThreshold = HunterConfig::SuspiciousThreshold;
 // Event close is delayed for a short hold window to avoid open/close flapping.
 constexpr unsigned long CloseHoldMs = 350;
 // Cooldown window after a close; prevents immediate reopen.

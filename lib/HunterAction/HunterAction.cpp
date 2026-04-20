@@ -16,7 +16,13 @@ constexpr uint32_t RiskReasonVisionLocked = 1u << 9;
 constexpr uint32_t RiskReasonVisionLost = 1u << 10;
 
 bool isAudioAbnormal(AudioState state) {
-    return state == AUDIO_ANOMALY || state == AUDIO_BACKGROUND;
+    if (state == AUDIO_ANOMALY) {
+        return true;
+    }
+    if (state == AUDIO_BACKGROUND) {
+        return !AudioConfig::IgnoreBackgroundAudio;
+    }
+    return false;
 }
 
 bool isCooperativeTarget(WhitelistStatus wl_status) {
