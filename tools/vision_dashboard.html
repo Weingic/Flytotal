@@ -803,6 +803,182 @@
 
     a.file-link:hover { text-decoration: underline; }
 
+    /* 系统摘要区 */
+    .system-summary {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .summary-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+    }
+    .summary-card-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin-bottom: 6px;
+    }
+    .summary-card-value {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--fg);
+      line-height: 1.2;
+    }
+    .summary-card-sub {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* 节点卡片列表 */
+    .node-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .node-mini-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      transition: border-color .2s;
+    }
+    .node-mini-card.live  { border-left: 4px solid var(--ok); }
+    .node-mini-card.stale { border-left: 4px solid var(--border); opacity: .7; }
+    .node-mini-card-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .node-mini-id {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--fg);
+    }
+    .node-mini-zone {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .node-mini-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 3px;
+    }
+    .node-mini-row .val { color: var(--fg); font-weight: 600; }
+
+    @media (max-width: 900px) {
+      .system-summary { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 540px) {
+      .system-summary { grid-template-columns: 1fr; }
+    }
+
+    /* 系统判定说明条 */
+    .policy-bar {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent);
+      border-radius: 10px;
+      padding: 12px 18px;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+    .policy-bar-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      white-space: nowrap;
+    }
+    .policy-bar-text {
+      font-size: 13px;
+      color: var(--fg);
+      flex: 1;
+    }
+    .policy-bar-meta {
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    /* 判定解释区 */
+    .verdict-box {
+      margin-top: 14px;
+      background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+      border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+      border-radius: 10px;
+      padding: 14px 16px;
+    }
+    .verdict-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin-bottom: 8px;
+    }
+    .verdict-sentence {
+      font-size: 14px;
+      color: var(--fg);
+      line-height: 1.6;
+      min-height: 22px;
+    }
+    .verdict-factors {
+      margin-top: 10px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .verdict-factor {
+      font-size: 11px;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-weight: 600;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .verdict-factor.active {
+      background: color-mix(in srgb, var(--accent) 15%, var(--surface));
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    /* 骨架入口按钮组 */
+    .entry-skeleton {
+      margin-top: 12px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .skeleton-btn {
+      font-size: 12px;
+      padding: 5px 12px;
+      border-radius: 6px;
+      border: 1px dashed var(--border);
+      background: transparent;
+      color: var(--muted);
+      cursor: default;
+      opacity: .7;
+    }
+
     @media (max-width: 1080px) {
       .status-grid,
       .content-grid { grid-template-columns: 1fr; }
@@ -843,6 +1019,41 @@
         </div>
       </div>
     </section>
+
+    <div class="policy-bar">
+      <span class="policy-bar-label">系统策略</span>
+      <span class="policy-bar-text" id="policyBarText">正在加载当前判定规则…</span>
+      <span class="policy-bar-meta" id="policyBarMeta">--</span>
+    </div>
+
+    <!-- 系统摘要区 -->
+    <div class="system-summary">
+      <div class="summary-card">
+        <div class="summary-card-label">节点在线</div>
+        <div class="summary-card-value" id="summaryNodesOnline">--</div>
+        <div class="summary-card-sub" id="summaryNodesTotal">共 -- 个节点</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-card-label">最高风险</div>
+        <div class="summary-card-value" id="summaryMaxRisk">--</div>
+        <div class="summary-card-sub" id="summaryMaxRiskNode">节点 --</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-card-label">最近事件</div>
+        <div class="summary-card-value" id="summaryLastEvent" style="font-size:13px;">NONE</div>
+        <div class="summary-card-sub" id="summaryLastEventNode">节点 --</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-card-label">最近抓拍</div>
+        <div class="summary-card-value" id="summaryLastCapture" style="font-size:13px;">--</div>
+        <div class="summary-card-sub" id="summaryLastCaptureReason">--</div>
+      </div>
+    </div>
+
+    <!-- 节点卡片列表 -->
+    <div class="node-list" id="nodeList">
+      <!-- 由 JS renderNodeList() 动态生成 -->
+    </div>
 
     <section class="status-grid">
       <div class="panel status-card" id="visionCard">
@@ -1061,6 +1272,25 @@
           <div class="fact"><span class="label">抓拍绑定方式</span><div class="value" id="eventDetailBindingValue">NONE</div></div>
           <div class="fact"><span class="label">抓拍路径</span><div class="value"><a class="file-link" id="eventDetailPathLink" href="#" target="_blank" rel="noreferrer">--</a></div></div>
         </div>
+
+        <!-- 判定解释区 -->
+        <div class="verdict-box" id="verdictBox">
+          <div class="verdict-title">判定解释 — 为何成事件</div>
+          <div class="verdict-sentence" id="verdictSentence">选择事件后显示判定原因。</div>
+          <div class="verdict-factors">
+            <span class="verdict-factor" id="verdictFactorVision">视觉</span>
+            <span class="verdict-factor" id="verdictFactorRid">身份</span>
+            <span class="verdict-factor" id="verdictFactorWl">白名单</span>
+            <span class="verdict-factor" id="verdictFactorRisk">风险分</span>
+            <span class="verdict-factor" id="verdictFactorFlags">风险标志</span>
+          </div>
+          <div class="entry-skeleton">
+            <button class="skeleton-btn" type="button" disabled>📋 查看事件过程（即将支持）</button>
+            <button class="skeleton-btn" type="button" disabled>🛤 查看轨迹（即将支持）</button>
+            <button class="skeleton-btn" type="button" disabled>🗂 查看完整证据（即将支持）</button>
+          </div>
+        </div>
+
         <div class="table-header" style="margin-top: 12px;">
           <h2 class="section-title">最近证据导出</h2>
           <p class="section-subtitle">显示本地已落盘的导出 JSON，可直接打开。</p>
@@ -1070,13 +1300,14 @@
             <thead>
               <tr>
                 <th>导出时间</th>
+                <th>节点</th>
                 <th>事件号</th>
                 <th>抓拍数</th>
                 <th>文件</th>
               </tr>
             </thead>
             <tbody id="eventExportHistoryBody">
-              <tr><td colspan="4">当前还没有证据导出记录。</td></tr>
+              <tr><td colspan="5">当前还没有证据导出记录。</td></tr>
             </tbody>
           </table>
         </div>
@@ -2739,12 +2970,13 @@
       latestNodeEventExportRecords = records.slice();
       latestNodeEventExportEventId = normalizeEventId(payload?.event_id || selectedNodeEventId || "");
       if (!records.length) {
-        body.innerHTML = '<tr><td colspan="4">当前还没有证据导出记录。</td></tr>';
+        body.innerHTML = '<tr><td colspan="5">当前还没有证据导出记录。</td></tr>';
         return;
       }
       body.innerHTML = records.map((record) => {
         const exportTime = formatTime(Number(record.export_generated_ms || 0));
         const eventId = normalizeEventId(record.event_id) || "NONE";
+        const nodeId = String(record.node_id || record.source_node || "--");
         const captureCount = Number(record.capture_count || 0);
         const fileName = String(record.file_name || "UNKNOWN");
         const fileUrl = String(record.file_url || "");
@@ -2755,6 +2987,7 @@
         const replayLabel = isActiveReplay ? "回放中" : "回放";
         return `<tr class="${isActiveReplay ? "event-export-row-active" : ""}">
           <td>${exportTime}</td>
+          <td>${nodeId}</td>
           <td>${eventId}</td>
           <td>${captureCount}</td>
           <td>${fileCell} <button class="mini-btn replay-export-btn" type="button" data-file-name="${fileName.replace(/"/g, "&quot;")}">${replayLabel}</button></td>
@@ -2834,6 +3067,183 @@
       }
     }
 
+    // ── 节点卡片列表 ──────────────────────────────────────────────
+    function renderNodeList(nodes) {
+      const container = document.getElementById("nodeList");
+      if (!container) return;
+      if (!nodes || nodes.length === 0) { container.innerHTML = ""; return; }
+      container.innerHTML = nodes.map(n => {
+        if (!n || !n.available) return "";
+        const isOnline = Number(n.online ?? 0) === 1;
+        const nodeId   = String(n.node_id || "UNKNOWN");
+        const zone     = String(n.node_zone || "");
+        const risk     = String(n.risk_level || "NONE");
+        const score    = Number(n.risk_score ?? 0).toFixed(1);
+        const tracks   = Number(n.track_active_count ?? 0);
+        const events   = Number(n.event_opened_count ?? 0);
+        const lastEvt  = String(n.last_event_id || "NONE");
+        const staleMs  = Number(n.stale_age_ms ?? 0);
+        const staleStr = isOnline ? `在线 · ${staleMs}ms 前` : "离线";
+        return `<div class="node-mini-card ${isOnline ? "live" : "stale"}">
+          <div class="node-mini-card-header">
+            ${onlinePill(n.online, n.stale_age_ms)}
+            <span class="node-mini-id">${nodeId}</span>
+            ${zone ? `<span class="node-mini-zone">${zone}</span>` : ""}
+          </div>
+          <div class="node-mini-row"><span>风险</span><span class="val">${riskLevelPill(risk)} <small>${score}</small></span></div>
+          <div class="node-mini-row"><span>轨迹/事件</span><span class="val">${tracks} / ${events}</span></div>
+          <div class="node-mini-row"><span>最近事件</span><span class="val" style="font-size:11px;max-width:120px;overflow:hidden;text-overflow:ellipsis;">${lastEvt}</span></div>
+          <div class="node-mini-row"><span>状态</span><span class="val" style="font-size:11px;">${staleStr}</span></div>
+        </div>`;
+      }).join("");
+    }
+
+    // ── 系统摘要区 ────────────────────────────────────────────────
+    function renderSystemSummary(nodes, captures) {
+      const onlineNodes = (nodes || []).filter(n => n && n.available && Number(n.online ?? 0) === 1);
+      const total       = (nodes || []).filter(n => n && n.available).length;
+
+      // 最高风险节点
+      let maxScore = -1, maxRiskNode = null;
+      for (const n of (nodes || [])) {
+        if (!n || !n.available) continue;
+        const s = Number(n.risk_score ?? 0);
+        if (s > maxScore) { maxScore = s; maxRiskNode = n; }
+      }
+
+      // 最近事件（取所有节点 last_event_id 中最新的）
+      let lastEventId = "NONE", lastEventNode = "--";
+      for (const n of (nodes || [])) {
+        if (!n || !n.available) continue;
+        const eid = String(n.last_event_id || "NONE");
+        if (eid !== "NONE") { lastEventId = eid; lastEventNode = String(n.node_id || "--"); break; }
+      }
+
+      // 最近抓拍
+      const latest  = captures && captures.latest && typeof captures.latest === "object" ? captures.latest : null;
+      const capTime = latest ? formatTime(Number(latest.timestamp_ms || 0)) : "--";
+      const capReason = latest ? String(latest.reason || "--") : "--";
+
+      const elOnline  = document.getElementById("summaryNodesOnline");
+      const elTotal   = document.getElementById("summaryNodesTotal");
+      const elMaxRisk = document.getElementById("summaryMaxRisk");
+      const elMaxNode = document.getElementById("summaryMaxRiskNode");
+      const elEvt     = document.getElementById("summaryLastEvent");
+      const elEvtNode = document.getElementById("summaryLastEventNode");
+      const elCap     = document.getElementById("summaryLastCapture");
+      const elCapSub  = document.getElementById("summaryLastCaptureReason");
+
+      if (elOnline)  elOnline.textContent  = `${onlineNodes.length}`;
+      if (elTotal)   elTotal.textContent   = `共 ${total} 个节点`;
+      if (elMaxRisk) elMaxRisk.innerHTML   = maxRiskNode ? riskLevelPill(maxRiskNode.risk_level || "NONE") : "--";
+      if (elMaxNode) elMaxNode.textContent = maxRiskNode ? `节点 ${maxRiskNode.node_id || "--"} · ${maxScore.toFixed(1)} 分` : "节点 --";
+      if (elEvt)     elEvt.textContent     = lastEventId;
+      if (elEvtNode) elEvtNode.textContent = `节点 ${lastEventNode}`;
+      if (elCap)     elCap.textContent     = capTime;
+      if (elCapSub)  elCapSub.textContent  = capReason;
+    }
+
+    // ── 系统判定说明条 ─────────────────────────────────────────────
+    function renderPolicyBar(status) {
+      const textEl = document.getElementById("policyBarText");
+      const metaEl = document.getElementById("policyBarMeta");
+      if (!textEl || !metaEl) return;
+      if (!status || !status.available) {
+        textEl.textContent = "节点离线，无法获取当前策略配置。";
+        metaEl.textContent = "--";
+        return;
+      }
+      const parts = [];
+      const mainState = String(status.main_state || "UNKNOWN");
+      const riskLevel = String(status.risk_level || "NONE");
+      const visionEnabled = status.vision_contribution && status.vision_contribution.vision_state
+        ? String(status.vision_contribution.vision_state) !== "NONE"
+        : false;
+      const audioEnabled = status.audio_enabled != null ? Boolean(status.audio_enabled) : false;
+
+      parts.push(`主链状态 ${mainState}`);
+      parts.push(`当前风险等级 ${riskLevel}`);
+      if (visionEnabled) parts.push("视觉因子 已接入");
+      else parts.push("视觉因子 未激活");
+      if (audioEnabled) parts.push("音频因子 已接入");
+      else parts.push("音频因子 未激活");
+
+      const nodeId = String(status.node_id || "NODE_A1");
+      const ts = status.last_update_ms ? formatTime(Number(status.last_update_ms)) : "--";
+      textEl.textContent = parts.join(" · ");
+      metaEl.textContent = `${nodeId} · 更新 ${ts}`;
+    }
+
+    // ── 判定解释区 ────────────────────────────────────────────────
+    function renderVerdictBox(eventObject, eventRecord) {
+      const sentence = document.getElementById("verdictSentence");
+      const fVision = document.getElementById("verdictFactorVision");
+      const fRid    = document.getElementById("verdictFactorRid");
+      const fWl     = document.getElementById("verdictFactorWl");
+      const fRisk   = document.getElementById("verdictFactorRisk");
+      const fFlags  = document.getElementById("verdictFactorFlags");
+      if (!sentence) return;
+
+      if (!eventObject && !eventRecord) {
+        sentence.textContent = "选择事件后显示判定原因。";
+        [fVision, fRid, fWl, fRisk, fFlags].forEach(el => el && el.classList.remove("active"));
+        return;
+      }
+
+      const ev = eventObject || {};
+      const rec = eventRecord || {};
+
+      const visionState   = String(ev.vision_state   || rec.vision_state   || "NONE").toUpperCase();
+      const ridStatus     = String(ev.rid_status      || rec.rid_status     || "NONE").toUpperCase();
+      const wlStatus      = String(ev.wl_status       || rec.wl_status      || "WL_UNKNOWN").toUpperCase();
+      const riskScore     = Number(ev.risk_score      ?? rec.risk_score     ?? 0);
+      const reasonFlags   = String(ev.reason_flags    || rec.reason_flags   || "NONE");
+      const triggerFlags  = String(ev.trigger_flags   || rec.trigger_flags  || "NONE");
+      const closeReason   = String(ev.close_reason    || rec.close_reason   || "NONE");
+      const eventState    = String(ev.event_state     || rec.event_state    || "NONE").toUpperCase();
+
+      // 判断各因子是否激活
+      const visionActive = visionState === "VISION_LOCKED" || visionState === "LOCKED";
+      const ridActive    = ridStatus !== "NONE" && ridStatus !== "UNKNOWN" && ridStatus !== "RID_UNKNOWN";
+      const wlActive     = wlStatus === "NOT_WL" || wlStatus === "WL_BLOCKED";
+      const riskActive   = riskScore >= 50;
+      const flagsActive  = reasonFlags !== "NONE" && reasonFlags !== "" && reasonFlags !== "0";
+
+      if (fVision) fVision.classList.toggle("active", visionActive);
+      if (fRid)    fRid.classList.toggle("active",    ridActive);
+      if (fWl)     fWl.classList.toggle("active",     wlActive);
+      if (fRisk)   fRisk.classList.toggle("active",   riskActive);
+      if (fFlags)  fFlags.classList.toggle("active",  flagsActive);
+
+      // 生成一句话解释
+      const causes = [];
+      if (visionActive) causes.push("视觉锁定目标");
+      if (ridActive)    causes.push(`身份识别（${ridStatus}）`);
+      if (wlActive)     causes.push("目标不在白名单");
+      if (riskActive)   causes.push(`风险分达 ${riskScore.toFixed(1)}`);
+      if (flagsActive)  causes.push(`风险标志 ${reasonFlags}`);
+
+      let text = "";
+      if (causes.length === 0) {
+        text = "当前事件成因数据不足，无法自动生成判定解释。";
+      } else {
+        const causeStr = causes.join("、");
+        if (eventState === "CLOSED") {
+          text = `事件已关闭（${closeReason}）。触发成因：${causeStr}。`;
+        } else {
+          text = `事件由以下成因共同触发：${causeStr}。`;
+        }
+        if (triggerFlags !== "NONE" && triggerFlags !== "") {
+          text += ` 触发动作：${triggerFlags}。`;
+        }
+      }
+      sentence.textContent = text;
+    }
+
+    function resetVerdictBox() {
+      renderVerdictBox(null, null);
+    }
+
     function resetNodeEventDetail(message = "当前还没有可回放的事件证据。") {
       setEventReplayMode(false);
       currentNodeEventDetail = null;
@@ -2869,6 +3279,7 @@
       renderNodeEventExports({ records: [] });
       refreshNodeEventExportButton(null);
       setEventDetailActionMessage("选择事件后可导出证据。");
+      resetVerdictBox();
     }
 
     function renderNodeEventDetail(detail) {
@@ -2971,6 +3382,7 @@
 
       refreshNodeEventExportButton(currentNodeEventDetail);
       setEventDetailActionMessage(`已绑定事件 ${eventId}，可导出证据 JSON。`);
+      renderVerdictBox(eventObject, eventRecord);
     }
 
     async function setSelectedNodeEvent(eventId) {
@@ -3454,6 +3866,15 @@
       return response.json();
     }
 
+    async function loadNodes() {
+      try {
+        const response = await fetch(apiUrlWithMode("/api/nodes"), { cache: "no-store" });
+        return response.json();
+      } catch (_) {
+        return { ok: false, nodes: [] };
+      }
+    }
+
     async function loadCaptures() {
       const response = await fetch(apiUrlWithMode(CAPTURES_API_URL), { cache: "no-store" });
       return response.json();
@@ -3507,9 +3928,10 @@
 
     async function loadData() {
       try {
-        const [status, nodeStatus, captures, nodeEvents, testSession, testResult, testResults, sessionTimelineSessions, dataSource] = await Promise.all([
+        const [status, nodeStatus, nodesPayload, captures, nodeEvents, testSession, testResult, testResults, sessionTimelineSessions, dataSource] = await Promise.all([
           loadStatus(),
           loadNodeStatus(),
+          loadNodes(),
           loadCaptures(),
           loadNodeEvents(),
           loadTestSession(),
@@ -3527,6 +3949,10 @@
         ]);
         setRuntimeStatus(status);
         setNodeStatus(nodeStatus);
+        renderPolicyBar(nodeStatus);
+        const nodes = (nodesPayload && Array.isArray(nodesPayload.nodes)) ? nodesPayload.nodes : [nodeStatus];
+        renderNodeList(nodes);
+        renderSystemSummary(nodes, captures);
         setParameterStatus(nodeStatus);
         setTestSession(testSession);
         setTestResult(testResult);
