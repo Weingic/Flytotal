@@ -1607,6 +1607,38 @@ def build_mock_bundle() -> dict[str, object]:
                 risk_score=17.0,
             ),
         },
+        # A2 mock 节点（离线状态，用于多节点卡片框架验证）
+        "node_a2_status": {
+            "ok": True,
+            "available": True,
+            "online": 0,
+            "stale_age_ms": 9800,
+            "node_id": "A2",
+            "node_zone": "ZONE_SOUTH",
+            "main_state": "IDLE",
+            "hunter_state": "IDLE",
+            "gimbal_state": "IDLE",
+            "rid_status": "RID_UNKNOWN",
+            "wl_status": "WL_UNKNOWN",
+            "risk_level": "NONE",
+            "risk_score": 0.0,
+            "event_status": "NONE",
+            "event_active": 0,
+            "event_id": "NONE",
+            "last_event_id": "NONE",
+            "track_active_count": 0,
+            "track_confirmed_count": 0,
+            "event_opened_count": 0,
+            "event_closed_count": 0,
+            "last_update_ms": now_ms - 9800,
+            "data_source_mode": "mock",
+            "vision_state": "VISION_IDLE",
+            "vision_contribution": compute_vision_contribution(
+                vision_state="VISION_IDLE",
+                wl_status="WL_UNKNOWN",
+                risk_score=0.0,
+            ),
+        },
         "node_events": {
             "ok": True,
             "available": True,
@@ -1972,6 +2004,23 @@ def create_handler(
                     return
                 self.send_json(load_json_file(status_file))
                 return
+            if parsed.path == "/api/nodes":
+                # 返回所有节点状态列表，供多节点卡片渲染使用。
+                # mock 模式：A1（在线）+ A2（离线）；真实模式：仅 A1。
+                if mock_mode and isinstance(mock_bundle, dict):
+                    a1 = mock_bundle.get("node_status", {"ok": True, "available": False})
+                    a2 = mock_bundle.get("node_a2_status", {"ok": True, "available": False, "node_id": "A2", "online": 0})
+                    self.send_json({"ok": True, "nodes": [a1, a2]})
+                    return
+                node_payload = load_json_file(node_status_file)
+                vision_payload = load_json_file(status_file)
+                v_state = str(vision_payload.get("vision_state", "NONE") or "NONE").strip().upper() or "NONE"
+                wl = str(node_payload.get("wl_status", node_payload.get("whitelist_status", "WL_UNKNOWN")) or "WL_UNKNOWN").strip().upper() or "WL_UNKNOWN"
+                node_payload["vision_state"] = v_state
+                node_payload["vision_contribution"] = compute_vision_contribution(v_state, wl)
+                self.send_json({"ok": True, "nodes": [node_payload]})
+                return
+
             if parsed.path == "/api/node-status":
                 if mock_mode and isinstance(mock_bundle, dict):
                     self.send_json(mock_bundle.get("node_status", {"ok": True, "available": False}))
