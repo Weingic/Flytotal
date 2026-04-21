@@ -208,16 +208,27 @@ def normalize_fields(prefix: str, raw_fields: dict[str, str]) -> dict[str, Any]:
     return normalized
 
 
-def build_initial_status() -> dict[str, Any]:
+def infer_node_metadata_from_output_file(output_file: Path) -> tuple[str, str, str]:
+    file_name = output_file.stem.upper()
+    if "A2" in file_name:
+        return "A2", "ZONE_SOUTH", "EDGE"
+    return "A1", "ZONE_NORTH", "EDGE"
+
+
+def build_initial_status(
+    default_node_id: str,
+    default_node_zone: str,
+    default_node_role: str,
+) -> dict[str, Any]:
     now_ms = int(time.time() * 1000)
     return {
         "ok": True,
         "available": False,
         "online": 0,
         "stale_age_ms": 0,
-        "node_id": "",
-        "node_zone": "",
-        "node_role": "",
+        "node_id": default_node_id,
+        "node_zone": default_node_zone,
+        "node_role": default_node_role,
         "main_state": "UNKNOWN",
         "hunter_state": "UNKNOWN",
         "gimbal_state": "UNKNOWN",
@@ -256,7 +267,7 @@ def build_initial_status() -> dict[str, Any]:
         "event_level": "NONE",
         "event_status": "NONE",
         "event_reason": "NONE",
-        "source_node": "",
+        "source_node": default_node_id,
         "handover_last_result": "NONE",
         "handover_last_target": "NONE",
         "handover_last_ts": 0,
@@ -952,6 +963,9 @@ def main() -> int:
     parser.add_argument("--last-event-interval", type=float, default=3.0, help="Seconds between automatic LASTEVENT commands, set to 0 to disable")
     parser.add_argument("--boot-wait", type=float, default=1.0, help="Seconds to wait after opening the port before polling")
     parser.add_argument("--offline-timeout", type=float, default=5.0, help="Seconds without a valid update before marking Node A offline")
+    parser.add_argument("--default-node-id", default="", help="Fallback node_id written before the first valid serial frame")
+    parser.add_argument("--default-node-zone", default="", help="Fallback node_zone written before the first valid serial frame")
+    parser.add_argument("--default-node-role", default="", help="Fallback node_role written before the first valid serial frame")
     parser.add_argument("--echo", action="store_true", help="Echo raw serial lines to the terminal")
     args = parser.parse_args()
 
@@ -962,7 +976,11 @@ def main() -> int:
     result_file = resolve_path(args.result_file)
     result_history_file = resolve_path(args.result_history_file)
     session_log_dir = resolve_path(args.session_log_dir)
-    status = build_initial_status()
+    inferred_node_id, inferred_node_zone, inferred_node_role = infer_node_metadata_from_output_file(output_file)
+    default_node_id = str(args.default_node_id or "").strip() or inferred_node_id
+    default_node_zone = str(args.default_node_zone or "").strip() or inferred_node_zone
+    default_node_role = str(args.default_node_role or "").strip() or inferred_node_role
+    status = build_initial_status(default_node_id, default_node_zone, default_node_role)
     event_history = load_records_from_payload(events_file)
     event_store = load_records_from_payload(event_store_file)
     result_history = load_records_from_payload(result_history_file)
@@ -1008,6 +1026,10 @@ def main() -> int:
         print(f"Writing test result to: {result_file.as_posix()}")
         print(f"Writing test result history to: {result_history_file.as_posix()}")
         print(f"Writing session timeline logs to: {session_log_dir.as_posix()}")
+        print(
+            "Default node metadata: "
+            f"id={default_node_id}, zone={default_node_zone}, role={default_node_role}"
+        )
 
         time.sleep(max(args.boot_wait, 0.0))
 

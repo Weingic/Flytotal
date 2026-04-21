@@ -26,9 +26,9 @@
 
 ## 双桥接推荐启动方式
 - A1
-  - `python tools/node_a_serial_bridge_NodeA串口桥接.py --port COM4 --output-file captures/latest_node_status.json --events-file captures/latest_node_events.json`
+  - `python tools/node_a_serial_bridge_NodeA串口桥接.py --port COM4 --default-node-id A1 --default-node-zone ZONE_NORTH --default-node-role EDGE --output-file captures/latest_node_status.json --events-file captures/latest_node_events.json`
 - A2
-  - `python tools/node_a_serial_bridge_NodeA串口桥接.py --port COM5 --output-file captures/latest_node_status_A2.json --events-file captures/latest_node_events_A2.json`
+  - `python tools/node_a_serial_bridge_NodeA串口桥接.py --port COM5 --default-node-id A2 --default-node-zone ZONE_SOUTH --default-node-role EDGE --output-file captures/latest_node_status_A2.json --events-file captures/latest_node_events_A2.json`
 
 ## 页面验收观察点
 - A1 / A2 在线状态
@@ -39,4 +39,5 @@
 
 ## 说明
 - 当前 `NodeConfig::NodeId` 在 [include/AppConfig.h](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/include/AppConfig.h:10) 默认是 `A1`。
-- A2 真机联调时，需要 A2 固件或构建配置明确输出 `A2`。
+- bridge 在首帧到来前会先写入默认节点元数据；若未显式传参，会按输出文件名对 `latest_node_status_A2.json` 这类文件自动推断为 `A2 / ZONE_SOUTH / EDGE`。
+- A2 真机联调时，仍需要 A2 固件或构建配置尽快输出真实 `node=A2`，避免后续状态长期停留在默认值。
