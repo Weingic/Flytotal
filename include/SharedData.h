@@ -150,6 +150,7 @@ struct SystemData {
     UplinkState uplink_state;
     bool event_active;
     char event_id[32];
+    char node_id[16];
     unsigned long timestamp_ms;
 };
 
@@ -202,6 +203,7 @@ struct UnifiedOutputSnapshot {
     UplinkState uplink_state;
     bool event_active;
     char event_id[32];
+    char node_id[16];
     unsigned long timestamp_ms;
 };
 
@@ -219,6 +221,10 @@ struct EventObject {
     uint32_t trigger_flags;
     RidStatus rid_status;
     WhitelistStatus wl_status;
+    char prev_node_id[16];
+    char handoff_from[16];
+    char handoff_to[16];
+    char continuity_hint[24];
     unsigned long start_time_ms;
     unsigned long close_time_ms;
     float last_x_mm;
