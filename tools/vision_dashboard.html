@@ -315,6 +315,45 @@
       background: rgba(255, 248, 239, 0.9);
     }
 
+    .fleet-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      padding: 0 20px 20px;
+    }
+
+    .fleet-card {
+      padding: 16px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: var(--panel-strong);
+      display: grid;
+      gap: 10px;
+    }
+
+    .fleet-card.stale {
+      opacity: 0.8;
+    }
+
+    .fleet-card-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .fleet-card-title {
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+
+    .fleet-card-meta {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
     .concept-row {
       display: flex;
       flex-wrap: wrap;
@@ -396,6 +435,17 @@
       background: rgba(216, 90, 42, 0.14);
       border-color: rgba(216, 90, 42, 0.28);
       color: var(--accent);
+    }
+
+    .filter-link {
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .filter-link.disabled {
+      pointer-events: none;
+      opacity: 0.55;
     }
 
     .mini-btn {
@@ -820,6 +870,8 @@
       .facts { grid-template-columns: 1fr; }
       .concept-grid { grid-template-columns: 1fr; }
       .suite-gate-grid { grid-template-columns: 1fr; }
+      .fleet-grid { grid-template-columns: 1fr; }
+      .fleet-card-meta { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -842,6 +894,96 @@
           当前为模拟链路模式：页面状态来自服务端 mock 数据，不代表实时硬件状态。
         </div>
       </div>
+    </section>
+
+    <section style="margin-bottom: 18px;">
+      <article class="panel records-panel">
+        <div class="table-header">
+          <h2 class="section-title">答辩 / 冻结摘要</h2>
+          <p class="section-subtitle">把 Day5-Day7 的结果、检查单和冻结资产收成一块，便于现场快速判断“这版能不能讲”。</p>
+        </div>
+        <div class="summary-strip" id="deliverySummaryStrip">
+          <div class="summary-chip" id="deliveryReadyChip">交付 WAIT</div>
+          <div class="summary-chip" id="deliverySuiteChip">套件 WAIT</div>
+          <div class="summary-chip" id="deliveryContractChip">契约 WAIT</div>
+          <div class="summary-chip" id="deliveryEvidenceChip">证据 WAIT</div>
+          <div class="summary-chip" id="deliveryBundleChip">打包 WAIT</div>
+          <div class="summary-chip" id="deliveryExportChip">导出 0</div>
+        </div>
+        <div class="result-overview" id="deliveryOverviewValue">总览：等待结果与冻结资产加载。</div>
+        <div class="result-concepts">
+          <div class="concept-row">
+            <div class="concept-title">今日可汇报资产</div>
+            <div id="deliveryAssetStateValue"><span class="pill normal">等待数据</span></div>
+          </div>
+          <div class="concept-grid">
+            <div class="concept-item">
+              <strong>误报率</strong>
+              <span id="deliveryFalseAlarmValue">等待结果</span>
+            </div>
+            <div class="concept-item">
+              <strong>E2E 延迟</strong>
+              <span id="deliveryE2EValue">等待结果</span>
+            </div>
+            <div class="concept-item">
+              <strong>证据闭环</strong>
+              <span id="deliveryClosureValue">等待结果</span>
+            </div>
+            <div class="concept-item">
+              <strong>自动验收</strong>
+              <span id="deliveryAcceptanceValue">等待结果</span>
+            </div>
+          </div>
+          <div class="filter-bar" id="deliveryDocsBar" style="padding: 12px 0 0;">
+            <a class="filter-btn filter-link disabled" id="deliveryDemoLink" href="#" target="_blank" rel="noreferrer">演示检查单</a>
+            <a class="filter-btn filter-link disabled" id="deliveryRecoveryLink" href="#" target="_blank" rel="noreferrer">现场恢复检查单</a>
+            <a class="filter-btn filter-link disabled" id="deliveryFreezeLink" href="#" target="_blank" rel="noreferrer">冻结清单</a>
+            <a class="filter-btn filter-link disabled" id="deliveryStabilityLink" href="#" target="_blank" rel="noreferrer">Day5 稳定性记录</a>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section style="margin-bottom: 18px;">
+      <article class="panel records-panel">
+        <div class="table-header">
+          <h2 class="section-title">双节点基线</h2>
+          <p class="section-subtitle">这里先把 A1 / A2 的最低契约和在线状态收口到同一块，先验收“双节点同时在线不报错”。</p>
+        </div>
+        <div class="summary-strip">
+          <div class="summary-chip" id="fleetOnlineChip">在线 0/2</div>
+          <div class="summary-chip" id="fleetTrackChip">Tracks 0</div>
+          <div class="summary-chip" id="fleetEventChip">Events 0</div>
+          <div class="summary-chip" id="fleetContractChip">字段 WAIT</div>
+        </div>
+        <div class="result-overview" id="fleetOverviewValue">总览：等待 A1 / A2 节点状态。</div>
+        <div class="fleet-grid" id="nodeFleetGrid">
+          <div class="fleet-card stale">
+            <div class="fleet-card-header">
+              <div class="fleet-card-title">A1</div>
+              <span class="pill offline">OFFLINE</span>
+            </div>
+            <div class="fleet-card-meta">
+              <div class="fact"><span class="label">最后上报</span><div class="value">--</div></div>
+              <div class="fact"><span class="label">当前 tracks / events</span><div class="value">0 / 0</div></div>
+              <div class="fact"><span class="label">节点 / 来源</span><div class="value">NONE / NONE</div></div>
+              <div class="fact"><span class="label">连续性</span><div class="value">SINGLE_NODE</div></div>
+            </div>
+          </div>
+          <div class="fleet-card stale">
+            <div class="fleet-card-header">
+              <div class="fleet-card-title">A2</div>
+              <span class="pill offline">OFFLINE</span>
+            </div>
+            <div class="fleet-card-meta">
+              <div class="fact"><span class="label">最后上报</span><div class="value">--</div></div>
+              <div class="fact"><span class="label">当前 tracks / events</span><div class="value">0 / 0</div></div>
+              <div class="fact"><span class="label">节点 / 来源</span><div class="value">NONE / NONE</div></div>
+              <div class="fact"><span class="label">连续性</span><div class="value">SINGLE_NODE</div></div>
+            </div>
+          </div>
+        </div>
+      </article>
     </section>
 
     <section class="status-grid">
@@ -1297,6 +1439,7 @@
     const CAPTURES_API_URL = "/api/captures?limit=10";
     const STATUS_API_URL = "/api/status";
     const NODE_STATUS_API_URL = "/api/node-status";
+    const NODE_FLEET_API_URL = "/api/node-fleet-status";
     const NODE_EVENTS_API_URL = "/api/node-events?limit=10";
     const NODE_EVENT_DETAIL_API_URL = "/api/node-event-detail";
     const NODE_EVENT_EXPORT_API_URL = "/api/node-event-export";
@@ -1307,6 +1450,7 @@
     const TEST_SESSION_API_URL = "/api/test-session";
     const TEST_RESULT_API_URL = "/api/test-result";
     const TEST_RESULTS_API_URL = "/api/test-results?limit=10";
+    const DELIVERY_ASSETS_API_URL = "/api/delivery-assets";
     const SESSION_TIMELINE_API_URL = "/api/session-timeline?limit=40";
     const SESSION_TIMELINE_SESSIONS_API_URL = "/api/session-timeline-sessions?limit=8";
     const SESSION_CAPTURES_API_URL = "/api/session-captures?limit=12";
@@ -1321,6 +1465,7 @@
     let selectedSuiteCheckRecord = null;
     let latestSessionTimelineRecords = [];
     let latestSessionTimelineSessions = [];
+    let latestNodeFleet = [];
     let latestNodeEventRecords = [];
     let selectedNodeEventId = "";
     let lastSyncedActiveEventId = "NONE";
@@ -1346,6 +1491,7 @@
       fallback: 0,
       total: 0,
     };
+    let latestDeliveryAssets = null;
     const SUITE_GATE_DEFINITIONS_BY_SUITE = {
       standard_acceptance: [
         {
@@ -3019,6 +3165,165 @@
       });
     }
 
+    function bindDeliveryLink(elementId, asset) {
+      const link = document.getElementById(elementId);
+      if (!link) return;
+      const hasLink = asset && asset.available && asset.file_url;
+      link.classList.toggle("disabled", !hasLink);
+      link.href = hasLink ? asset.file_url : "#";
+      link.title = asset && asset.file_path ? asset.file_path : "";
+    }
+
+    function setDeliveryAssets(payload) {
+      latestDeliveryAssets = payload && typeof payload === "object" ? payload : null;
+      const summary = latestDeliveryAssets?.summary || {};
+      const metrics = latestDeliveryAssets?.metrics || {};
+      const docs = Array.isArray(latestDeliveryAssets?.assets?.docs) ? latestDeliveryAssets.assets.docs : [];
+
+      document.getElementById("deliveryReadyChip").innerHTML = semanticPill(
+        summary.deliverable_ready ? "交付 READY" : "交付 WAIT",
+        summary.deliverable_ready ? "ok" : "warn"
+      );
+      document.getElementById("deliverySuiteChip").innerHTML = semanticPill(
+        summary.suite_ok ? "套件 PASS" : "套件 WAIT",
+        summary.suite_ok ? "ok" : "warn"
+      );
+      document.getElementById("deliveryContractChip").innerHTML = semanticPill(
+        summary.contract_ok ? "契约 PASS" : "契约 WAIT",
+        summary.contract_ok ? "ok" : "warn"
+      );
+      document.getElementById("deliveryEvidenceChip").innerHTML = semanticPill(
+        summary.evidence_ready ? "证据 READY" : "证据 WAIT",
+        summary.evidence_ready ? "ok" : "warn"
+      );
+      document.getElementById("deliveryBundleChip").innerHTML = semanticPill(
+        summary.bundle_result || "NONE",
+        String(summary.bundle_result || "").toUpperCase() === "PASS" ? "ok" : "warn"
+      );
+      document.getElementById("deliveryExportChip").textContent =
+        `导出 ${Number(summary.latest_export_available ? 1 : 0)}/${Number(latestDeliveryAssets?.assets?.latest_export_count || 0)}`;
+
+      const falseAlarm = metrics.false_alarm || {};
+      const e2e = metrics.e2e_latency || {};
+      const closure = metrics.evidence_closure || {};
+      const acceptance = metrics.acceptance || {};
+      document.getElementById("deliveryFalseAlarmValue").textContent =
+        falseAlarm.available ? `${falseAlarm.result_label || "NONE"} / 误报 ${falseAlarm.false_alarm_count ?? 0} / 率 ${Number(falseAlarm.false_alarm_rate || 0).toFixed(2)}` : "暂无正式结果";
+      document.getElementById("deliveryE2EValue").textContent =
+        e2e.available ? `${e2e.result_label || "NONE"} / 均值 ${Number(e2e.latency_ms_mean || 0).toFixed(0)}ms / P95 ${Number(e2e.latency_ms_p95 || 0).toFixed(0)}ms` : "暂无正式结果";
+      document.getElementById("deliveryClosureValue").textContent =
+        closure.available ? `${closure.result || "NONE"} / 事件 ${closure.latest_event_id || "NONE"} / 绑定抓拍 ${closure.bound_capture_count ?? 0}` : "暂无闭环记录";
+      document.getElementById("deliveryAcceptanceValue").textContent =
+        acceptance.available ? `deliverable=${acceptance.deliverable_ready ? "YES" : "NO"} / suite=${acceptance.suite_ok ? "PASS" : "WAIT"} / contract=${acceptance.contract_ok ? "PASS" : "WAIT"}` : "暂无验收快照";
+
+      const docsByLabel = new Map(docs.map((item) => [item.label, item]));
+      bindDeliveryLink("deliveryDemoLink", docsByLabel.get("演示检查单"));
+      bindDeliveryLink("deliveryRecoveryLink", docsByLabel.get("现场恢复检查单"));
+      bindDeliveryLink("deliveryFreezeLink", docsByLabel.get("冻结清单"));
+      bindDeliveryLink("deliveryStabilityLink", docsByLabel.get("Day5 稳定性记录"));
+
+      const assetState = document.getElementById("deliveryAssetStateValue");
+      const allDocsReady = docs.length > 0 && docs.every((item) => item && item.available);
+      assetState.innerHTML = allDocsReady
+        ? '<span class="pill ok">检查单与冻结文档齐备</span>'
+        : '<span class="pill warn">文档仍有待补齐</span>';
+
+      const overview = document.getElementById("deliveryOverviewValue");
+      if (!latestDeliveryAssets?.available) {
+        overview.className = "result-overview";
+        overview.textContent = "总览：还没有可用的交付资产。";
+        return;
+      }
+
+      const bundleWarnings = Number(summary.bundle_warning_count || 0);
+      const bundleFailures = Number(summary.bundle_failure_count || 0);
+      if (bundleFailures > 0 || !summary.deliverable_ready) {
+        overview.className = "result-overview warn";
+        overview.textContent =
+          `总览：当前仍有 ${bundleFailures} 个失败项、${bundleWarnings} 个告警项，适合做内部演示，不建议直接当最终冻结版。`;
+        return;
+      }
+
+      overview.className = "result-overview ok";
+      overview.textContent =
+        `总览：这版已具备答辩/汇报资产。套件=${summary.suite_ok ? "PASS" : "WAIT"}，契约=${summary.contract_ok ? "PASS" : "WAIT"}，证据=${summary.evidence_ready ? "READY" : "WAIT"}。`;
+    }
+
+    function renderNodeFleet(payload) {
+      const safePayload = payload && typeof payload === "object" ? payload : {};
+      const nodes = Array.isArray(safePayload.nodes) ? safePayload.nodes : [];
+      latestNodeFleet = nodes;
+      document.getElementById("fleetOnlineChip").textContent =
+        `在线 ${Number(safePayload.online_count || 0)}/${Math.max(nodes.length, 2)}`;
+      document.getElementById("fleetTrackChip").textContent =
+        `Tracks ${Number(safePayload.total_tracks || 0)}`;
+      document.getElementById("fleetEventChip").textContent =
+        `Events ${Number(safePayload.total_events || 0)}`;
+
+      const requiredFields = ["node_id", "source_node", "prev_node_id", "handoff_from", "handoff_to", "continuity_hint"];
+      const hasContract = nodes.every((node) => requiredFields.every((field) => Object.prototype.hasOwnProperty.call(node, field)));
+      document.getElementById("fleetContractChip").innerHTML = semanticPill(
+        hasContract ? "字段 READY" : "字段 WAIT",
+        hasContract ? "ok" : "warn"
+      );
+
+      const overview = document.getElementById("fleetOverviewValue");
+      if (!nodes.length) {
+        overview.className = "result-overview";
+        overview.textContent = "总览：还没有双节点状态数据。";
+        return;
+      }
+      const onlineCount = Number(safePayload.online_count || 0);
+      if (onlineCount < 2) {
+        overview.className = "result-overview warn";
+        overview.textContent = `总览：当前仅 ${onlineCount} 个节点在线，双节点联调基线尚未齐。`;
+      } else {
+        overview.className = "result-overview ok";
+        overview.textContent = "总览：A1 / A2 已同时在线，双节点字段契约可用于继续联调。";
+      }
+
+      const expectedLabels = ["A1", "A2"];
+      const normalizedNodes = expectedLabels.map((label) => nodes.find((item) => String(item.label || item.node_id || "") === label) || {
+        label,
+        online: 0,
+        last_update_ms: 0,
+        track_count: 0,
+        events_count: 0,
+        node_id: "NONE",
+        source_node: "NONE",
+        continuity_hint: "SINGLE_NODE",
+        handoff_from: "NONE",
+        handoff_to: "NONE",
+        prev_node_id: "NONE",
+        main_state: "UNKNOWN",
+        risk_level: "NONE",
+        event_status: "NONE",
+      });
+
+      const container = document.getElementById("nodeFleetGrid");
+      container.innerHTML = normalizedNodes.map((node) => {
+        const online = Number(node.online || 0) === 1;
+        const continuity = String(node.continuity_hint || "SINGLE_NODE");
+        const handoffText = [node.handoff_from || "NONE", node.handoff_to || "NONE"].join(" -> ");
+        return `
+          <div class="fleet-card ${online ? "" : "stale"}">
+            <div class="fleet-card-header">
+              <div class="fleet-card-title">${node.label || node.node_id || "NODE"}</div>
+              ${onlinePill(node.online, node.stale_age_ms || 0)}
+            </div>
+            <div class="fleet-card-meta">
+              <div class="fact"><span class="label">最后上报</span><div class="value">${formatTime(node.last_update_ms || 0)}</div></div>
+              <div class="fact"><span class="label">当前 tracks / events</span><div class="value">${Number(node.track_count || 0)} / ${Number(node.events_count || 0)}</div></div>
+              <div class="fact"><span class="label">节点 / 来源</span><div class="value">${node.node_id || "NONE"} / ${node.source_node || "NONE"}</div></div>
+              <div class="fact"><span class="label">连续性</span><div class="value">${semanticPill(continuity, continuity.includes("HANDOFF") ? "handover" : "normal")}</div></div>
+              <div class="fact"><span class="label">接力方向</span><div class="value">${handoffText}</div></div>
+              <div class="fact"><span class="label">主状态 / 风险</span><div class="value">${node.main_state || "UNKNOWN"} / ${node.risk_level || "NONE"} / ${node.event_status || "NONE"}</div></div>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
     function setTestResultsSummary(records) {
       const safeRecords = Array.isArray(records) ? records : [];
       const summary = {
@@ -3454,6 +3759,11 @@
       return response.json();
     }
 
+    async function loadNodeFleet() {
+      const response = await fetch(apiUrlWithMode(NODE_FLEET_API_URL), { cache: "no-store" });
+      return response.json();
+    }
+
     async function loadCaptures() {
       const response = await fetch(apiUrlWithMode(CAPTURES_API_URL), { cache: "no-store" });
       return response.json();
@@ -3476,6 +3786,11 @@
 
     async function loadTestResults() {
       const response = await fetch(apiUrlWithMode(TEST_RESULTS_API_URL), { cache: "no-store" });
+      return response.json();
+    }
+
+    async function loadDeliveryAssets() {
+      const response = await fetch(apiUrlWithMode(DELIVERY_ASSETS_API_URL), { cache: "no-store" });
       return response.json();
     }
 
@@ -3507,14 +3822,16 @@
 
     async function loadData() {
       try {
-        const [status, nodeStatus, captures, nodeEvents, testSession, testResult, testResults, sessionTimelineSessions, dataSource] = await Promise.all([
+        const [status, nodeStatus, nodeFleet, captures, nodeEvents, testSession, testResult, testResults, deliveryAssets, sessionTimelineSessions, dataSource] = await Promise.all([
           loadStatus(),
           loadNodeStatus(),
+          loadNodeFleet(),
           loadCaptures(),
           loadNodeEvents(),
           loadTestSession(),
           loadTestResult(),
           loadTestResults(),
+          loadDeliveryAssets(),
           loadSessionTimelineSessions(),
           loadDataSource(),
         ]);
@@ -3527,9 +3844,11 @@
         ]);
         setRuntimeStatus(status);
         setNodeStatus(nodeStatus);
+        renderNodeFleet(nodeFleet);
         setParameterStatus(nodeStatus);
         setTestSession(testSession);
         setTestResult(testResult);
+        setDeliveryAssets(deliveryAssets);
         setLatest(captures.latest || null);
         renderRecords(captures.records || []);
         ensureSelectedNodeEvent(nodeEvents.records || []);
@@ -3568,6 +3887,8 @@
           `<tr><td colspan="5">读取本轮抓拍证据失败：${error}</td></tr>`;
         document.getElementById("eventExportHistoryBody").innerHTML =
           `<tr><td colspan="4">读取导出历史失败：${error}</td></tr>`;
+        document.getElementById("deliveryOverviewValue").className = "result-overview warn";
+        document.getElementById("deliveryOverviewValue").textContent = `总览：读取交付摘要失败：${error}`;
       }
     }
 

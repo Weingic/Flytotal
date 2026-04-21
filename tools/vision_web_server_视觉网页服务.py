@@ -70,6 +70,14 @@ def to_record_url(file_path: Path, capture_dir: Path) -> str:
         return "/captures/" + file_path.name
 
 
+def to_static_url(file_path: Path, root_dir: Path, prefix: str) -> str:
+    try:
+        relative = file_path.resolve().relative_to(root_dir.resolve())
+    except ValueError:
+        return ""
+    return prefix.rstrip("/") + "/" + "/".join(quote(part) for part in relative.parts)
+
+
 def load_capture_records(capture_log_file: Path, capture_dir: Path) -> list[dict[str, object]]:
     # 抓拍记录来自 vision_bridge_视觉桥接.py 输出的 CSV。
     # 这里把它整理成网页和接口都能直接消费的对象列表。
@@ -186,6 +194,62 @@ def build_node_events_payload(events_file: Path, limit: int) -> dict[str, object
         "count": len(normalized_records),
         "latest": latest,
         "records": trimmed,
+    }
+
+
+def build_node_brief_payload(node_label: str, status_file: Path, events_file: Path, event_limit: int = 20) -> dict[str, object]:
+    status_payload = load_json_file(status_file)
+    events_payload = build_node_events_payload(events_file, event_limit)
+    records = events_payload.get("records", []) if isinstance(events_payload, dict) else []
+    if not isinstance(records, list):
+        records = []
+    latest_event = records[0] if records else {}
+    node_id = str(
+        status_payload.get(
+            "node_id",
+            latest_event.get("node_id", latest_event.get("source_node", node_label)),
+        )
+        or node_label
+    ).strip() or node_label
+    last_update_ms = safe_int(status_payload.get("last_update_ms", status_payload.get("timestamp_ms", 0)))
+    return {
+        "label": node_label,
+        "available": bool(status_payload.get("available", False)),
+        "online": safe_int(status_payload.get("online", 0)),
+        "node_id": node_id,
+        "source_node": str(latest_event.get("source_node", node_id) or node_id),
+        "last_update_ms": last_update_ms,
+        "stale_age_ms": safe_int(status_payload.get("stale_age_ms", 0)),
+        "track_count": 1 if safe_int(status_payload.get("track_active", 0)) == 1 else 0,
+        "events_count": 1 if safe_int(status_payload.get("event_active", 0)) == 1 else 0,
+        "history_event_count": len(records),
+        "main_state": str(status_payload.get("main_state", "UNKNOWN") or "UNKNOWN"),
+        "risk_level": str(status_payload.get("risk_level", "NONE") or "NONE"),
+        "last_event_id": str(status_payload.get("last_event_id", latest_event.get("event_id", "NONE")) or "NONE"),
+        "last_reason": str(status_payload.get("last_reason", latest_event.get("reason", "NONE")) or "NONE"),
+        "event_status": str(status_payload.get("event_status", latest_event.get("event_status", "NONE")) or "NONE"),
+        "prev_node_id": str(status_payload.get("prev_node_id", latest_event.get("prev_node_id", "NONE")) or "NONE"),
+        "handoff_from": str(status_payload.get("handoff_from", latest_event.get("handoff_from", "NONE")) or "NONE"),
+        "handoff_to": str(status_payload.get("handoff_to", latest_event.get("handoff_to", "NONE")) or "NONE"),
+        "continuity_hint": str(status_payload.get("continuity_hint", latest_event.get("continuity_hint", "SINGLE_NODE")) or "SINGLE_NODE"),
+        "status_file": status_file.as_posix(),
+        "events_file": events_file.as_posix(),
+    }
+
+
+def build_node_fleet_payload(node_specs: list[tuple[str, Path, Path]]) -> dict[str, object]:
+    nodes = [build_node_brief_payload(label, status_file, events_file) for label, status_file, events_file in node_specs]
+    online_count = sum(1 for item in nodes if safe_int(item.get("online", 0)) == 1)
+    total_tracks = sum(safe_int(item.get("track_count", 0)) for item in nodes)
+    total_events = sum(safe_int(item.get("events_count", 0)) for item in nodes)
+    return {
+        "ok": True,
+        "available": bool(nodes),
+        "count": len(nodes),
+        "online_count": online_count,
+        "total_tracks": total_tracks,
+        "total_events": total_events,
+        "nodes": nodes,
     }
 
 
@@ -960,6 +1024,120 @@ def build_test_results_payload(test_results_file: Path, session_log_dir: Path, l
         "count": len(merged_records),
         "latest": latest,
         "records": trimmed,
+    }
+
+
+def build_file_asset(path: Path, root_dir: Path, prefix: str, label: str) -> dict[str, object]:
+    available = path.exists() and path.is_file()
+    return {
+        "label": label,
+        "available": available,
+        "file_name": path.name,
+        "file_path": path.as_posix(),
+        "file_url": to_static_url(path, root_dir, prefix) if available else "",
+    }
+
+
+def build_delivery_assets_payload(
+    capture_dir: Path,
+    event_export_dir: Path,
+    session_log_dir: Path,
+    docs_dir: Path,
+) -> dict[str, object]:
+    false_alarm_file = capture_dir / "false_alarm_result.json"
+    e2e_file = capture_dir / "e2e_latency_result.json"
+    acceptance_snapshot_file = capture_dir / "latest_acceptance_snapshot.json"
+    bundle_readiness_file = capture_dir / "latest_delivery_bundle_readiness_report.json"
+    evidence_closure_file = capture_dir / "latest_single_node_evidence_closure_report.json"
+    auto_acceptance_file = capture_dir / "latest_411_acceptance_auto_report.json"
+
+    false_alarm_payload = load_json_file(false_alarm_file)
+    e2e_payload = load_json_file(e2e_file)
+    acceptance_snapshot = load_json_file(acceptance_snapshot_file)
+    bundle_readiness = load_json_file(bundle_readiness_file)
+    evidence_closure = load_json_file(evidence_closure_file)
+    auto_acceptance = load_json_file(auto_acceptance_file)
+    latest_exports = build_node_event_exports_payload(event_export_dir, capture_dir, 1, "")
+    latest_export = latest_exports.get("latest") if isinstance(latest_exports, dict) else None
+    latest_export_available = isinstance(latest_export, dict)
+
+    demo_checklist = docs_dir / "2026-04-21_demo_checklist_w3（第三周演示检查单）.md"
+    recovery_checklist = docs_dir / "2026-04-21_recovery_checklist_w3（第三周现场恢复检查单）.md"
+    freeze_manifest = docs_dir / "2026-04-21_freeze_manifest_w3（第三周冻结清单）.md"
+    stability_record = docs_dir / "2026-04-21_day5_win_stability_record（Day5 Win稳定性记录）.md"
+
+    docs_assets = [
+        build_file_asset(demo_checklist, docs_dir, "/docs", "演示检查单"),
+        build_file_asset(recovery_checklist, docs_dir, "/docs", "现场恢复检查单"),
+        build_file_asset(freeze_manifest, docs_dir, "/docs", "冻结清单"),
+        build_file_asset(stability_record, docs_dir, "/docs", "Day5 稳定性记录"),
+    ]
+
+    latest_session_logs = load_session_log_files(session_log_dir)
+
+    return {
+        "ok": True,
+        "available": True,
+        "updated_ms": int(time.time() * 1000),
+        "summary": {
+            "deliverable_ready": bool(acceptance_snapshot.get("deliverable_ready", False)),
+            "suite_ok": bool(acceptance_snapshot.get("suite_ok", False)),
+            "contract_ok": bool(acceptance_snapshot.get("contract_ok", False)),
+            "evidence_ready": bool(acceptance_snapshot.get("evidence_ready", False)),
+            "bundle_result": str(bundle_readiness.get("result", "NONE") or "NONE"),
+            "bundle_failure_count": safe_int(bundle_readiness.get("failure_count", 0)),
+            "bundle_warning_count": safe_int(bundle_readiness.get("warning_count", 0)),
+            "auto_acceptance_result": str(auto_acceptance.get("result", "NONE") or "NONE"),
+            "auto_acceptance_passed": safe_int(auto_acceptance.get("passed", 0)),
+            "auto_acceptance_failed": safe_int(auto_acceptance.get("failed", 0)),
+            "latest_export_available": latest_export_available,
+            "latest_session_count": len(latest_session_logs),
+        },
+        "metrics": {
+            "false_alarm": {
+                "available": bool(false_alarm_payload.get("available", False)),
+                "result_label": str(false_alarm_payload.get("result_label", "NONE") or "NONE"),
+                "false_alarm_count": safe_int(false_alarm_payload.get("false_alarm_count", 0)),
+                "false_alarm_rate": safe_float(false_alarm_payload.get("false_alarm_rate", 0.0)),
+                "scenario": str(false_alarm_payload.get("scenario", "NONE") or "NONE"),
+                "file_path": false_alarm_file.as_posix(),
+                "file_url": to_static_url(false_alarm_file, capture_dir, "/captures") if false_alarm_file.exists() else "",
+            },
+            "e2e_latency": {
+                "available": bool(e2e_payload.get("available", True)) if e2e_file.exists() else False,
+                "result_label": str(e2e_payload.get("result_label", "NONE") or "NONE"),
+                "latency_ms_mean": safe_float(e2e_payload.get("latency_ms_mean", 0.0)),
+                "latency_ms_p95": safe_float(e2e_payload.get("latency_ms_p95", 0.0)),
+                "sample_count": safe_int(e2e_payload.get("sample_count", 0)),
+                "file_path": e2e_file.as_posix(),
+                "file_url": to_static_url(e2e_file, capture_dir, "/captures") if e2e_file.exists() else "",
+            },
+            "evidence_closure": {
+                "available": bool(evidence_closure.get("available", True)) if evidence_closure_file.exists() else False,
+                "result": str(evidence_closure.get("result", "NONE") or "NONE"),
+                "latest_event_id": str(evidence_closure.get("latest_event_id", "NONE") or "NONE"),
+                "node_id": str(evidence_closure.get("node_id", "NONE") or "NONE"),
+                "bound_capture_count": safe_int((evidence_closure.get("counts", {}) or {}).get("bound_capture_count", 0)),
+                "warning_count": safe_int(evidence_closure.get("warning_count", 0)),
+                "file_path": evidence_closure_file.as_posix(),
+                "file_url": to_static_url(evidence_closure_file, capture_dir, "/captures") if evidence_closure_file.exists() else "",
+            },
+            "acceptance": {
+                "available": bool(acceptance_snapshot.get("available", False)) if acceptance_snapshot_file.exists() else False,
+                "deliverable_ready": bool(acceptance_snapshot.get("deliverable_ready", False)),
+                "suite_ok": bool(acceptance_snapshot.get("suite_ok", False)),
+                "contract_ok": bool(acceptance_snapshot.get("contract_ok", False)),
+                "evidence_ready": bool(acceptance_snapshot.get("evidence_ready", False)),
+                "file_path": acceptance_snapshot_file.as_posix(),
+                "file_url": to_static_url(acceptance_snapshot_file, capture_dir, "/captures") if acceptance_snapshot_file.exists() else "",
+            },
+        },
+        "assets": {
+            "docs": docs_assets,
+            "latest_export": latest_export if latest_export_available else None,
+            "latest_export_count": safe_int(latest_exports.get("count", 0)) if isinstance(latest_exports, dict) else 0,
+            "latest_session_file": latest_session_logs[0].name if latest_session_logs else "",
+        },
     }
 
 
@@ -1896,11 +2074,14 @@ def build_mock_node_event_export_payload(mock_bundle: dict[str, object], event_i
 def create_handler(
     dashboard_file: Path,
     capture_dir: Path,
+    docs_dir: Path,
     capture_log_file: Path,
     status_file: Path,
     active_event_file: Path,
     node_status_file: Path,
+    node_status_file_a2: Path,
     node_events_file: Path,
+    node_events_file_a2: Path,
     node_event_store_file: Path,
     test_session_file: Path,
     test_result_file: Path,
@@ -1989,6 +2170,123 @@ def create_handler(
                 node_payload["vision_state"] = v_state
                 node_payload["vision_contribution"] = compute_vision_contribution(v_state, wl)
                 self.send_json(node_payload)
+                return
+            if parsed.path == "/api/node-fleet-status":
+                if mock_mode and isinstance(mock_bundle, dict):
+                    a1_status = dict(mock_bundle.get("node_status", {"ok": True, "available": False}))
+                    a2_status = dict(a1_status)
+                    a2_status.update(
+                        {
+                            "node_id": "A2",
+                            "node_zone": "ZONE_SOUTH",
+                            "main_state": "DETECTING",
+                            "risk_level": "SUSPICIOUS",
+                            "risk_score": 43.0,
+                            "track_active": 1,
+                            "track_confirmed": 0,
+                            "event_active": 1,
+                            "event_id": "A2-0000000002-MOCK",
+                            "last_event_id": "A2-0000000002-MOCK",
+                            "last_reason": "EVENT_OPENED",
+                            "event_status": "OPEN",
+                            "source_node": "A2",
+                            "continuity_hint": "HANDOFF_PENDING",
+                            "prev_node_id": "A1",
+                            "handoff_from": "A1",
+                            "handoff_to": "A2",
+                        }
+                    )
+                    a2_events = {
+                        "ok": True,
+                        "available": True,
+                        "count": 1,
+                        "latest": {
+                            "event_id": "A2-0000000002-MOCK",
+                            "reason": "EVENT_OPENED",
+                            "event_status": "OPEN",
+                            "source_node": "A2",
+                            "prev_node_id": "A1",
+                            "handoff_from": "A1",
+                            "handoff_to": "A2",
+                            "continuity_hint": "HANDOFF_PENDING",
+                        },
+                        "records": [
+                            {
+                                "event_id": "A2-0000000002-MOCK",
+                                "reason": "EVENT_OPENED",
+                                "event_status": "OPEN",
+                                "source_node": "A2",
+                                "prev_node_id": "A1",
+                                "handoff_from": "A1",
+                                "handoff_to": "A2",
+                                "continuity_hint": "HANDOFF_PENDING",
+                            }
+                        ],
+                    }
+                    a1_latest = ((mock_bundle.get("node_events", {}) or {}).get("latest", {}) if isinstance(mock_bundle.get("node_events", {}), dict) else {})
+                    a1_node = {
+                        "label": "A1",
+                        "available": bool(a1_status.get("available", False)),
+                        "online": safe_int(a1_status.get("online", 0)),
+                        "node_id": str(a1_status.get("node_id", "A1") or "A1"),
+                        "source_node": str(a1_latest.get("source_node", a1_status.get("node_id", "A1")) or "A1"),
+                        "last_update_ms": safe_int(a1_status.get("last_update_ms", 0)),
+                        "stale_age_ms": safe_int(a1_status.get("stale_age_ms", 0)),
+                        "track_count": 1 if safe_int(a1_status.get("track_active", 0)) == 1 else 0,
+                        "events_count": 1 if safe_int(a1_status.get("event_active", 0)) == 1 else 0,
+                        "history_event_count": safe_int(((mock_bundle.get("node_events", {}) or {}).get("count", 0)), 0),
+                        "main_state": str(a1_status.get("main_state", "UNKNOWN") or "UNKNOWN"),
+                        "risk_level": str(a1_status.get("risk_level", "NONE") or "NONE"),
+                        "last_event_id": str(a1_status.get("last_event_id", "NONE") or "NONE"),
+                        "last_reason": str(a1_status.get("last_reason", "NONE") or "NONE"),
+                        "event_status": str(a1_status.get("event_status", "NONE") or "NONE"),
+                        "prev_node_id": "NONE",
+                        "handoff_from": "NONE",
+                        "handoff_to": "NONE",
+                        "continuity_hint": "SINGLE_NODE",
+                    }
+                    a2_node = {
+                        "label": "A2",
+                        "available": True,
+                        "online": 1,
+                        "node_id": "A2",
+                        "source_node": "A2",
+                        "last_update_ms": safe_int(a2_status.get("last_update_ms", 0)),
+                        "stale_age_ms": safe_int(a2_status.get("stale_age_ms", 0)),
+                        "track_count": 1,
+                        "events_count": 1,
+                        "history_event_count": 1,
+                        "main_state": "DETECTING",
+                        "risk_level": "SUSPICIOUS",
+                        "last_event_id": "A2-0000000002-MOCK",
+                        "last_reason": "EVENT_OPENED",
+                        "event_status": "OPEN",
+                        "prev_node_id": "A1",
+                        "handoff_from": "A1",
+                        "handoff_to": "A2",
+                        "continuity_hint": "HANDOFF_PENDING",
+                    }
+                    self.send_json(
+                        {
+                            "ok": True,
+                            "available": True,
+                            "count": 2,
+                            "online_count": 2,
+                            "total_tracks": 2,
+                            "total_events": 2,
+                            "nodes": [a1_node, a2_node],
+                            "data_source_mode": "mock",
+                        }
+                    )
+                    return
+                self.send_json(
+                    build_node_fleet_payload(
+                        [
+                            ("A1", node_status_file, node_events_file),
+                            ("A2", node_status_file_a2, node_events_file_a2),
+                        ]
+                    )
+                )
                 return
             if parsed.path == "/api/node-events":
                 limit = default_limit
@@ -2147,6 +2445,14 @@ def create_handler(
                     return
                 self.send_json(build_test_results_payload(test_results_file, session_log_dir, limit))
                 return
+            if parsed.path == "/api/delivery-assets":
+                if mock_mode and isinstance(mock_bundle, dict):
+                    payload = build_delivery_assets_payload(capture_dir, event_export_dir, session_log_dir, docs_dir)
+                    payload["data_source_mode"] = "mock"
+                    self.send_json(payload)
+                    return
+                self.send_json(build_delivery_assets_payload(capture_dir, event_export_dir, session_log_dir, docs_dir))
+                return
             if parsed.path == "/api/session-timeline":
                 limit = default_limit
                 session_name = ""
@@ -2250,6 +2556,20 @@ def create_handler(
                 mime_type, _ = mimetypes.guess_type(target.name)
                 self.serve_file(target, mime_type or "application/octet-stream")
                 return
+            if parsed.path.startswith("/docs/"):
+                relative = parsed.path.removeprefix("/docs/").strip("/")
+                target = (docs_dir / relative).resolve()
+                try:
+                    target.relative_to(docs_dir.resolve())
+                except ValueError:
+                    self.send_error(HTTPStatus.FORBIDDEN, "Invalid docs path")
+                    return
+                if not target.exists() or not target.is_file():
+                    self.send_error(HTTPStatus.NOT_FOUND, "Document not found")
+                    return
+                mime_type, _ = mimetypes.guess_type(target.name)
+                self.serve_file(target, mime_type or "text/markdown; charset=utf-8")
+                return
 
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
@@ -2288,11 +2608,14 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1", help="Bind host")
     parser.add_argument("--port", type=int, default=8765, help="Bind port")
     parser.add_argument("--capture-dir", type=Path, default=Path("captures"), help="Directory containing capture images")
+    parser.add_argument("--docs-dir", type=Path, default=Path("docs"), help="Directory containing freeze manifests and checklists")
     parser.add_argument("--capture-log-file", type=Path, default=Path("captures/capture_records.csv"), help="CSV file containing capture metadata")
     parser.add_argument("--status-file", type=Path, default=Path("captures/latest_status.json"), help="JSON file containing latest vision runtime status")
     parser.add_argument("--active-event-file", type=Path, default=Path("captures/latest_active_event.json"), help="JSON file storing current active event selected in dashboard")
     parser.add_argument("--node-status-file", type=Path, default=Path("captures/latest_node_status.json"), help="JSON file containing latest Node A serial status")
+    parser.add_argument("--node-status-file-a2", type=Path, default=Path("captures/latest_node_status_A2.json"), help="JSON file containing latest Node A2 serial status")
     parser.add_argument("--node-events-file", type=Path, default=Path("captures/latest_node_events.json"), help="JSON file containing recent Node A event history")
+    parser.add_argument("--node-events-file-a2", type=Path, default=Path("captures/latest_node_events_A2.json"), help="JSON file containing recent Node A2 event history")
     parser.add_argument("--node-event-store-file", type=Path, default=Path("captures/latest_node_event_store.json"), help="JSON file containing persistent Node A event records")
     parser.add_argument("--test-session-file", type=Path, default=Path("captures/latest_test_session.json"), help="JSON file containing the current test session state")
     parser.add_argument("--test-result-file", type=Path, default=Path("captures/latest_test_result.json"), help="JSON file containing the latest summarized test result")
@@ -2305,11 +2628,14 @@ def main() -> int:
     args = parser.parse_args()
 
     capture_dir = resolve_path(args.capture_dir)
+    docs_dir = resolve_path(args.docs_dir)
     capture_log_file = resolve_path(args.capture_log_file)
     status_file = resolve_path(args.status_file)
     active_event_file = resolve_path(args.active_event_file)
     node_status_file = resolve_path(args.node_status_file)
+    node_status_file_a2 = resolve_path(args.node_status_file_a2)
     node_events_file = resolve_path(args.node_events_file)
+    node_events_file_a2 = resolve_path(args.node_events_file_a2)
     node_event_store_file = resolve_path(args.node_event_store_file)
     test_session_file = resolve_path(args.test_session_file)
     test_result_file = resolve_path(args.test_result_file)
@@ -2320,11 +2646,14 @@ def main() -> int:
     handler = create_handler(
         dashboard_file,
         capture_dir,
+        docs_dir,
         capture_log_file,
         status_file,
         active_event_file,
         node_status_file,
+        node_status_file_a2,
         node_events_file,
+        node_events_file_a2,
         node_event_store_file,
         test_session_file,
         test_result_file,
@@ -2338,11 +2667,14 @@ def main() -> int:
     server = ThreadingHTTPServer((args.host, args.port), handler)
     print(f"Vision dashboard server listening on http://{args.host}:{args.port}")
     print(f"Capture dir: {capture_dir.as_posix()}")
+    print(f"Docs dir: {docs_dir.as_posix()}")
     print(f"Capture log: {capture_log_file.as_posix()}")
     print(f"Vision status file: {status_file.as_posix()}")
     print(f"Active event file: {active_event_file.as_posix()}")
     print(f"Node status file: {node_status_file.as_posix()}")
+    print(f"Node status A2 file: {node_status_file_a2.as_posix()}")
     print(f"Node events file: {node_events_file.as_posix()}")
+    print(f"Node events A2 file: {node_events_file_a2.as_posix()}")
     print(f"Node event store file: {node_event_store_file.as_posix()}")
     print(f"Test session file: {test_session_file.as_posix()}")
     print(f"Test result file: {test_result_file.as_posix()}")
