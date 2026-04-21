@@ -60,6 +60,7 @@ SystemData globalData = {
     UPLINK_READY,
     false,
     {0},
+    {0},
     0
 };
 portMUX_TYPE dataMutex = portMUX_INITIALIZER_UNLOCKED;
@@ -159,6 +160,34 @@ struct EventPolicySnapshot {
     uint8_t capture_count_in_budget;
     unsigned long capture_cooldown_remaining_ms;
     const char *last_capture_reason;
+};
+
+struct NodeRiskContext {
+    char node_id[16];
+    unsigned long last_seen_ms;
+    uint32_t track_id;
+    bool track_active;
+    bool track_confirmed;
+    float risk_score;
+    RiskLevel risk_level;
+    HunterState hunter_state;
+    HunterState pending_hunter_state;
+    unsigned long hunter_state_since_ms;
+    unsigned long hunter_pending_since_ms;
+    char event_id[32];
+    char prev_node_id[16];
+    char continuity_hint[24];
+};
+
+struct NodeRuntimeCache {
+    bool initialized;
+    char node_id[16];
+    unsigned long updated_ms;
+    unsigned long last_seen_ms;
+    EventLifecycleState lifecycle;
+    NodeRiskContext risk_context;
+    char handoff_from[16];
+    char handoff_to[16];
 };
 
 struct ManualServoControl {
@@ -274,6 +303,8 @@ struct SummaryStats {
     char last_event_id[32];
 };
 
+constexpr size_t HostCommandMaxLength = 192;
+
 String commandBuffer;
 float runtimeKp = GimbalConfig::PredictorKp;
 float runtimeKd = GimbalConfig::PredictorKd;
@@ -331,6 +362,10 @@ EventObject currentEventObject = {
     0u,
     RID_NONE,
     WL_UNKNOWN,
+    {0},
+    {0},
+    {0},
+    {0},
     0,
     0,
     0.0f,
@@ -338,6 +373,8 @@ EventObject currentEventObject = {
     0.0f,
     0.0f
 };
+constexpr size_t NodeRuntimeCacheSlots = 4;
+NodeRuntimeCache nodeRuntimeCaches[NodeRuntimeCacheSlots] = {};
 SummaryStats summaryStats = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0f, 0, 0.0f, 0.0f, {0}};
 bool servosAttached = false;
 constexpr unsigned long SimTrackHoldMs = 1500;
@@ -1863,12 +1900,187 @@ void copyEventId(char *destination, size_t destination_size, const char *source)
     snprintf(destination, destination_size, "%s", source);
 }
 
+const char *normalizeOptionalField(const char *value, const char *fallback = "NONE") {
+    return (value != nullptr && value[0] != '\0') ? value : fallback;
+}
+
+NodeRuntimeCache *findNodeRuntimeCacheLocked(const char *node_id) {
+    const char *resolved_node_id = normalizeOptionalField(node_id, NodeConfig::NodeId);
+    for (size_t index = 0; index < NodeRuntimeCacheSlots; ++index) {
+        if (!nodeRuntimeCaches[index].initialized) {
+            continue;
+        }
+        if (strcmp(nodeRuntimeCaches[index].node_id, resolved_node_id) == 0) {
+            return &nodeRuntimeCaches[index];
+        }
+    }
+    return nullptr;
+}
+
+NodeRuntimeCache *ensureNodeRuntimeCacheLocked(const char *node_id) {
+    const char *resolved_node_id = normalizeOptionalField(node_id, NodeConfig::NodeId);
+    if (NodeRuntimeCache *existing = findNodeRuntimeCacheLocked(resolved_node_id)) {
+        return existing;
+    }
+
+    NodeRuntimeCache *available_slot = nullptr;
+    for (size_t index = 0; index < NodeRuntimeCacheSlots; ++index) {
+        if (!nodeRuntimeCaches[index].initialized) {
+            available_slot = &nodeRuntimeCaches[index];
+            break;
+        }
+    }
+
+    if (available_slot == nullptr) {
+        available_slot = &nodeRuntimeCaches[0];
+    }
+
+    *available_slot = {};
+    available_slot->initialized = true;
+    copyEventId(available_slot->node_id, sizeof(available_slot->node_id), resolved_node_id);
+    copyEventId(available_slot->risk_context.node_id, sizeof(available_slot->risk_context.node_id), resolved_node_id);
+    copyEventId(available_slot->risk_context.prev_node_id, sizeof(available_slot->risk_context.prev_node_id), "NONE");
+    copyEventId(available_slot->risk_context.continuity_hint, sizeof(available_slot->risk_context.continuity_hint), "SINGLE_NODE");
+    copyEventId(available_slot->handoff_from, sizeof(available_slot->handoff_from), "NONE");
+    copyEventId(available_slot->handoff_to, sizeof(available_slot->handoff_to), "NONE");
+    copyEventId(available_slot->lifecycle.capture_budget_event_id, sizeof(available_slot->lifecycle.capture_budget_event_id), "NONE");
+    copyEventId(available_slot->lifecycle.last_capture_reason, sizeof(available_slot->lifecycle.last_capture_reason), "NONE");
+    return available_slot;
+}
+
+void populateCurrentEventContinuityFieldsLocked() {
+    if (currentEventObject.node_id[0] == '\0') {
+        copyEventId(currentEventObject.node_id, sizeof(currentEventObject.node_id), NodeConfig::NodeId);
+    }
+    if (currentEventObject.prev_node_id[0] == '\0') {
+        copyEventId(currentEventObject.prev_node_id, sizeof(currentEventObject.prev_node_id), "NONE");
+    }
+    if (currentEventObject.handoff_from[0] == '\0') {
+        copyEventId(currentEventObject.handoff_from, sizeof(currentEventObject.handoff_from), "NONE");
+    }
+    if (currentEventObject.handoff_to[0] == '\0') {
+        copyEventId(currentEventObject.handoff_to, sizeof(currentEventObject.handoff_to), "NONE");
+    }
+    if (currentEventObject.continuity_hint[0] == '\0') {
+        copyEventId(currentEventObject.continuity_hint, sizeof(currentEventObject.continuity_hint), "SINGLE_NODE");
+    }
+
+    if (handoverStatus.pending && handoverStatus.pending_target[0] != '\0') {
+        copyEventId(currentEventObject.handoff_from, sizeof(currentEventObject.handoff_from), NodeConfig::NodeId);
+        copyEventId(currentEventObject.handoff_to, sizeof(currentEventObject.handoff_to), handoverStatus.pending_target);
+        copyEventId(currentEventObject.continuity_hint, sizeof(currentEventObject.continuity_hint), "HANDOFF_PENDING");
+    } else if (strcmp(handoverStatus.last_result, "EMITTED") == 0 && handoverStatus.last_target[0] != '\0') {
+        copyEventId(currentEventObject.handoff_from, sizeof(currentEventObject.handoff_from), NodeConfig::NodeId);
+        copyEventId(currentEventObject.handoff_to, sizeof(currentEventObject.handoff_to), handoverStatus.last_target);
+        copyEventId(currentEventObject.continuity_hint, sizeof(currentEventObject.continuity_hint), "HANDOFF_OUTBOUND");
+    }
+}
+
+void syncActiveNodeRuntimeCacheLocked() {
+    NodeRuntimeCache *cache = ensureNodeRuntimeCacheLocked(NodeConfig::NodeId);
+    if (cache == nullptr) {
+        return;
+    }
+
+    cache->initialized = true;
+    copyEventId(cache->node_id, sizeof(cache->node_id), NodeConfig::NodeId);
+    cache->updated_ms = globalData.timestamp_ms;
+    cache->last_seen_ms = globalData.radar_track.last_seen_ms;
+    cache->lifecycle = eventLifecycleState;
+    if (cache->lifecycle.capture_budget_event_id[0] == '\0') {
+        copyEventId(cache->lifecycle.capture_budget_event_id, sizeof(cache->lifecycle.capture_budget_event_id), "NONE");
+    }
+    if (cache->lifecycle.last_capture_reason[0] == '\0') {
+        copyEventId(cache->lifecycle.last_capture_reason, sizeof(cache->lifecycle.last_capture_reason), "NONE");
+    }
+
+    populateCurrentEventContinuityFieldsLocked();
+    copyEventId(cache->handoff_from, sizeof(cache->handoff_from), normalizeOptionalField(currentEventObject.handoff_from));
+    copyEventId(cache->handoff_to, sizeof(cache->handoff_to), normalizeOptionalField(currentEventObject.handoff_to));
+
+    NodeRiskContext &risk_context = cache->risk_context;
+    copyEventId(risk_context.node_id, sizeof(risk_context.node_id), NodeConfig::NodeId);
+    risk_context.last_seen_ms = globalData.radar_track.last_seen_ms;
+    risk_context.track_id = globalData.radar_track.track_id;
+    risk_context.track_active = globalData.radar_track.is_active;
+    risk_context.track_confirmed = globalData.radar_track.is_confirmed;
+    risk_context.risk_score = globalData.risk_score;
+    risk_context.risk_level = deriveRiskLevel(globalData);
+    risk_context.hunter_state = globalData.hunter_state;
+    risk_context.pending_hunter_state = globalData.hunter_pending_state;
+    risk_context.hunter_state_since_ms = globalData.hunter_state_since_ms;
+    risk_context.hunter_pending_since_ms = globalData.hunter_pending_since_ms;
+    copyEventId(risk_context.event_id, sizeof(risk_context.event_id), normalizeOptionalField(currentEventObject.event_id));
+    copyEventId(risk_context.prev_node_id, sizeof(risk_context.prev_node_id), normalizeOptionalField(currentEventObject.prev_node_id));
+    copyEventId(risk_context.continuity_hint, sizeof(risk_context.continuity_hint), normalizeOptionalField(currentEventObject.continuity_hint, "SINGLE_NODE"));
+}
+
+NodeRuntimeCache getActiveNodeRuntimeCacheSnapshot() {
+    NodeRuntimeCache snapshot = {};
+    portENTER_CRITICAL(&dataMutex);
+    if (NodeRuntimeCache *cache = ensureNodeRuntimeCacheLocked(NodeConfig::NodeId)) {
+        snapshot = *cache;
+    }
+    portEXIT_CRITICAL(&dataMutex);
+
+    if (!snapshot.initialized) {
+        snapshot.initialized = true;
+        copyEventId(snapshot.node_id, sizeof(snapshot.node_id), NodeConfig::NodeId);
+        copyEventId(snapshot.risk_context.node_id, sizeof(snapshot.risk_context.node_id), NodeConfig::NodeId);
+        copyEventId(snapshot.risk_context.prev_node_id, sizeof(snapshot.risk_context.prev_node_id), "NONE");
+        copyEventId(snapshot.risk_context.continuity_hint, sizeof(snapshot.risk_context.continuity_hint), "SINGLE_NODE");
+        copyEventId(snapshot.handoff_from, sizeof(snapshot.handoff_from), "NONE");
+        copyEventId(snapshot.handoff_to, sizeof(snapshot.handoff_to), "NONE");
+        copyEventId(snapshot.lifecycle.capture_budget_event_id, sizeof(snapshot.lifecycle.capture_budget_event_id), "NONE");
+        copyEventId(snapshot.lifecycle.last_capture_reason, sizeof(snapshot.lifecycle.last_capture_reason), "NONE");
+    }
+    return snapshot;
+}
+
 void clearCaptureLifecycleTelemetry(EventLifecycleState &state) {
     state.last_capture_ms = 0;
     state.capture_budget_track_id = 0;
     state.capture_count_in_budget = 0;
     state.capture_budget_event_id[0] = '\0';
     state.last_capture_reason[0] = '\0';
+}
+
+void normalizeCurrentEventCapturePathLocked() {
+    if (currentEventObject.capture_path[0] == '\0') {
+        copyEventId(currentEventObject.capture_path, sizeof(currentEventObject.capture_path), "NONE");
+    }
+}
+
+const char *captureEvidenceStateForEvent(const EventObject &event_object, const EventLifecycleState &lifecycle) {
+    bool has_event_identity =
+        event_object.event_id[0] != '\0' ||
+        event_object.event_state != EVENT_STATE_NONE ||
+        event_object.active;
+    bool has_capture_path =
+        event_object.capture_path[0] != '\0' &&
+        strcmp(event_object.capture_path, "NONE") != 0;
+
+    if (!has_event_identity) {
+        return "NO_EVENT";
+    }
+    if (has_capture_path) {
+        return "BOUND";
+    }
+    if (lifecycle.last_capture_ms > 0 || lifecycle.last_capture_reason[0] != '\0') {
+        return "MISSING_TOLERATED";
+    }
+    if (event_object.active) {
+        return "PENDING";
+    }
+    return "MISSING_TOLERATED";
+}
+
+void refreshManualSimulationSnapshotLocked(unsigned long now) {
+    copyEventId(globalData.node_id, sizeof(globalData.node_id), NodeConfig::NodeId);
+    globalData.timestamp_ms = now;
+    globalData.trigger_flags = computeTriggerFlags(globalData);
+    globalData.capture_ready = globalData.vision_locked && globalData.trigger_capture;
+    syncActiveNodeRuntimeCacheLocked();
 }
 
 void syncCaptureLifecycleTelemetry(
@@ -1892,6 +2104,7 @@ void syncCaptureLifecycleTelemetry(
         sizeof(eventLifecycleState.last_capture_reason),
         last_capture_reason != nullptr ? last_capture_reason : "NONE"
     );
+    syncActiveNodeRuntimeCacheLocked();
     portEXIT_CRITICAL(&dataMutex);
 }
 
@@ -1957,6 +2170,8 @@ void resetRuntimeEventStatus(const char *close_reason = nullptr) {
     if (close_reason != nullptr && close_reason[0] != '\0' && had_event_context) {
         currentEventObject.active = false;
         currentEventObject.event_state = EVENT_STATE_CLOSED;
+        copyEventId(currentEventObject.node_id, sizeof(currentEventObject.node_id), NodeConfig::NodeId);
+        populateCurrentEventContinuityFieldsLocked();
         copyEventId(currentEventObject.close_reason, sizeof(currentEventObject.close_reason), close_reason);
         if (currentEventObject.capture_path[0] == '\0') {
             copyEventId(currentEventObject.capture_path, sizeof(currentEventObject.capture_path), "NONE");
@@ -1976,6 +2191,10 @@ void resetRuntimeEventStatus(const char *close_reason = nullptr) {
         currentEventObject.trigger_flags = 0;
         currentEventObject.rid_status = RID_NONE;
         currentEventObject.wl_status = WL_UNKNOWN;
+        copyEventId(currentEventObject.prev_node_id, sizeof(currentEventObject.prev_node_id), "NONE");
+        copyEventId(currentEventObject.handoff_from, sizeof(currentEventObject.handoff_from), "NONE");
+        copyEventId(currentEventObject.handoff_to, sizeof(currentEventObject.handoff_to), "NONE");
+        copyEventId(currentEventObject.continuity_hint, sizeof(currentEventObject.continuity_hint), "SINGLE_NODE");
         currentEventObject.start_time_ms = 0;
         currentEventObject.close_time_ms = 0;
         currentEventObject.last_x_mm = 0.0f;
@@ -1987,6 +2206,7 @@ void resetRuntimeEventStatus(const char *close_reason = nullptr) {
     }
     globalData.event_active = false;
     globalData.event_id[0] = '\0';
+    syncActiveNodeRuntimeCacheLocked();
     portEXIT_CRITICAL(&dataMutex);
 }
 
@@ -2005,6 +2225,7 @@ void syncRuntimeEventStatus(const SystemData &snapshot, const EventContext &cont
         currentEventObject.close_time_ms = 0;
         copyEventId(currentEventObject.event_id, sizeof(currentEventObject.event_id), context.event_id);
         copyEventId(currentEventObject.node_id, sizeof(currentEventObject.node_id), NodeConfig::NodeId);
+        populateCurrentEventContinuityFieldsLocked();
         if (currentEventObject.capture_path[0] == '\0') {
             copyEventId(currentEventObject.capture_path, sizeof(currentEventObject.capture_path), "NONE");
         }
@@ -2034,10 +2255,16 @@ void syncRuntimeEventStatus(const SystemData &snapshot, const EventContext &cont
                 copyEventId(currentEventObject.capture_path, sizeof(currentEventObject.capture_path), "NONE");
             }
             currentEventObject.close_time_ms = snapshot.timestamp_ms;
+            copyEventId(currentEventObject.node_id, sizeof(currentEventObject.node_id), NodeConfig::NodeId);
+            populateCurrentEventContinuityFieldsLocked();
         } else if (currentEventObject.event_state == EVENT_STATE_NONE) {
             currentEventObject.close_reason[0] = '\0';
             currentEventObject.capture_path[0] = '\0';
             currentEventObject.close_time_ms = 0;
+            copyEventId(currentEventObject.prev_node_id, sizeof(currentEventObject.prev_node_id), "NONE");
+            copyEventId(currentEventObject.handoff_from, sizeof(currentEventObject.handoff_from), "NONE");
+            copyEventId(currentEventObject.handoff_to, sizeof(currentEventObject.handoff_to), "NONE");
+            copyEventId(currentEventObject.continuity_hint, sizeof(currentEventObject.continuity_hint), "SINGLE_NODE");
         }
         currentEventObject.risk_score = snapshot.risk_score;
         currentEventObject.risk_level = deriveRiskLevel(snapshot);
@@ -2050,6 +2277,7 @@ void syncRuntimeEventStatus(const SystemData &snapshot, const EventContext &cont
         currentEventObject.last_vx_mm_s = snapshot.radar_track.vx_mm_s;
         currentEventObject.last_vy_mm_s = snapshot.radar_track.vy_mm_s;
     }
+    syncActiveNodeRuntimeCacheLocked();
     portEXIT_CRITICAL(&dataMutex);
 }
 
@@ -2064,7 +2292,11 @@ RuntimeEventStatus getRuntimeEventStatusSnapshot() {
 EventLifecycleState getEventLifecycleStateSnapshot() {
     EventLifecycleState snapshot = {};
     portENTER_CRITICAL(&dataMutex);
-    snapshot = eventLifecycleState;
+    if (NodeRuntimeCache *cache = findNodeRuntimeCacheLocked(NodeConfig::NodeId)) {
+        snapshot = cache->lifecycle;
+    } else {
+        snapshot = eventLifecycleState;
+    }
     portEXIT_CRITICAL(&dataMutex);
     return snapshot;
 }
@@ -2072,6 +2304,7 @@ EventLifecycleState getEventLifecycleStateSnapshot() {
 void setEventLifecycleState(const EventLifecycleState &state) {
     portENTER_CRITICAL(&dataMutex);
     eventLifecycleState = state;
+    syncActiveNodeRuntimeCacheLocked();
     portEXIT_CRITICAL(&dataMutex);
 }
 
@@ -2080,6 +2313,9 @@ EventObject getCurrentEventObjectSnapshot() {
     portENTER_CRITICAL(&dataMutex);
     snapshot = currentEventObject;
     portEXIT_CRITICAL(&dataMutex);
+    if (snapshot.event_id[0] != '\0' && snapshot.capture_path[0] == '\0') {
+        copyEventId(snapshot.capture_path, sizeof(snapshot.capture_path), "NONE");
+    }
     return snapshot;
 }
 
@@ -2137,6 +2373,7 @@ UnifiedOutputSnapshot buildUnifiedOutputSnapshot(const SystemData &snapshot, con
         sizeof(unified.event_id),
         status.active && status.event_id[0] != '\0' ? status.event_id : "NONE"
     );
+    copyEventId(unified.node_id, sizeof(unified.node_id), normalizeOptionalField(snapshot.node_id, NodeConfig::NodeId));
     unified.timestamp_ms = snapshot.timestamp_ms;
     return unified;
 }
@@ -2248,7 +2485,9 @@ bool shouldEmitFlowDebug() {
 void refreshDerivedSystemFields(unsigned long now) {
     portENTER_CRITICAL(&dataMutex);
     globalData.timestamp_ms = now;
+    copyEventId(globalData.node_id, sizeof(globalData.node_id), NodeConfig::NodeId);
     globalData.trigger_flags = computeTriggerFlags(globalData);
+    syncActiveNodeRuntimeCacheLocked();
     portEXIT_CRITICAL(&dataMutex);
 }
 
@@ -2256,13 +2495,16 @@ void setUplinkState(UplinkState state, unsigned long now) {
     portENTER_CRITICAL(&dataMutex);
     globalData.uplink_state = state;
     globalData.timestamp_ms = now;
+    copyEventId(globalData.node_id, sizeof(globalData.node_id), NodeConfig::NodeId);
     globalData.trigger_flags = computeTriggerFlags(globalData);
+    syncActiveNodeRuntimeCacheLocked();
     portEXIT_CRITICAL(&dataMutex);
 }
 
 void stageOutputSnapshot(SystemData &snapshot, UplinkState state, unsigned long now) {
     snapshot.uplink_state = state;
     snapshot.timestamp_ms = now;
+    copyEventId(snapshot.node_id, sizeof(snapshot.node_id), NodeConfig::NodeId);
     snapshot.trigger_flags = computeTriggerFlags(snapshot);
 }
 
@@ -2288,6 +2530,7 @@ void resetHandoverStatus() {
     handoverStatus.last_result[0] = '\0';
     handoverStatus.last_target[0] = '\0';
     handoverStatus.last_event_id[0] = '\0';
+    syncActiveNodeRuntimeCacheLocked();
     portEXIT_CRITICAL(&dataMutex);
 }
 
@@ -2308,6 +2551,7 @@ void setHandoverQueued(const char *target_node, unsigned long now) {
     copyEventId(handoverStatus.last_result, sizeof(handoverStatus.last_result), "QUEUED");
     copyEventId(handoverStatus.last_target, sizeof(handoverStatus.last_target), target_node);
     handoverStatus.last_event_id[0] = '\0';
+    syncActiveNodeRuntimeCacheLocked();
     portEXIT_CRITICAL(&dataMutex);
 }
 
@@ -2319,6 +2563,7 @@ void setHandoverCleared(unsigned long now) {
     handoverStatus.last_updated_ms = now;
     copyEventId(handoverStatus.last_result, sizeof(handoverStatus.last_result), "CLEARED");
     handoverStatus.last_event_id[0] = '\0';
+    syncActiveNodeRuntimeCacheLocked();
     portEXIT_CRITICAL(&dataMutex);
 }
 
@@ -2335,6 +2580,7 @@ void setHandoverOutcome(const char *target_node, const char *result, unsigned lo
     } else {
         handoverStatus.last_event_id[0] = '\0';
     }
+    syncActiveNodeRuntimeCacheLocked();
     portEXIT_CRITICAL(&dataMutex);
 }
 
@@ -2625,6 +2871,7 @@ void emitEventStatus() {
     RuntimeEventStatus eventSnapshot = getRuntimeEventStatusSnapshot();
     EventLifecycleState lifecycleSnapshot = getEventLifecycleStateSnapshot();
     EventObject currentEventSnapshot = getCurrentEventObjectSnapshot();
+    NodeRuntimeCache nodeCacheSnapshot = getActiveNodeRuntimeCacheSnapshot();
     LastEventSnapshot lastSnapshot = {};
     SystemData systemSnapshot = {};
     unsigned long now = millis();
@@ -2662,12 +2909,24 @@ void emitEventStatus() {
     Serial.print(currentEventSnapshot.close_reason[0] != '\0' ? currentEventSnapshot.close_reason : "NONE");
     Serial.print(",capture_path=");
     Serial.print(currentEventSnapshot.capture_path[0] != '\0' ? currentEventSnapshot.capture_path : "NONE");
+    Serial.print(",capture_evidence_state=");
+    Serial.print(captureEvidenceStateForEvent(currentEventSnapshot, lifecycleSnapshot));
+    Serial.print(",capture_missing_tolerated=");
+    Serial.print(strcmp(captureEvidenceStateForEvent(currentEventSnapshot, lifecycleSnapshot), "MISSING_TOLERATED") == 0 ? 1 : 0);
     Serial.print(",ts_open=");
     Serial.print(currentEventSnapshot.start_time_ms);
     Serial.print(",ts_close=");
     Serial.print(currentEventSnapshot.close_time_ms);
     Serial.print(",current_event_node_id=");
     Serial.print(currentEventSnapshot.node_id[0] != '\0' ? currentEventSnapshot.node_id : "NONE");
+    Serial.print(",current_event_prev_node_id=");
+    Serial.print(currentEventSnapshot.prev_node_id[0] != '\0' ? currentEventSnapshot.prev_node_id : "NONE");
+    Serial.print(",current_event_handoff_from=");
+    Serial.print(currentEventSnapshot.handoff_from[0] != '\0' ? currentEventSnapshot.handoff_from : "NONE");
+    Serial.print(",current_event_handoff_to=");
+    Serial.print(currentEventSnapshot.handoff_to[0] != '\0' ? currentEventSnapshot.handoff_to : "NONE");
+    Serial.print(",current_event_continuity_hint=");
+    Serial.print(currentEventSnapshot.continuity_hint[0] != '\0' ? currentEventSnapshot.continuity_hint : "NONE");
     Serial.print(",current_event_risk_score=");
     Serial.print(currentEventSnapshot.risk_score, 1);
     Serial.print(",current_event_risk_level=");
@@ -2719,6 +2978,36 @@ void emitEventStatus() {
     Serial.print(lifecycleSnapshot.capture_budget_track_id);
     Serial.print(",event_capture_budget_event_id=");
     Serial.print(lifecycleSnapshot.capture_budget_event_id[0] != '\0' ? lifecycleSnapshot.capture_budget_event_id : "NONE");
+    Serial.print(",node_cache_initialized=");
+    Serial.print(nodeCacheSnapshot.initialized ? 1 : 0);
+    Serial.print(",node_cache_id=");
+    Serial.print(nodeCacheSnapshot.node_id[0] != '\0' ? nodeCacheSnapshot.node_id : "NONE");
+    Serial.print(",node_cache_updated_ms=");
+    Serial.print(nodeCacheSnapshot.updated_ms);
+    Serial.print(",node_cache_last_seen_ms=");
+    Serial.print(nodeCacheSnapshot.last_seen_ms);
+    Serial.print(",node_cache_cooldown_until_ms=");
+    Serial.print(nodeCacheSnapshot.lifecycle.cooldown_until_ms);
+    Serial.print(",node_cache_close_pending=");
+    Serial.print(nodeCacheSnapshot.lifecycle.close_pending ? 1 : 0);
+    Serial.print(",node_cache_track_id=");
+    Serial.print(nodeCacheSnapshot.risk_context.track_id);
+    Serial.print(",node_cache_risk_score=");
+    Serial.print(nodeCacheSnapshot.risk_context.risk_score, 1);
+    Serial.print(",node_cache_risk_level=");
+    Serial.print(riskLevelName(nodeCacheSnapshot.risk_context.risk_level));
+    Serial.print(",node_cache_hunter_state=");
+    Serial.print(hunterStateName(nodeCacheSnapshot.risk_context.hunter_state));
+    Serial.print(",node_cache_event_id=");
+    Serial.print(nodeCacheSnapshot.risk_context.event_id[0] != '\0' ? nodeCacheSnapshot.risk_context.event_id : "NONE");
+    Serial.print(",node_cache_prev_node_id=");
+    Serial.print(nodeCacheSnapshot.risk_context.prev_node_id[0] != '\0' ? nodeCacheSnapshot.risk_context.prev_node_id : "NONE");
+    Serial.print(",node_cache_continuity_hint=");
+    Serial.print(nodeCacheSnapshot.risk_context.continuity_hint[0] != '\0' ? nodeCacheSnapshot.risk_context.continuity_hint : "NONE");
+    Serial.print(",node_cache_handoff_from=");
+    Serial.print(nodeCacheSnapshot.handoff_from[0] != '\0' ? nodeCacheSnapshot.handoff_from : "NONE");
+    Serial.print(",node_cache_handoff_to=");
+    Serial.print(nodeCacheSnapshot.handoff_to[0] != '\0' ? nodeCacheSnapshot.handoff_to : "NONE");
     Serial.print(",current_event_last_x=");
     Serial.print(currentEventSnapshot.last_x_mm, 1);
     Serial.print(",current_event_last_y=");
@@ -3653,13 +3942,24 @@ void applyTrackMeasurement(float px, float py, unsigned long now) {
 }
 
 void handleHostCommand(const String &line) {
-    int comma = line.indexOf(',');
-    String command = line;
+    String sanitized_line = line;
+    sanitized_line.trim();
+    if (sanitized_line.length() == 0) {
+        return;
+    }
+    if (sanitized_line.length() > HostCommandMaxLength) {
+        Serial.print("Command too long. Limit=");
+        Serial.println(HostCommandMaxLength);
+        return;
+    }
+
+    int comma = sanitized_line.indexOf(',');
+    String command = sanitized_line;
     String value;
 
     if (comma >= 0) {
-        command = line.substring(0, comma);
-        value = line.substring(comma + 1);
+        command = sanitized_line.substring(0, comma);
+        value = sanitized_line.substring(comma + 1);
     }
 
     command.trim();
@@ -3667,6 +3967,11 @@ void handleHostCommand(const String &line) {
     String rawValue = value;
     command.toUpperCase();
     value.toUpperCase();
+
+    if (command.length() == 0) {
+        Serial.println("Invalid command. Command name is empty.");
+        return;
+    }
 
     if (command == "TRACK") {
         if (value == "CLEAR" || value == "OFF" || value == "STOP") {
@@ -3805,9 +4110,7 @@ void handleHostCommand(const String &line) {
         portENTER_CRITICAL(&dataMutex);
         globalData.vision_state = requested_state;
         globalData.vision_locked = requested_state == VISION_LOCKED;
-        globalData.capture_ready = globalData.vision_locked && globalData.trigger_capture;
-        globalData.timestamp_ms = millis();
-        globalData.trigger_flags = computeTriggerFlags(globalData);
+        refreshManualSimulationSnapshotLocked(millis());
         portEXIT_CRITICAL(&dataMutex);
 
         Serial.print("VISION simulation updated: ");
@@ -3826,8 +4129,7 @@ void handleHostCommand(const String &line) {
 
         portENTER_CRITICAL(&dataMutex);
         globalData.audio_state = requested_state;
-        globalData.timestamp_ms = millis();
-        globalData.trigger_flags = computeTriggerFlags(globalData);
+        refreshManualSimulationSnapshotLocked(millis());
         portEXIT_CRITICAL(&dataMutex);
 
         if (!AudioConfig::AudioEnabled) {
@@ -4095,8 +4397,7 @@ void handleHostCommand(const String &line) {
         globalData.uplink_state = UPLINK_READY;
         globalData.event_active = false;
         globalData.event_id[0] = '\0';
-        globalData.timestamp_ms = millis();
-        globalData.trigger_flags = computeTriggerFlags(globalData);
+        refreshManualSimulationSnapshotLocked(millis());
         portEXIT_CRITICAL(&dataMutex);
         clearSimTrack();
         clearVisionOverride();
@@ -4327,6 +4628,7 @@ void emitCloudEvent(
 ) {
     RuntimeEventStatus eventStatusSnapshot = getRuntimeEventStatusSnapshot();
     EventObject currentEventSnapshot = getCurrentEventObjectSnapshot();
+    EventLifecycleState lifecycleSnapshot = getEventLifecycleStateSnapshot();
     UnifiedOutputSnapshot unified = buildUnifiedOutputSnapshot(snapshot, eventStatusSnapshot);
     cacheLastEventSnapshot(snapshot, now, reason, event_context, handover_target, close_reason);
 
@@ -4378,6 +4680,18 @@ void emitCloudEvent(
     Serial.print(snapshot.risk_reason_flags);
     Serial.print(",capture_path=");
     Serial.print(currentEventSnapshot.capture_path[0] != '\0' ? currentEventSnapshot.capture_path : "NONE");
+    Serial.print(",capture_evidence_state=");
+    Serial.print(captureEvidenceStateForEvent(currentEventSnapshot, lifecycleSnapshot));
+    Serial.print(",event_node_id=");
+    Serial.print(currentEventSnapshot.node_id[0] != '\0' ? currentEventSnapshot.node_id : NodeConfig::NodeId);
+    Serial.print(",prev_node_id=");
+    Serial.print(currentEventSnapshot.prev_node_id[0] != '\0' ? currentEventSnapshot.prev_node_id : "NONE");
+    Serial.print(",continuity_hint=");
+    Serial.print(currentEventSnapshot.continuity_hint[0] != '\0' ? currentEventSnapshot.continuity_hint : "SINGLE_NODE");
+    Serial.print(",event_handoff_from=");
+    Serial.print(currentEventSnapshot.handoff_from[0] != '\0' ? currentEventSnapshot.handoff_from : "NONE");
+    Serial.print(",event_handoff_to=");
+    Serial.print(currentEventSnapshot.handoff_to[0] != '\0' ? currentEventSnapshot.handoff_to : "NONE");
     Serial.print(",ts_open=");
     Serial.print(currentEventSnapshot.start_time_ms);
     Serial.print(",ts_close=");
@@ -5048,6 +5362,11 @@ void CloudTask(void *pvParameters) {
 void setup() {
     Serial.begin(AppSerialConfig::MonitorBaudRate);
     delay(AppSerialConfig::StartupDelayMs);
+    portENTER_CRITICAL(&dataMutex);
+    copyEventId(globalData.node_id, sizeof(globalData.node_id), NodeConfig::NodeId);
+    globalData.timestamp_ms = millis();
+    syncActiveNodeRuntimeCacheLocked();
+    portEXIT_CRITICAL(&dataMutex);
     resetSummaryStats(millis());
     resetHandoverStatus();
     resetLastEventSnapshot();
