@@ -30,6 +30,27 @@
 - A2
   - `python tools/node_a_serial_bridge_NodeA串口桥接.py --port COM5 --default-node-id A2 --default-node-zone ZONE_SOUTH --default-node-role EDGE --output-file captures/latest_node_status_A2.json --events-file captures/latest_node_events_A2.json`
 
+## 中心汇聚模式（跨电脑联调）
+- 中心机
+  - `python tools/vision_web_server_视觉网页服务.py --host 0.0.0.0 --port 8765 --node-offline-timeout-ms 5000`
+- A1 采集机
+  - `python tools/node_a_serial_bridge_NodeA串口桥接.py --port COM4 --default-node-id A1 --default-node-zone ZONE_NORTH --default-node-role EDGE --center-base-url http://中心机IP:8765 --center-node-label A1 --output-file captures/latest_node_status.json --events-file captures/latest_node_events.json`
+- A2 采集机
+  - `python tools/node_a_serial_bridge_NodeA串口桥接.py --port COM5 --default-node-id A2 --default-node-zone ZONE_SOUTH --default-node-role EDGE --center-base-url http://中心机IP:8765 --center-node-label A2 --output-file captures/latest_node_status_A2.json --events-file captures/latest_node_events_A2.json`
+
+## 中心端自动离线联调
+- 推荐阈值
+  - `--node-offline-timeout-ms 5000`
+- 验证步骤
+  - 先让 A1 / A2 都正常上报，确认 dashboard 显示 `在线 2/2`
+  - 保持中心机网页打开，停止其中一个 bridge 进程或断开对应串口
+  - 等待约 5 秒后刷新 dashboard，目标节点应变为 `OFFLINE`
+  - 请求 `http://中心机IP:8765/api/node-fleet-status`，确认该节点 `online=0`，且 `stale_age_ms` 持续增大
+- 验收点
+  - 另一节点在线状态不受影响
+  - 掉线节点不会长期停留在 `ONLINE`
+  - 节点恢复上报后可自动回到 `ONLINE`
+
 ## 页面验收观察点
 - A1 / A2 在线状态
 - 最后上报时间

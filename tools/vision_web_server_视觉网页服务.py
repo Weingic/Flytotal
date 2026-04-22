@@ -126,6 +126,13 @@ def load_json_file(path: Path) -> dict[str, object]:
     return payload
 
 
+def write_json_file(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_path.replace(path)
+
+
 def safe_int(value: object, default: int = 0) -> int:
     try:
         return int(value or 0)
@@ -138,6 +145,21 @@ def safe_float(value: object, default: float = 0.0) -> float:
         return float(value or 0.0)
     except (TypeError, ValueError):
         return default
+
+
+def refresh_node_runtime_flags(payload: dict[str, object], offline_timeout_ms: int) -> dict[str, object]:
+    normalized = dict(payload)
+    now_ms = int(time.time() * 1000)
+    last_update_ms = safe_int(normalized.get("last_update_ms", normalized.get("timestamp_ms", 0)), 0)
+    stale_age_ms = max(0, now_ms - max(0, last_update_ms))
+    available = bool(normalized.get("available", False))
+    online = 1 if available and stale_age_ms <= max(0, offline_timeout_ms) else 0
+    normalized["last_update_ms"] = last_update_ms
+    normalized["stale_age_ms"] = stale_age_ms
+    normalized["online"] = online
+    normalized["center_checked_ms"] = now_ms
+    normalized["center_offline_timeout_ms"] = max(0, offline_timeout_ms)
+    return normalized
 
 
 def normalize_event_record_time(record: dict[str, object], fallback_host_ms: int) -> dict[str, object]:
@@ -197,8 +219,14 @@ def build_node_events_payload(events_file: Path, limit: int) -> dict[str, object
     }
 
 
-def build_node_brief_payload(node_label: str, status_file: Path, events_file: Path, event_limit: int = 20) -> dict[str, object]:
-    status_payload = load_json_file(status_file)
+def build_node_brief_payload(
+    node_label: str,
+    status_file: Path,
+    events_file: Path,
+    event_limit: int = 20,
+    offline_timeout_ms: int = 5000,
+) -> dict[str, object]:
+    status_payload = refresh_node_runtime_flags(load_json_file(status_file), offline_timeout_ms)
     events_payload = build_node_events_payload(events_file, event_limit)
     records = events_payload.get("records", []) if isinstance(events_payload, dict) else []
     if not isinstance(records, list):
@@ -237,8 +265,14 @@ def build_node_brief_payload(node_label: str, status_file: Path, events_file: Pa
     }
 
 
-def build_node_fleet_payload(node_specs: list[tuple[str, Path, Path]]) -> dict[str, object]:
-    nodes = [build_node_brief_payload(label, status_file, events_file) for label, status_file, events_file in node_specs]
+def build_node_fleet_payload(
+    node_specs: list[tuple[str, Path, Path]],
+    offline_timeout_ms: int = 5000,
+) -> dict[str, object]:
+    nodes = [
+        build_node_brief_payload(label, status_file, events_file, offline_timeout_ms=offline_timeout_ms)
+        for label, status_file, events_file in node_specs
+    ]
     online_count = sum(1 for item in nodes if safe_int(item.get("online", 0)) == 1)
     total_tracks = sum(safe_int(item.get("track_count", 0)) for item in nodes)
     total_events = sum(safe_int(item.get("events_count", 0)) for item in nodes)
@@ -250,6 +284,36 @@ def build_node_fleet_payload(node_specs: list[tuple[str, Path, Path]]) -> dict[s
         "total_tracks": total_tracks,
         "total_events": total_events,
         "nodes": nodes,
+    }
+
+
+def resolve_node_storage_targets(
+    node_label_or_id: str,
+    node_status_file: Path,
+    node_status_file_a2: Path,
+    node_events_file: Path,
+    node_events_file_a2: Path,
+) -> tuple[str, Path, Path]:
+    normalized = str(node_label_or_id or "").strip().upper()
+    if normalized == "A2":
+        return "A2", node_status_file_a2, node_events_file_a2
+    return "A1", node_status_file, node_events_file
+
+
+def build_center_ingest_result(
+    node_label: str,
+    status_path: Path,
+    events_path: Path,
+    payload_type: str,
+) -> dict[str, object]:
+    return {
+        "ok": True,
+        "accepted": True,
+        "node_label": node_label,
+        "payload_type": payload_type,
+        "status_file": status_path.as_posix(),
+        "events_file": events_path.as_posix(),
+        "received_ms": int(time.time() * 1000),
     }
 
 
@@ -2122,9 +2186,68 @@ def create_handler(
     event_export_dir: Path,
     default_limit: int,
     capture_fallback_window_ms: int,
+    node_offline_timeout_ms: int,
 ) -> type[BaseHTTPRequestHandler]:
     class VisionDashboardHandler(BaseHTTPRequestHandler):
         server_version = "FlytotalVisionWeb/1.2"
+
+        def do_POST(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+
+            if parsed.path not in {"/api/ingest/node-status", "/api/ingest/node-events"}:
+                self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+                return
+
+            content_length = safe_int(self.headers.get("Content-Length", "0"), 0)
+            if content_length <= 0:
+                self.send_error(HTTPStatus.BAD_REQUEST, "Missing request body")
+                return
+
+            try:
+                raw_body = self.rfile.read(content_length)
+                payload = json.loads(raw_body.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self.send_error(HTTPStatus.BAD_REQUEST, "Invalid JSON body")
+                return
+
+            if not isinstance(payload, dict):
+                self.send_error(HTTPStatus.BAD_REQUEST, "JSON body must be an object")
+                return
+
+            node_hint = str(
+                payload.get(
+                    "node_label",
+                    payload.get("node_id", payload.get("source_node", "A1")),
+                )
+                or "A1"
+            ).strip().upper() or "A1"
+            node_label, target_status_file, target_events_file = resolve_node_storage_targets(
+                node_hint,
+                node_status_file,
+                node_status_file_a2,
+                node_events_file,
+                node_events_file_a2,
+            )
+
+            if parsed.path == "/api/ingest/node-status":
+                payload["ok"] = True
+                payload["available"] = True
+                payload["center_received_ms"] = int(time.time() * 1000)
+                payload["node_label"] = node_label
+                write_json_file(target_status_file, payload)
+                self.send_json(
+                    build_center_ingest_result(node_label, target_status_file, target_events_file, "node_status")
+                )
+                return
+
+            payload["ok"] = True
+            payload["available"] = bool(payload.get("available", False))
+            payload["center_received_ms"] = int(time.time() * 1000)
+            payload["node_label"] = node_label
+            write_json_file(target_events_file, payload)
+            self.send_json(
+                build_center_ingest_result(node_label, target_status_file, target_events_file, "node_events")
+            )
 
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
@@ -2206,7 +2329,7 @@ def create_handler(
                 if mock_mode and isinstance(mock_bundle, dict):
                     self.send_json(mock_bundle.get("node_status", {"ok": True, "available": False}))
                     return
-                node_payload = load_json_file(node_status_file)
+                node_payload = refresh_node_runtime_flags(load_json_file(node_status_file), node_offline_timeout_ms)
                 # 从 vision bridge 的 status 文件读取当前视觉状态，注入视觉贡献字段
                 # （供网页风险区显示；score_delta 由 compute_vision_contribution 计算）。
                 vision_payload = load_json_file(status_file)
@@ -2333,7 +2456,8 @@ def create_handler(
                         [
                             ("A1", node_status_file, node_events_file),
                             ("A2", node_status_file_a2, node_events_file_a2),
-                        ]
+                        ],
+                        offline_timeout_ms=node_offline_timeout_ms,
                     )
                 )
                 return
@@ -2674,6 +2798,7 @@ def main() -> int:
     parser.add_argument("--dashboard-file", type=Path, default=DASHBOARD_FILE, help="HTML dashboard file to serve")
     parser.add_argument("--limit", type=int, default=10, help="Default number of records returned by the API")
     parser.add_argument("--capture-fallback-window-ms", type=int, default=8000, help="Time window used to fallback-match NONE captures to selected events")
+    parser.add_argument("--node-offline-timeout-ms", type=int, default=5000, help="Center-side timeout used to mark node status offline when updates stop")
     args = parser.parse_args()
 
     capture_dir = resolve_path(args.capture_dir)
@@ -2711,6 +2836,7 @@ def main() -> int:
         event_export_dir,
         args.limit,
         max(0, args.capture_fallback_window_ms),
+        max(0, args.node_offline_timeout_ms),
     )
 
     server = ThreadingHTTPServer((args.host, args.port), handler)
@@ -2731,6 +2857,7 @@ def main() -> int:
     print(f"Session log dir: {session_log_dir.as_posix()}")
     print(f"Event export dir: {event_export_dir.as_posix()}")
     print(f"Capture fallback window ms: {max(0, args.capture_fallback_window_ms)}")
+    print(f"Node offline timeout ms: {max(0, args.node_offline_timeout_ms)}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
