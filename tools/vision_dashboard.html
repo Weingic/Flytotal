@@ -1072,42 +1072,6 @@
       </div>
     </section>
 
-<<<<<<< HEAD
-    <div class="policy-bar">
-      <span class="policy-bar-label">系统策略</span>
-      <span class="policy-bar-text" id="policyBarText">正在加载当前判定规则…</span>
-      <span class="policy-bar-meta" id="policyBarMeta">--</span>
-    </div>
-
-    <!-- 系统摘要区 -->
-    <div class="system-summary">
-      <div class="summary-card">
-        <div class="summary-card-label">节点在线</div>
-        <div class="summary-card-value" id="summaryNodesOnline">--</div>
-        <div class="summary-card-sub" id="summaryNodesTotal">共 -- 个节点</div>
-      </div>
-      <div class="summary-card">
-        <div class="summary-card-label">最高风险</div>
-        <div class="summary-card-value" id="summaryMaxRisk">--</div>
-        <div class="summary-card-sub" id="summaryMaxRiskNode">节点 --</div>
-      </div>
-      <div class="summary-card">
-        <div class="summary-card-label">最近事件</div>
-        <div class="summary-card-value" id="summaryLastEvent" style="font-size:13px;">NONE</div>
-        <div class="summary-card-sub" id="summaryLastEventNode">节点 --</div>
-      </div>
-      <div class="summary-card">
-        <div class="summary-card-label">最近抓拍</div>
-        <div class="summary-card-value" id="summaryLastCapture" style="font-size:13px;">--</div>
-        <div class="summary-card-sub" id="summaryLastCaptureReason">--</div>
-      </div>
-    </div>
-
-    <!-- 节点卡片列表 -->
-    <div class="node-list" id="nodeList">
-      <!-- 由 JS renderNodeList() 动态生成 -->
-    </div>
-=======
     <section style="margin-bottom: 18px;">
       <article class="panel records-panel">
         <div class="table-header">
@@ -1197,7 +1161,6 @@
         </div>
       </article>
     </section>
->>>>>>> feat/win-codex
 
     <section class="status-grid">
       <div class="panel status-card" id="visionCard">
@@ -4173,19 +4136,9 @@
       return response.json();
     }
 
-<<<<<<< HEAD
-    async function loadNodes() {
-      try {
-        const response = await fetch(apiUrlWithMode("/api/nodes"), { cache: "no-store" });
-        return response.json();
-      } catch (_) {
-        return { ok: false, nodes: [] };
-      }
-=======
     async function loadNodeFleet() {
       const response = await fetch(apiUrlWithMode(NODE_FLEET_API_URL), { cache: "no-store" });
       return response.json();
->>>>>>> feat/win-codex
     }
 
     async function loadCaptures() {
@@ -4246,17 +4199,10 @@
 
     async function loadData() {
       try {
-<<<<<<< HEAD
-        const [status, nodeStatus, nodesPayload, captures, nodeEvents, testSession, testResult, testResults, sessionTimelineSessions, dataSource] = await Promise.all([
-          loadStatus(),
-          loadNodeStatus(),
-          loadNodes(),
-=======
         const [status, nodeStatus, nodeFleet, captures, nodeEvents, testSession, testResult, testResults, deliveryAssets, sessionTimelineSessions, dataSource] = await Promise.all([
           loadStatus(),
           loadNodeStatus(),
           loadNodeFleet(),
->>>>>>> feat/win-codex
           loadCaptures(),
           loadNodeEvents(),
           loadTestSession(),
@@ -4275,14 +4221,7 @@
         ]);
         setRuntimeStatus(status);
         setNodeStatus(nodeStatus);
-<<<<<<< HEAD
-        renderPolicyBar(nodeStatus);
-        const nodes = (nodesPayload && Array.isArray(nodesPayload.nodes)) ? nodesPayload.nodes : [nodeStatus];
-        renderNodeList(nodes);
-        renderSystemSummary(nodes, captures);
-=======
         renderNodeFleet(nodeFleet);
->>>>>>> feat/win-codex
         setParameterStatus(nodeStatus);
         setTestSession(testSession);
         setTestResult(testResult);

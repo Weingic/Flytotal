@@ -130,7 +130,16 @@ def write_json_file(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_suffix(path.suffix + ".tmp")
     temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    temp_path.replace(path)
+    last_error: OSError | None = None
+    for _ in range(10):
+        try:
+            temp_path.replace(path)
+            return
+        except PermissionError as exc:
+            last_error = exc
+            time.sleep(0.05)
+    if last_error is not None:
+        raise last_error
 
 
 def safe_int(value: object, default: int = 0) -> int:
