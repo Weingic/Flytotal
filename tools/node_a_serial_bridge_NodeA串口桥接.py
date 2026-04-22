@@ -5,6 +5,8 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 from session_log_utils_会话日志工具 import append_session_event as append_session_timeline_event
 from session_log_utils_会话日志工具 import resolve_path as resolve_shared_path
 
@@ -392,6 +394,60 @@ def write_status_json(path: Path, payload: dict[str, Any]) -> None:
     temp_path = path.with_suffix(path.suffix + ".tmp")
     temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     temp_path.replace(path)
+
+
+def post_json(url: str, payload: dict[str, Any], timeout_s: float) -> tuple[bool, str]:
+    request = urllib_request.Request(
+        url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=max(timeout_s, 0.1)) as response:
+            status_code = getattr(response, "status", 200)
+            return 200 <= int(status_code) < 300, f"http_{status_code}"
+    except urllib_error.HTTPError as exc:
+        return False, f"http_{exc.code}"
+    except urllib_error.URLError as exc:
+        return False, f"url_error:{exc.reason}"
+    except Exception as exc:  # pragma: no cover - best-effort upload path
+        return False, f"error:{exc}"
+
+
+def build_center_status_payload(status: dict[str, Any], node_label: str) -> dict[str, Any]:
+    payload = dict(status)
+    payload["node_label"] = node_label
+    return payload
+
+
+def build_center_events_payload(records: list[dict[str, Any]], node_label: str) -> dict[str, Any]:
+    payload = {
+        "ok": True,
+        "available": bool(records),
+        "count": len(records),
+        "records": records,
+        "latest": records[0] if records else None,
+        "node_label": node_label,
+    }
+    return payload
+
+
+def maybe_report_center(
+    base_url: str,
+    route: str,
+    payload: dict[str, Any],
+    timeout_s: float,
+    enabled: bool,
+) -> None:
+    if not enabled:
+        return
+    normalized_base = str(base_url or "").strip().rstrip("/")
+    if not normalized_base:
+        return
+    ok, message = post_json(f"{normalized_base}{route}", payload, timeout_s)
+    if not ok:
+        print(f"Center report failed ({route}): {message}", file=sys.stderr)
 
 
 def build_event_record(prefix: str, raw_fields: dict[str, str]) -> dict[str, Any] | None:
@@ -966,6 +1022,9 @@ def main() -> int:
     parser.add_argument("--default-node-id", default="", help="Fallback node_id written before the first valid serial frame")
     parser.add_argument("--default-node-zone", default="", help="Fallback node_zone written before the first valid serial frame")
     parser.add_argument("--default-node-role", default="", help="Fallback node_role written before the first valid serial frame")
+    parser.add_argument("--center-base-url", default="", help="Optional central dashboard server base URL, for example http://192.168.1.10:8765")
+    parser.add_argument("--center-node-label", default="", help="Node label used when reporting to the central dashboard server")
+    parser.add_argument("--center-timeout", type=float, default=1.5, help="HTTP timeout in seconds for central dashboard reports")
     parser.add_argument("--echo", action="store_true", help="Echo raw serial lines to the terminal")
     args = parser.parse_args()
 
@@ -980,6 +1039,8 @@ def main() -> int:
     default_node_id = str(args.default_node_id or "").strip() or inferred_node_id
     default_node_zone = str(args.default_node_zone or "").strip() or inferred_node_zone
     default_node_role = str(args.default_node_role or "").strip() or inferred_node_role
+    center_node_label = str(args.center_node_label or "").strip().upper() or default_node_id
+    center_enabled = bool(str(args.center_base_url or "").strip())
     status = build_initial_status(default_node_id, default_node_zone, default_node_role)
     event_history = load_records_from_payload(events_file)
     event_store = load_records_from_payload(event_store_file)
@@ -1001,6 +1062,20 @@ def main() -> int:
     write_event_store_json(event_store_file, event_store)
     write_status_json(result_file, build_initial_test_result())
     write_test_result_history_json(result_history_file, result_history)
+    maybe_report_center(
+        args.center_base_url,
+        "/api/ingest/node-status",
+        build_center_status_payload(status, center_node_label),
+        args.center_timeout,
+        center_enabled,
+    )
+    maybe_report_center(
+        args.center_base_url,
+        "/api/ingest/node-events",
+        build_center_events_payload(event_history, center_node_label),
+        args.center_timeout,
+        center_enabled,
+    )
 
     try:
         ser = serial_module.Serial(args.port, args.baud, timeout=args.timeout)
@@ -1030,6 +1105,11 @@ def main() -> int:
             "Default node metadata: "
             f"id={default_node_id}, zone={default_node_zone}, role={default_node_role}"
         )
+        if center_enabled:
+            print(
+                "Center reporting enabled: "
+                f"base={str(args.center_base_url).strip().rstrip('/')}, node_label={center_node_label}"
+            )
 
         time.sleep(max(args.boot_wait, 0.0))
 
@@ -1064,6 +1144,13 @@ def main() -> int:
                         write_event_store_json(event_store_file, event_store)
                     if append_event_record(event_history, event_record, max(1, args.events_limit)):
                         write_event_history_json(events_file, event_history)
+                        maybe_report_center(
+                            args.center_base_url,
+                            "/api/ingest/node-events",
+                            build_center_events_payload(event_history, center_node_label),
+                            args.center_timeout,
+                            center_enabled,
+                        )
                         append_session_timeline_event(
                             session_payload,
                             session_log_dir,
@@ -1076,6 +1163,13 @@ def main() -> int:
                 if update_status_from_line(status, line):
                     refresh_runtime_flags(status, args.offline_timeout)
                     write_status_json(output_file, status)
+                    maybe_report_center(
+                        args.center_base_url,
+                        "/api/ingest/node-status",
+                        build_center_status_payload(status, center_node_label),
+                        args.center_timeout,
+                        center_enabled,
+                    )
                     current_signature = extract_state_signature(status)
                     if current_signature != previous_signature:
                         append_session_timeline_event(
@@ -1103,6 +1197,13 @@ def main() -> int:
 
                 refresh_runtime_flags(status, args.offline_timeout)
                 write_status_json(output_file, status)
+                maybe_report_center(
+                    args.center_base_url,
+                    "/api/ingest/node-status",
+                    build_center_status_payload(status, center_node_label),
+                    args.center_timeout,
+                    center_enabled,
+                )
                 test_result_monitor = update_test_result_monitor(
                     session_payload,
                     status,
@@ -1117,6 +1218,13 @@ def main() -> int:
 
             refresh_runtime_flags(status, args.offline_timeout)
             write_status_json(output_file, status)
+            maybe_report_center(
+                args.center_base_url,
+                "/api/ingest/node-status",
+                build_center_status_payload(status, center_node_label),
+                args.center_timeout,
+                center_enabled,
+            )
         except KeyboardInterrupt:
             print("\nNode A serial bridge stopped.")
 
