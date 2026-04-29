@@ -26,6 +26,7 @@ MONITORED_PREFIXES = {
     "EVENT,STATUS",
     "LASTEVENT",
     "SUMMARY",
+    "FUSION,STATUS",
 }
 EVENT_HISTORY_PREFIXES = {"UPLINK,EVENT", "LASTEVENT", "EVENT,STATUS"}
 SUMMARY_COUNTER_FIELDS = (
@@ -143,6 +144,22 @@ def normalize_fields(prefix: str, raw_fields: dict[str, str]) -> dict[str, Any]:
         "vision_state": "vision_state",
         "vision_locked": "vision_locked",
         "capture_ready": "capture_ready",
+        "vision_quality": "vision_quality",
+        "environment_mode": "environment_mode",
+        "nodeb_online": "nodeb_online",
+        "nodeb_status": "nodeb_status",
+        "nodeb_node_id": "nodeb_node_id",
+        "nodeb_source": "nodeb_source",
+        "nodeb_rssi": "nodeb_rssi",
+        "nodeb_last_update_ms": "nodeb_last_update_ms",
+        "ld2451_valid": "ld2451_valid",
+        "ld2451_range_m": "ld2451_range_m",
+        "ld2451_speed_mps": "ld2451_speed_mps",
+        "ld2451_approach": "ld2451_approach",
+        "far_motion_trigger": "far_motion_trigger",
+        "ld2451_last_update_ms": "ld2451_last_update_ms",
+        "fusion_level": "fusion_level",
+        "fusion_reason": "fusion_reason",
         "uplink_state": "uplink_state",
         "last_event_id": "last_event_id",
         "last_reason": "last_reason",
@@ -263,6 +280,22 @@ def build_initial_status(
         "vision_state": "UNKNOWN",
         "vision_locked": 0,
         "capture_ready": 0,
+        "vision_quality": "NO_VISUAL",
+        "environment_mode": "CLEAR",
+        "nodeb_online": 0,
+        "nodeb_status": "UNKNOWN",
+        "nodeb_node_id": "NONE",
+        "nodeb_source": "NONE",
+        "nodeb_rssi": 0,
+        "nodeb_last_update_ms": 0,
+        "ld2451_valid": 0,
+        "ld2451_range_m": 0.0,
+        "ld2451_speed_mps": 0.0,
+        "ld2451_approach": 0,
+        "far_motion_trigger": 0,
+        "ld2451_last_update_ms": 0,
+        "fusion_level": "NONE",
+        "fusion_reason": "NONE",
         "uplink_state": "UNKNOWN",
         "last_event_id": "NONE",
         "last_reason": "NONE",
@@ -531,6 +564,13 @@ def build_event_record(prefix: str, raw_fields: dict[str, str]) -> dict[str, Any
     )
     vision_state = raw_fields.get("vision_state", "UNKNOWN").strip() or "UNKNOWN"
     vision_locked = coerce_value(raw_fields.get("vision_locked", "0"))
+    vision_quality = raw_fields.get("vision_quality", "NO_VISUAL").strip() or "NO_VISUAL"
+    environment_mode = raw_fields.get("environment_mode", "CLEAR").strip() or "CLEAR"
+    fusion_level = raw_fields.get("fusion_level", "NONE").strip() or "NONE"
+    fusion_reason = raw_fields.get("fusion_reason", "NONE").strip() or "NONE"
+    far_motion_trigger = coerce_value(raw_fields.get("far_motion_trigger", "0"))
+    ld2451_range_m = coerce_value(raw_fields.get("ld2451_range_m", "0"))
+    ld2451_speed_mps = coerce_value(raw_fields.get("ld2451_speed_mps", "0"))
     capture_ready = coerce_value(raw_fields.get("capture_ready", "0"))
     rid_whitelist_hit = coerce_value(raw_fields.get("rid_whitelist_hit", "0"))
     capture_path = raw_fields.get("capture_path", "").strip() or "NONE"
@@ -585,6 +625,13 @@ def build_event_record(prefix: str, raw_fields: dict[str, str]) -> dict[str, Any
         "vy_mm_s": vy_mm_s,
         "vision_state": vision_state,
         "vision_locked": vision_locked,
+        "vision_quality": vision_quality,
+        "environment_mode": environment_mode,
+        "fusion_level": fusion_level,
+        "fusion_reason": fusion_reason,
+        "far_motion_trigger": far_motion_trigger,
+        "ld2451_range_m": ld2451_range_m,
+        "ld2451_speed_mps": ld2451_speed_mps,
         "capture_ready": capture_ready,
         "capture_path": capture_path,
         "handover_to": handover_to,

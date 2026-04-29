@@ -1197,6 +1197,9 @@
         <div class="status-row"><div class="label">RID 最近更新</div><div class="value" id="nodeRidUpdateValue">--</div></div>
         <div class="status-row"><div class="label">风险</div><div class="value" id="nodeRiskValue">0.0 / NONE</div></div>
         <div class="status-row"><div class="label">视觉贡献</div><div class="value" id="nodeVisionContribValue"><span class="pill offline">NONE</span></div></div>
+        <div class="status-row"><div class="label">多源融合</div><div class="value" id="nodeFusionValue">NONE / NONE</div></div>
+        <div class="status-row"><div class="label">LD2451 远距</div><div class="value" id="nodeLd2451Value">0.00m / 0.00mps / 0</div></div>
+        <div class="status-row"><div class="label">NodeB 身份链</div><div class="value" id="nodeNodeBValue">OFFLINE / NONE</div></div>
         <div class="status-row"><div class="label">链路一致性</div><div class="value" id="nodeConsistencyValue">UNKNOWN</div></div>
         <div class="status-row"><div class="label">映射告警</div><div class="value" id="nodeConsistencyWarnValue">NONE</div></div>
         <div class="status-row"><div class="label">事件</div><div class="value" id="nodeEventValue">0 / NONE</div></div>
@@ -1370,6 +1373,9 @@
           <div class="fact"><span class="label">白名单状态</span><div class="value" id="eventDetailWhitelistValue">WL_UNKNOWN</div></div>
           <div class="fact"><span class="label">Hunter 状态</span><div class="value" id="eventDetailHunterValue">UNKNOWN</div></div>
           <div class="fact"><span class="label">视觉状态</span><div class="value" id="eventDetailVisionValue">UNKNOWN</div></div>
+          <div class="fact"><span class="label">视觉质量</span><div class="value" id="eventDetailVisionQualityValue">NO_VISUAL</div></div>
+          <div class="fact"><span class="label">融合等级</span><div class="value" id="eventDetailFusionValue">NONE</div></div>
+          <div class="fact"><span class="label">LD2451 远距</span><div class="value" id="eventDetailLd2451Value">0.00m / 0.00mps / 0</div></div>
           <div class="fact"><span class="label">事件状态</span><div class="value" id="eventDetailStateValue">NONE</div></div>
           <div class="fact"><span class="label">触发原因</span><div class="value" id="eventDetailReasonValue">NONE</div></div>
           <div class="fact"><span class="label">触发标志</span><div class="value" id="eventDetailTriggerValue">NONE</div></div>
@@ -1865,6 +1871,20 @@
       if (value === "SUSPICIOUS" || value === "WARN") return semanticPill(value, "warn");
       if (value === "NORMAL") return semanticPill(value, "ok");
       return semanticPill(value, "normal");
+    }
+
+    function fusionLevelPill(level) {
+      const value = String(level || "NONE").toUpperCase();
+      if (value === "HIGH") return semanticPill(value, "danger");
+      if (value === "MID") return semanticPill(value, "warn");
+      if (value === "LOW") return semanticPill(value, "ok");
+      return semanticPill(value, "normal");
+    }
+
+    function triggerPill(active) {
+      return Number(active ?? 0) === 1
+        ? semanticPill("TRIGGER", "warn")
+        : semanticPill("IDLE", "normal");
     }
 
     function eventStatusPill(status) {
@@ -2671,6 +2691,9 @@
         document.getElementById("nodeRidUpdateValue").textContent = "--";
         document.getElementById("nodeRiskValue").innerHTML = riskLevelPill("NONE");
         document.getElementById("nodeVisionContribValue").innerHTML = visionStatePill("NONE");
+        document.getElementById("nodeFusionValue").innerHTML = `${fusionLevelPill("NONE")} <span style="font-size:13px;color:var(--muted);margin-left:6px;">NONE · NO_VISUAL</span>`;
+        document.getElementById("nodeLd2451Value").innerHTML = `${triggerPill(0)} <span style="font-size:13px;color:var(--muted);margin-left:6px;">0.00m / 0.00mps</span>`;
+        document.getElementById("nodeNodeBValue").innerHTML = `${semanticPill("OFFLINE", "offline")} <span style="font-size:13px;color:var(--muted);margin-left:6px;">NONE / NONE / RSSI 0</span>`;
         document.getElementById("nodeConsistencyValue").innerHTML = consistencyStatusPill("UNKNOWN");
         document.getElementById("nodeConsistencyWarnValue").textContent = "NONE";
         document.getElementById("nodeEventValue").textContent = "0 / NONE";
@@ -2720,6 +2743,16 @@
       const vcNote = vc.note ? ` · ${vc.note}` : "";
       document.getElementById("nodeVisionContribValue").innerHTML =
         `${visionStatePill(vcState)}<span style="font-size:13px;color:var(--muted);margin-left:6px;">${vcDelta}${vcNote}</span>`;
+      const fusionLevel = String(status.fusion_level || "NONE").toUpperCase();
+      const fusionReason = String(status.fusion_reason || "NONE");
+      const visionQuality = String(status.vision_quality || "NO_VISUAL");
+      document.getElementById("nodeFusionValue").innerHTML =
+        `${fusionLevelPill(fusionLevel)}<span style="font-size:13px;color:var(--muted);margin-left:6px;">${fusionReason} · ${visionQuality}</span>`;
+      document.getElementById("nodeLd2451Value").innerHTML =
+        `${triggerPill(status.far_motion_trigger)}<span style="font-size:13px;color:var(--muted);margin-left:6px;">${formatFixed(status.ld2451_range_m, 2)}m / ${formatFixed(status.ld2451_speed_mps, 2)}mps / valid=${Number(status.ld2451_valid ?? 0)}</span>`;
+      const nodeBOnline = Number(status.nodeb_online ?? 0) === 1;
+      document.getElementById("nodeNodeBValue").innerHTML =
+        `${semanticPill(nodeBOnline ? "ONLINE" : "OFFLINE", nodeBOnline ? "ok" : "offline")}<span style="font-size:13px;color:var(--muted);margin-left:6px;">${status.nodeb_status || "UNKNOWN"} / ${status.nodeb_node_id || "NONE"} / ${status.nodeb_source || "NONE"} / RSSI ${status.nodeb_rssi ?? 0}</span>`;
       const consistencyStatus = String(status.consistency_status || "UNKNOWN").toUpperCase();
       const expectedMainState = String(status.consistency_expected_main_state || "UNKNOWN").toUpperCase();
       const mainStateText = String(status.main_state || "UNKNOWN").toUpperCase();
@@ -3378,6 +3411,9 @@
       document.getElementById("eventDetailWhitelistValue").textContent = "WL_UNKNOWN";
       document.getElementById("eventDetailHunterValue").textContent = "UNKNOWN";
       document.getElementById("eventDetailVisionValue").textContent = "UNKNOWN";
+      document.getElementById("eventDetailVisionQualityValue").textContent = "NO_VISUAL";
+      document.getElementById("eventDetailFusionValue").innerHTML = fusionLevelPill("NONE");
+      document.getElementById("eventDetailLd2451Value").innerHTML = `${triggerPill(0)} <span style="font-size:13px;color:var(--muted);margin-left:6px;">0.00m / 0.00mps</span>`;
       document.getElementById("eventDetailStateValue").textContent = "NONE";
       document.getElementById("eventDetailReasonValue").textContent = "NONE";
       document.getElementById("eventDetailTriggerValue").textContent = "NONE";
@@ -3442,6 +3478,12 @@
       const whitelistStatus = String(eventObject.whitelist_status || eventRecord.whitelist_status || eventRecord.wl_status || "WL_UNKNOWN");
       const hunterState = String(eventObject.hunter_state || eventRecord.hunter_state || "UNKNOWN");
       const visionState = String(eventObject.vision_state || eventRecord.vision_state || "UNKNOWN");
+      const visionQuality = String(eventObject.vision_quality || eventRecord.vision_quality || "NO_VISUAL");
+      const fusionLevel = String(eventObject.fusion_level || eventRecord.fusion_level || "NONE");
+      const fusionReason = String(eventObject.fusion_reason || eventRecord.fusion_reason || "NONE");
+      const farMotionTrigger = Number(eventObject.far_motion_trigger ?? eventRecord.far_motion_trigger ?? 0);
+      const ld2451RangeM = Number(eventObject.ld2451_range_m ?? eventRecord.ld2451_range_m ?? 0);
+      const ld2451SpeedMps = Number(eventObject.ld2451_speed_mps ?? eventRecord.ld2451_speed_mps ?? 0);
       const eventState = String(eventObject.event_state || eventRecord.event_state || eventRecord.event_status || "NONE");
       const reason = String(eventRecord.reason || "NONE");
       const triggerFlags = String(eventObject.trigger_flags || eventRecord.trigger_flags || "NONE");
@@ -3462,6 +3504,11 @@
       document.getElementById("eventDetailWhitelistValue").innerHTML = whitelistPill({ wl_status: whitelistStatus, rid_whitelist_hit: whitelistStatus === "WL_ALLOWED" ? 1 : 0 });
       document.getElementById("eventDetailHunterValue").innerHTML = semanticPill(hunterState, "normal");
       document.getElementById("eventDetailVisionValue").innerHTML = visionStatePill(visionState);
+      document.getElementById("eventDetailVisionQualityValue").textContent = visionQuality;
+      document.getElementById("eventDetailFusionValue").innerHTML =
+        `${fusionLevelPill(fusionLevel)}<span style="font-size:13px;color:var(--muted);margin-left:6px;">${fusionReason}</span>`;
+      document.getElementById("eventDetailLd2451Value").innerHTML =
+        `${triggerPill(farMotionTrigger)}<span style="font-size:13px;color:var(--muted);margin-left:6px;">${formatFixed(ld2451RangeM, 2)}m / ${formatFixed(ld2451SpeedMps, 2)}mps</span>`;
       document.getElementById("eventDetailStateValue").innerHTML = eventStatusPill(eventState);
       document.getElementById("eventDetailReasonValue").innerHTML = handoverPill(reason);
       document.getElementById("eventDetailTriggerValue").innerHTML = semanticPill(triggerFlags, "normal");
@@ -3690,6 +3737,8 @@
         const online = Number(node.online || 0) === 1;
         const continuity = String(node.continuity_hint || "SINGLE_NODE");
         const handoffText = [node.handoff_from || "NONE", node.handoff_to || "NONE"].join(" -> ");
+        const fusionText = `${node.fusion_level || "NONE"} / ${node.fusion_reason || "NONE"}`;
+        const farText = `${formatFixed(node.ld2451_range_m, 2)}m / ${formatFixed(node.ld2451_speed_mps, 2)}mps / ${Number(node.far_motion_trigger || 0)}`;
         return `
           <div class="fleet-card ${online ? "" : "stale"}">
             <div class="fleet-card-header">
@@ -3703,6 +3752,7 @@
               <div class="fact"><span class="label">连续性</span><div class="value">${semanticPill(continuity, continuity.includes("HANDOFF") ? "handover" : "normal")}</div></div>
               <div class="fact"><span class="label">接力方向</span><div class="value">${handoffText}</div></div>
               <div class="fact"><span class="label">主状态 / 风险</span><div class="value">${node.main_state || "UNKNOWN"} / ${node.risk_level || "NONE"} / ${node.event_status || "NONE"}</div></div>
+              <div class="fact"><span class="label">融合 / 远距</span><div class="value">${fusionText} / ${farText}</div></div>
             </div>
           </div>
         `;

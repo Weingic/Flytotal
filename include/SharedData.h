@@ -152,6 +152,22 @@ struct SystemData {
     char event_id[32];
     char node_id[16];
     unsigned long timestamp_ms;
+    bool nodeb_online;
+    char nodeb_status[24];
+    char nodeb_node_id[16];
+    char nodeb_source[16];
+    int nodeb_rssi;
+    unsigned long nodeb_last_update_ms;
+    bool ld2451_valid;
+    float ld2451_range_m;
+    float ld2451_speed_mps;
+    bool ld2451_approach;
+    bool far_motion_trigger;
+    unsigned long ld2451_last_update_ms;
+    char vision_quality[24];
+    char environment_mode[24];
+    char fusion_level[16];
+    char fusion_reason[48];
 };
 
 struct UnifiedOutputSnapshot {
@@ -205,6 +221,22 @@ struct UnifiedOutputSnapshot {
     char event_id[32];
     char node_id[16];
     unsigned long timestamp_ms;
+    bool nodeb_online;
+    char nodeb_status[24];
+    char nodeb_node_id[16];
+    char nodeb_source[16];
+    int nodeb_rssi;
+    unsigned long nodeb_last_update_ms;
+    bool ld2451_valid;
+    float ld2451_range_m;
+    float ld2451_speed_mps;
+    bool ld2451_approach;
+    bool far_motion_trigger;
+    unsigned long ld2451_last_update_ms;
+    char vision_quality[24];
+    char environment_mode[24];
+    char fusion_level[16];
+    char fusion_reason[48];
 };
 
 struct EventObject {
@@ -225,6 +257,12 @@ struct EventObject {
     char handoff_from[16];
     char handoff_to[16];
     char continuity_hint[24];
+    char fusion_level[16];
+    char fusion_reason[48];
+    char vision_quality[24];
+    bool far_motion_trigger;
+    float ld2451_range_m;
+    float ld2451_speed_mps;
     unsigned long start_time_ms;
     unsigned long close_time_ms;
     float last_x_mm;

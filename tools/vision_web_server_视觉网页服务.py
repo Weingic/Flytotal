@@ -269,6 +269,18 @@ def build_node_brief_payload(
         "handoff_from": str(status_payload.get("handoff_from", latest_event.get("handoff_from", "NONE")) or "NONE"),
         "handoff_to": str(status_payload.get("handoff_to", latest_event.get("handoff_to", "NONE")) or "NONE"),
         "continuity_hint": str(status_payload.get("continuity_hint", latest_event.get("continuity_hint", "SINGLE_NODE")) or "SINGLE_NODE"),
+        "nodeb_online": safe_int(status_payload.get("nodeb_online", 0)),
+        "nodeb_status": str(status_payload.get("nodeb_status", "UNKNOWN") or "UNKNOWN"),
+        "nodeb_node_id": str(status_payload.get("nodeb_node_id", "NONE") or "NONE"),
+        "nodeb_source": str(status_payload.get("nodeb_source", "NONE") or "NONE"),
+        "nodeb_rssi": safe_int(status_payload.get("nodeb_rssi", 0)),
+        "ld2451_valid": safe_int(status_payload.get("ld2451_valid", 0)),
+        "ld2451_range_m": safe_float(status_payload.get("ld2451_range_m", 0.0), 0.0),
+        "ld2451_speed_mps": safe_float(status_payload.get("ld2451_speed_mps", 0.0), 0.0),
+        "far_motion_trigger": safe_int(status_payload.get("far_motion_trigger", 0)),
+        "fusion_level": str(status_payload.get("fusion_level", "NONE") or "NONE"),
+        "fusion_reason": str(status_payload.get("fusion_reason", "NONE") or "NONE"),
+        "vision_quality": str(status_payload.get("vision_quality", "NO_VISUAL") or "NO_VISUAL"),
         "status_file": status_file.as_posix(),
         "events_file": events_file.as_posix(),
     }
@@ -396,6 +408,13 @@ def build_event_object_v1(
     rid_status = str(event_record.get("rid_status", "UNKNOWN") or "UNKNOWN").strip() or "UNKNOWN"
     whitelist_status = normalize_whitelist_status(event_record)
     vision_state = str(event_record.get("vision_state", "UNKNOWN") or "UNKNOWN").strip() or "UNKNOWN"
+    vision_quality = str(event_record.get("vision_quality", "NO_VISUAL") or "NO_VISUAL").strip() or "NO_VISUAL"
+    environment_mode = str(event_record.get("environment_mode", "CLEAR") or "CLEAR").strip() or "CLEAR"
+    fusion_level = str(event_record.get("fusion_level", "NONE") or "NONE").strip() or "NONE"
+    fusion_reason = str(event_record.get("fusion_reason", "NONE") or "NONE").strip() or "NONE"
+    far_motion_trigger = safe_int(event_record.get("far_motion_trigger", 0), 0)
+    ld2451_range_m = round(safe_float(event_record.get("ld2451_range_m", 0.0), 0.0), 2)
+    ld2451_speed_mps = round(safe_float(event_record.get("ld2451_speed_mps", 0.0), 0.0), 2)
     trigger_flags = str(
         event_record.get(
             "trigger_flags",
@@ -449,6 +468,13 @@ def build_event_object_v1(
         "wl_status": wl_status,
         "whitelist_status": whitelist_status,
         "vision_state": vision_state,
+        "vision_quality": vision_quality,
+        "environment_mode": environment_mode,
+        "fusion_level": fusion_level,
+        "fusion_reason": fusion_reason,
+        "far_motion_trigger": far_motion_trigger,
+        "ld2451_range_m": ld2451_range_m,
+        "ld2451_speed_mps": ld2451_speed_mps,
         "trigger_flags": trigger_flags,
         "reason_flags": reason_flags,
         "start_time": start_time,

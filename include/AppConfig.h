@@ -5,6 +5,14 @@ constexpr unsigned long MonitorBaudRate = 115200;
 constexpr unsigned long RadarBaudRate = 256000;
 constexpr int RadarRxPin = 18;
 constexpr int RadarTxPin = 17;
+constexpr bool NodeBSerialEnabled = true;
+constexpr unsigned long NodeBBaudRate = 115200;
+constexpr int NodeBRxPin = 15;
+constexpr int NodeBTxPin = 16;
+constexpr bool Ld2451SerialEnabled = false;
+constexpr unsigned long Ld2451BaudRate = 115200;
+constexpr int Ld2451RxPin = 13;
+constexpr int Ld2451TxPin = 14;
 constexpr unsigned long StartupDelayMs = 2000;
 }
 
@@ -43,6 +51,18 @@ constexpr int PulseMaxUs = 2500;
 namespace RadarConfig {
 constexpr float LockDistanceThresholdMm = 500.0f;
 constexpr unsigned long PollDelayMs = 10;
+}
+
+namespace FarRadarConfig {
+constexpr float MinTriggerRangeM = 10.0f;
+constexpr float MaxTriggerRangeM = 100.0f;
+constexpr float MinAbsSpeedMps = 0.2f;
+constexpr unsigned long TriggerHoldMs = 1500;
+constexpr unsigned long StaleTimeoutMs = 3000;
+}
+
+namespace NodeBConfig {
+constexpr unsigned long StaleTimeoutMs = 3000;
 }
 
 namespace TrackConfig {
