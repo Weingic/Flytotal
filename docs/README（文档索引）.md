@@ -6,16 +6,31 @@
 
 如果你现在想先快速建立整体理解，建议按下面顺序阅读：
 
-1. [1node_a_uplink_protocol（NodeA上行协议）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/1node_a_uplink_protocol（NodeA上行协议）.md)
+1. [2026-04-23_flytotal_guided_codewalk_01（全仓陪跑讲解01_总览与演进）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/2026-04-23_flytotal_guided_codewalk_01（全仓陪跑讲解01_总览与演进）.md)
+   面向初学者的全仓入口，先讲系统现在是什么、为什么会长成这样、应该按什么顺序读代码。
+2. [2026-04-23_flytotal_guided_codewalk_02（全仓陪跑讲解02_固件主链）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/2026-04-23_flytotal_guided_codewalk_02（全仓陪跑讲解02_固件主链）.md)
+   把 `include/lib/src` 串成一条“输入 -> 轨迹 -> 风险 -> 云台 -> 事件 -> 上行”的主链，并补充设计思路。
+3. [2026-04-23_flytotal_guided_codewalk_03（全仓陪跑讲解03_工具链与网页）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/2026-04-23_flytotal_guided_codewalk_03（全仓陪跑讲解03_工具链与网页）.md)
+   把 `tools`、网页和验收脚本讲成一个完整的外部支撑系统，解释为什么这些脚本是系统的一部分。
+4. [1node_a_uplink_protocol（NodeA上行协议）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/1node_a_uplink_protocol（NodeA上行协议）.md)
    当前串口命令、状态输出和上行字段说明。
-2. [3node_a_dataflow（NodeA数据流）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/3node_a_dataflow（NodeA数据流）.md)
+5. [3node_a_dataflow（NodeA数据流）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/3node_a_dataflow（NodeA数据流）.md)
    Node A 的主要数据流和模块关系。
-3. [4node_a_state_machines（NodeA状态机）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/4node_a_state_machines（NodeA状态机）.md)
+6. [4node_a_state_machines（NodeA状态机）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/4node_a_state_machines（NodeA状态机）.md)
    关键状态机和行为切换逻辑。
-4. [2026-04-02_node_a_full_logic_map（NodeA全功能逻辑图）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/2026-04-02_node_a_full_logic_map（NodeA全功能逻辑图）.md)
+7. [2026-04-02_node_a_full_logic_map（NodeA全功能逻辑图）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/2026-04-02_node_a_full_logic_map（NodeA全功能逻辑图）.md)
    当前系统的整体功能图和逻辑梳理。
 
-## 二、基础设计文档
+## 二、全仓陪跑讲解
+
+- [2026-04-23_flytotal_guided_codewalk_01（全仓陪跑讲解01_总览与演进）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/2026-04-23_flytotal_guided_codewalk_01（全仓陪跑讲解01_总览与演进）.md)
+  从系统总览、能力演进、阅读顺序入手，帮助你先建立“全局地图”。
+- [2026-04-23_flytotal_guided_codewalk_02（全仓陪跑讲解02_固件主链）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/2026-04-23_flytotal_guided_codewalk_02（全仓陪跑讲解02_固件主链）.md)
+  覆盖 `AppConfig.h`、`SharedData.h`、`lib/*`、`src/main.cpp`，按主链讲功能、设计、权衡。
+- [2026-04-23_flytotal_guided_codewalk_03（全仓陪跑讲解03_工具链与网页）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/2026-04-23_flytotal_guided_codewalk_03（全仓陪跑讲解03_工具链与网页）.md)
+  覆盖 `tools/*` 和网页文件，解释桥接、视觉、验收、交付工具为什么存在。
+
+## 三、基础设计文档
 
 - [1node_a_uplink_protocol（NodeA上行协议）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/1node_a_uplink_protocol（NodeA上行协议）.md)
   Node A 当前对外串口协议说明。
@@ -30,7 +45,7 @@
 - [3.31低空节点与云端统一接口草案（低空节点与云端统一接口草案）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/3.31低空节点与云端统一接口草案（低空节点与云端统一接口草案）.md)
   节点与云端接口的阶段性草案。
 
-## 三、测试工具与辅助文档
+## 四、测试工具与辅助文档
 
 - [6node_a_single_board_troubleshooting（NodeA单板故障排查）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/6node_a_single_board_troubleshooting（NodeA单板故障排查）.md)
   单板调试时的常见问题排查。
@@ -51,7 +66,7 @@
 - [main-cpp-beginner-diagram（小白版工人分工图）.html](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/diagrams/main-cpp-beginner-diagram（小白版工人分工图）.html)
   `main.cpp` 小白版工人分工图，把 `RadarTask / TrackingTask / CloudTask` 讲成 3 个工人的接力流程。
 
-## 四、功能梳理与阶段总结
+## 五、功能梳理与阶段总结
 
 - [2026-04-02_node_a_full_logic_map（NodeA全功能逻辑图）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/2026-04-02_node_a_full_logic_map（NodeA全功能逻辑图）.md)
   当前版本 Node A 的完整功能梳理。
@@ -60,7 +75,7 @@
 - [2026-04-01_node_a_next_phase_plan（NodeA下一阶段计划）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/2026-04-01_node_a_next_phase_plan（NodeA下一阶段计划）.md)
   下一阶段工作计划。
 
-## 五、联调记录与更新记录
+## 六、联调记录与更新记录
 
 - [2026-04-01_node_a_radar_gimbal_integration_record（NodeA雷达云台联调记录）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/2026-04-01_node_a_radar_gimbal_integration_record（NodeA雷达云台联调记录）.md)
   雷达与云台联调记录。
@@ -81,7 +96,7 @@
 - [5node_a_today_summary（NodeA当日总结）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/5node_a_today_summary（NodeA当日总结）.md)
   当日阶段总结。
 
-## 八、4.13-4.14 关键交付
+## 七、4.13-4.14 关键交付
 
 - [2026-04-13_hardware_issue_list_v1.1（硬件测试问题清单）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/2026-04-13_hardware_issue_list_v1.1（硬件测试问题清单）.md)
 - [2026-04-13_wiring_power_port_table_v1.1（接线供电端口表V1.1）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/2026-04-13_wiring_power_port_table_v1.1（接线供电端口表V1.1）.md)
@@ -93,14 +108,14 @@
 - [2026-04-14_rid_log_samples_v1（身份链日志样例V1）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/2026-04-14_rid_log_samples_v1（身份链日志样例V1）.md)
 - [2026-04-14_web_rid_display_acceptance_v1（网页RID展示验收V1）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/2026-04-14_web_rid_display_acceptance_v1（网页RID展示验收V1）.md)
 
-## 六、历史单板测试记录
+## 八、历史单板测试记录
 
 - [2026-03-30_esp32_single_board_checklist（ESP32单板检查清单）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/2026-03-30_esp32_single_board_checklist（ESP32单板检查清单）.md)
   单板检查清单。
 - [2026-03-30_esp32_single_board_record（ESP32单板记录）.md](C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/docs/2026-03-30_esp32_single_board_record（ESP32单板记录）.md)
   单板测试记录。
 
-## 七、按用途找文档
+## 九、按用途找文档
 
 如果你想查协议：
 

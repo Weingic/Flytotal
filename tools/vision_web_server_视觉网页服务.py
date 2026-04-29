@@ -1138,12 +1138,20 @@ def build_delivery_assets_payload(
     recovery_checklist = docs_dir / "2026-04-21_recovery_checklist_w3（第三周现场恢复检查单）.md"
     freeze_manifest = docs_dir / "2026-04-21_freeze_manifest_w3（第三周冻结清单）.md"
     stability_record = docs_dir / "2026-04-21_day5_win_stability_record（Day5 Win稳定性记录）.md"
+    dual_demo_script = docs_dir / "2026-04-22_dual_node_demo_script_v2（双节点演示脚本V2）.md"
+    dual_export_sample = docs_dir / "2026-04-22_dual_node_event_export_sample_v1（双节点事件导出样例V1）.md"
+    dual_handoff_template = docs_dir / "2026-04-22_a1_a2_real_handoff_record_template_v1（A1A2真实接力记录模板V1）.md"
+    dual_naming_rules = docs_dir / "2026-04-22_dual_node_capture_replay_export_rules_v1（双节点截图回放导出命名规则V1）.md"
 
     docs_assets = [
         build_file_asset(demo_checklist, docs_dir, "/docs", "演示检查单"),
         build_file_asset(recovery_checklist, docs_dir, "/docs", "现场恢复检查单"),
         build_file_asset(freeze_manifest, docs_dir, "/docs", "冻结清单"),
         build_file_asset(stability_record, docs_dir, "/docs", "Day5 稳定性记录"),
+        build_file_asset(dual_demo_script, docs_dir, "/docs", "双节点演示脚本"),
+        build_file_asset(dual_export_sample, docs_dir, "/docs", "双节点导出样例"),
+        build_file_asset(dual_handoff_template, docs_dir, "/docs", "真实接力记录模板"),
+        build_file_asset(dual_naming_rules, docs_dir, "/docs", "截图回放命名规则"),
     ]
 
     latest_session_logs = load_session_log_files(session_log_dir)

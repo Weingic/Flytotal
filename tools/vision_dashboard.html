@@ -1115,6 +1115,10 @@
             <a class="filter-btn filter-link disabled" id="deliveryRecoveryLink" href="#" target="_blank" rel="noreferrer">现场恢复检查单</a>
             <a class="filter-btn filter-link disabled" id="deliveryFreezeLink" href="#" target="_blank" rel="noreferrer">冻结清单</a>
             <a class="filter-btn filter-link disabled" id="deliveryStabilityLink" href="#" target="_blank" rel="noreferrer">Day5 稳定性记录</a>
+            <a class="filter-btn filter-link disabled" id="deliveryDualScriptLink" href="#" target="_blank" rel="noreferrer">双节点演示脚本</a>
+            <a class="filter-btn filter-link disabled" id="deliveryDualExportLink" href="#" target="_blank" rel="noreferrer">双节点导出样例</a>
+            <a class="filter-btn filter-link disabled" id="deliveryHandoffTemplateLink" href="#" target="_blank" rel="noreferrer">真实接力模板</a>
+            <a class="filter-btn filter-link disabled" id="deliveryNamingRulesLink" href="#" target="_blank" rel="noreferrer">命名规则</a>
           </div>
         </div>
       </article>
@@ -3598,6 +3602,10 @@
       bindDeliveryLink("deliveryRecoveryLink", docsByLabel.get("现场恢复检查单"));
       bindDeliveryLink("deliveryFreezeLink", docsByLabel.get("冻结清单"));
       bindDeliveryLink("deliveryStabilityLink", docsByLabel.get("Day5 稳定性记录"));
+      bindDeliveryLink("deliveryDualScriptLink", docsByLabel.get("双节点演示脚本"));
+      bindDeliveryLink("deliveryDualExportLink", docsByLabel.get("双节点导出样例"));
+      bindDeliveryLink("deliveryHandoffTemplateLink", docsByLabel.get("真实接力记录模板"));
+      bindDeliveryLink("deliveryNamingRulesLink", docsByLabel.get("截图回放命名规则"));
 
       const assetState = document.getElementById("deliveryAssetStateValue");
       const allDocsReady = docs.length > 0 && docs.every((item) => item && item.available);
