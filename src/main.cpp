@@ -8,79 +8,16 @@
 #include <string.h>
 
 #include "AppConfig.h"
+#include "Fusion.h"
 #include "GimbalController.h"
 #include "GimbalPredictor.h"
 #include "HunterAction.h"
+#include "Ld2451Parser.h"
 #include "RadarParser.h"
 #include "SharedData.h"
 #include "TrackManager.h"
 
-SystemData globalData = {
-    false,
-    0.0f,
-    0.0f,
-    STATE_SCANNING,
-    HUNTER_IDLE,
-    RID_NONE,
-    false,
-    WL_UNKNOWN,
-    0,
-    {0},
-    {0},
-    {0},
-    0,
-    0,
-    {0},
-    {0},
-    {0},
-    {0},
-    {0},
-    0,
-    {0, false, false, 0.0f, 0.0f, 0.0f, 0.0f, 0, 0, 0, 0},
-    0.0f,
-    0u,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    HUNTER_IDLE,
-    0,
-    0,
-    RISK_TRANSITION_STABLE,
-    0,
-    0,
-    false,
-    false,
-    false,
-    0,
-    VISION_IDLE,
-    false,
-    false,
-    AUDIO_IDLE,
-    UPLINK_READY,
-    false,
-    {0},
-    {0},
-    0,
-    false,
-    {0},
-    {0},
-    {0},
-    0,
-    0,
-    false,
-    0.0f,
-    0.0f,
-    false,
-    false,
-    0,
-    {0},
-    {0},
-    {0},
-    {0}
-};
+SystemData globalData = {};
 portMUX_TYPE dataMutex = portMUX_INITIALIZER_UNLOCKED;
 
 GimbalPredictor myGimbal(GimbalConfig::PredictorKp, GimbalConfig::PredictorKd);
@@ -302,6 +239,10 @@ struct LastEventSnapshot {
     bool far_motion_trigger;
     float ld2451_range_m;
     float ld2451_speed_mps;
+    char fusion_stage[16];
+    float fusion_confidence;
+    bool is_multirotor_like;
+    float multirotor_score;
 };
 
 struct SummaryStats {
@@ -333,6 +274,7 @@ String commandBuffer;
 String nodeBCommandBuffer;
 String ld2451CommandBuffer;
 HardwareSerial ld2451Serial(0);
+Ld2451Parser ld2451Parser;
 float runtimeKp = GimbalConfig::PredictorKp;
 float runtimeKd = GimbalConfig::PredictorKd;
 SimTrackInput simTrack = {false, 0.0f, 0.0f, 0};
@@ -381,37 +323,7 @@ LastEventSnapshot lastEventSnapshot = {
 };
 RuntimeEventStatus runtimeEventStatus = {false, 0, 0, {0}};
 EventLifecycleState eventLifecycleState = {false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0}, {0}};
-EventObject currentEventObject = {
-    false,
-    EVENT_STATE_NONE,
-    {0},
-    {0},
-    {0},
-    {0},
-    0,
-    0.0f,
-    RISK_NONE,
-    0u,
-    0u,
-    RID_NONE,
-    WL_UNKNOWN,
-    {0},
-    {0},
-    {0},
-    {0},
-    {0},
-    {0},
-    {0},
-    false,
-    0.0f,
-    0.0f,
-    0,
-    0,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f
-};
+EventObject currentEventObject = {};
 constexpr size_t NodeRuntimeCacheSlots = 4;
 NodeRuntimeCache nodeRuntimeCaches[NodeRuntimeCacheSlots] = {};
 SummaryStats summaryStats = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0f, 0, 0.0f, 0.0f, {0}};
@@ -2036,61 +1948,7 @@ void deriveVisionQuality(const SystemData &snapshot, char *destination, size_t d
 }
 
 void deriveFusionFields(SystemData &data, unsigned long now) {
-    data.nodeb_online = isNodeBOnline(data, now);
-    data.far_motion_trigger = computeFarMotionTrigger(data, now);
-
-    deriveVisionQuality(data, data.vision_quality, sizeof(data.vision_quality));
-    if (data.environment_mode[0] == '\0') {
-        copyEventId(data.environment_mode, sizeof(data.environment_mode), "CLEAR");
-    }
-    const bool limitedVision = isLimitedVisionEnvironment(data);
-
-    const bool nearRadar = data.radar_track.is_confirmed;
-    const bool farRadar = data.far_motion_trigger;
-    const bool ridActive = data.rid_status == RID_RECEIVED ||
-                           data.rid_status == RID_MATCHED ||
-                           data.rid_status == RID_INVALID;
-    const bool visualActive = data.vision_locked;
-    uint8_t sourceCount = 0;
-    if (nearRadar || farRadar) {
-        sourceCount++;
-    }
-    if (ridActive) {
-        sourceCount++;
-    }
-    if (visualActive) {
-        sourceCount++;
-    }
-
-    if (sourceCount >= 3) {
-        copyEventId(data.fusion_level, sizeof(data.fusion_level), "HIGH");
-    } else if (sourceCount == 2) {
-        copyEventId(data.fusion_level, sizeof(data.fusion_level), "MID");
-    } else if (sourceCount == 1) {
-        copyEventId(data.fusion_level, sizeof(data.fusion_level), "LOW");
-    } else {
-        copyEventId(data.fusion_level, sizeof(data.fusion_level), "NONE");
-    }
-
-    if (data.rid_status == RID_INVALID) {
-        copyEventId(data.fusion_reason, sizeof(data.fusion_reason), "IDENTITY_CONFLICT");
-    } else if (data.rid_status == RID_MATCHED) {
-        copyEventId(data.fusion_reason, sizeof(data.fusion_reason), "RID_MATCHED_LEGAL");
-    } else if ((nearRadar || farRadar) && limitedVision) {
-        copyEventId(data.fusion_reason, sizeof(data.fusion_reason), "RADAR_PRIMARY_VISUAL_LIMITED");
-    } else if (nearRadar && visualActive) {
-        copyEventId(data.fusion_reason, sizeof(data.fusion_reason), "RADAR_VISUAL_CONFIRMED");
-    } else if ((nearRadar || farRadar) && !ridActive && !visualActive) {
-        copyEventId(data.fusion_reason, sizeof(data.fusion_reason), "RADAR_ONLY_RID_MISSING");
-    } else if (nearRadar) {
-        copyEventId(data.fusion_reason, sizeof(data.fusion_reason), "RADAR_CONFIRMED_VISUAL_WEAK");
-    } else if (farRadar) {
-        copyEventId(data.fusion_reason, sizeof(data.fusion_reason), "FAR_RADAR_WARNING_ONLY");
-    } else if (ridActive) {
-        copyEventId(data.fusion_reason, sizeof(data.fusion_reason), "RID_ONLY_LOW_CONF");
-    } else {
-        copyEventId(data.fusion_reason, sizeof(data.fusion_reason), "NONE");
-    }
+    Fusion::updateFusionFields(data, now);
 }
 
 void refreshFusionRuntimeLocked(unsigned long now) {
@@ -2395,6 +2253,10 @@ void resetRuntimeEventStatus(const char *close_reason = nullptr) {
         currentEventObject.far_motion_trigger = false;
         currentEventObject.ld2451_range_m = 0.0f;
         currentEventObject.ld2451_speed_mps = 0.0f;
+        copyEventId(currentEventObject.fusion_stage, sizeof(currentEventObject.fusion_stage), "NONE");
+        currentEventObject.fusion_confidence = 0.0f;
+        currentEventObject.is_multirotor_like = false;
+        currentEventObject.multirotor_score = 0.0f;
         currentEventObject.start_time_ms = 0;
         currentEventObject.close_time_ms = 0;
         currentEventObject.last_x_mm = 0.0f;
@@ -2442,6 +2304,10 @@ void syncRuntimeEventStatus(const SystemData &snapshot, const EventContext &cont
         currentEventObject.far_motion_trigger = snapshot.far_motion_trigger;
         currentEventObject.ld2451_range_m = snapshot.ld2451_range_m;
         currentEventObject.ld2451_speed_mps = snapshot.ld2451_speed_mps;
+        copyEventId(currentEventObject.fusion_stage, sizeof(currentEventObject.fusion_stage), normalizeOptionalField(snapshot.fusion_stage));
+        currentEventObject.fusion_confidence = snapshot.fusion_confidence;
+        currentEventObject.is_multirotor_like = snapshot.is_multirotor_like;
+        currentEventObject.multirotor_score = snapshot.multirotor_score;
         currentEventObject.start_time_ms = context.opened_ms;
         currentEventObject.last_x_mm = snapshot.radar_track.x_mm;
         currentEventObject.last_y_mm = snapshot.radar_track.y_mm;
@@ -2477,6 +2343,10 @@ void syncRuntimeEventStatus(const SystemData &snapshot, const EventContext &cont
             currentEventObject.far_motion_trigger = false;
             currentEventObject.ld2451_range_m = 0.0f;
             currentEventObject.ld2451_speed_mps = 0.0f;
+            copyEventId(currentEventObject.fusion_stage, sizeof(currentEventObject.fusion_stage), "NONE");
+            currentEventObject.fusion_confidence = 0.0f;
+            currentEventObject.is_multirotor_like = false;
+            currentEventObject.multirotor_score = 0.0f;
         }
         currentEventObject.risk_score = snapshot.risk_score;
         currentEventObject.risk_level = deriveRiskLevel(snapshot);
@@ -2490,6 +2360,10 @@ void syncRuntimeEventStatus(const SystemData &snapshot, const EventContext &cont
         currentEventObject.far_motion_trigger = snapshot.far_motion_trigger;
         currentEventObject.ld2451_range_m = snapshot.ld2451_range_m;
         currentEventObject.ld2451_speed_mps = snapshot.ld2451_speed_mps;
+        copyEventId(currentEventObject.fusion_stage, sizeof(currentEventObject.fusion_stage), normalizeOptionalField(snapshot.fusion_stage));
+        currentEventObject.fusion_confidence = snapshot.fusion_confidence;
+        currentEventObject.is_multirotor_like = snapshot.is_multirotor_like;
+        currentEventObject.multirotor_score = snapshot.multirotor_score;
         currentEventObject.last_x_mm = snapshot.radar_track.x_mm;
         currentEventObject.last_y_mm = snapshot.radar_track.y_mm;
         currentEventObject.last_vx_mm_s = snapshot.radar_track.vx_mm_s;
@@ -2609,6 +2483,10 @@ UnifiedOutputSnapshot buildUnifiedOutputSnapshot(const SystemData &snapshot, con
     copyEventId(unified.environment_mode, sizeof(unified.environment_mode), snapshot.environment_mode);
     copyEventId(unified.fusion_level, sizeof(unified.fusion_level), snapshot.fusion_level);
     copyEventId(unified.fusion_reason, sizeof(unified.fusion_reason), snapshot.fusion_reason);
+    copyEventId(unified.fusion_stage, sizeof(unified.fusion_stage), snapshot.fusion_stage);
+    unified.fusion_confidence = snapshot.fusion_confidence;
+    unified.is_multirotor_like = snapshot.is_multirotor_like;
+    unified.multirotor_score = snapshot.multirotor_score;
     return unified;
 }
 
@@ -2718,8 +2596,16 @@ void printNormalizedStateFields(const UnifiedOutputSnapshot &snapshot) {
     Serial.print(snapshot.ld2451_last_update_ms);
     Serial.print(",fusion_level=");
     Serial.print(snapshot.fusion_level[0] != '\0' ? snapshot.fusion_level : "NONE");
+    Serial.print(",fusion_stage=");
+    Serial.print(snapshot.fusion_stage[0] != '\0' ? snapshot.fusion_stage : "NONE");
+    Serial.print(",fusion_confidence=");
+    Serial.print(snapshot.fusion_confidence, 2);
     Serial.print(",fusion_reason=");
     Serial.print(snapshot.fusion_reason[0] != '\0' ? snapshot.fusion_reason : "NONE");
+    Serial.print(",is_multirotor_like=");
+    Serial.print(snapshot.is_multirotor_like ? 1 : 0);
+    Serial.print(",multirotor_score=");
+    Serial.print(snapshot.multirotor_score, 1);
     Serial.print(",audio_state=");
     Serial.print(audioStateName(snapshot.audio_state));
     Serial.print(",uplink_state=");
@@ -2931,6 +2817,10 @@ void resetLastEventSnapshot() {
     lastEventSnapshot.far_motion_trigger = false;
     lastEventSnapshot.ld2451_range_m = 0.0f;
     lastEventSnapshot.ld2451_speed_mps = 0.0f;
+    lastEventSnapshot.fusion_stage[0] = '\0';
+    lastEventSnapshot.fusion_confidence = 0.0f;
+    lastEventSnapshot.is_multirotor_like = false;
+    lastEventSnapshot.multirotor_score = 0.0f;
     portEXIT_CRITICAL(&dataMutex);
 }
 
@@ -3047,6 +2937,10 @@ void cacheLastEventSnapshot(
     lastEventSnapshot.far_motion_trigger = unified.far_motion_trigger;
     lastEventSnapshot.ld2451_range_m = unified.ld2451_range_m;
     lastEventSnapshot.ld2451_speed_mps = unified.ld2451_speed_mps;
+    copyEventId(lastEventSnapshot.fusion_stage, sizeof(lastEventSnapshot.fusion_stage), normalizeOptionalField(unified.fusion_stage));
+    lastEventSnapshot.fusion_confidence = unified.fusion_confidence;
+    lastEventSnapshot.is_multirotor_like = unified.is_multirotor_like;
+    lastEventSnapshot.multirotor_score = unified.multirotor_score;
     portEXIT_CRITICAL(&dataMutex);
 }
 
@@ -3106,8 +3000,16 @@ void emitLastEventSnapshot() {
     Serial.print(snapshot.vision_quality[0] != '\0' ? snapshot.vision_quality : "NO_VISUAL");
     Serial.print(",fusion_level=");
     Serial.print(snapshot.fusion_level[0] != '\0' ? snapshot.fusion_level : "NONE");
+    Serial.print(",fusion_stage=");
+    Serial.print(snapshot.fusion_stage[0] != '\0' ? snapshot.fusion_stage : "NONE");
+    Serial.print(",fusion_confidence=");
+    Serial.print(snapshot.fusion_confidence, 2);
     Serial.print(",fusion_reason=");
     Serial.print(snapshot.fusion_reason[0] != '\0' ? snapshot.fusion_reason : "NONE");
+    Serial.print(",is_multirotor_like=");
+    Serial.print(snapshot.is_multirotor_like ? 1 : 0);
+    Serial.print(",multirotor_score=");
+    Serial.print(snapshot.multirotor_score, 1);
     Serial.print(",far_motion_trigger=");
     Serial.print(snapshot.far_motion_trigger ? 1 : 0);
     Serial.print(",ld2451_range_m=");
@@ -4383,8 +4285,25 @@ void emitFusionStatus() {
     Serial.print(snapshot.environment_mode[0] != '\0' ? snapshot.environment_mode : "CLEAR");
     Serial.print(",fusion_level=");
     Serial.print(snapshot.fusion_level[0] != '\0' ? snapshot.fusion_level : "NONE");
+    Serial.print(",fusion_stage=");
+    Serial.print(snapshot.fusion_stage[0] != '\0' ? snapshot.fusion_stage : "NONE");
+    Serial.print(",fusion_confidence=");
+    Serial.print(snapshot.fusion_confidence, 2);
     Serial.print(",fusion_reason=");
-    Serial.println(snapshot.fusion_reason[0] != '\0' ? snapshot.fusion_reason : "NONE");
+    Serial.print(snapshot.fusion_reason[0] != '\0' ? snapshot.fusion_reason : "NONE");
+    Serial.print(",is_multirotor_like=");
+    Serial.print(snapshot.is_multirotor_like ? 1 : 0);
+    Serial.print(",multirotor_score=");
+    Serial.println(snapshot.multirotor_score, 1);
+}
+
+void emitFusionDebug() {
+    SystemData snapshot = {};
+    portENTER_CRITICAL(&dataMutex);
+    refreshFusionRuntimeLocked(millis());
+    snapshot = globalData;
+    portEXIT_CRITICAL(&dataMutex);
+    Fusion::printDebug(snapshot, Serial);
 }
 
 void handleHostCommand(const String &line) {
@@ -4513,8 +4432,10 @@ void handleHostCommand(const String &line) {
     } else if (command == "FUSION") {
         if (value == "STATUS" || value.length() == 0) {
             emitFusionStatus();
+        } else if (value == "DEBUG") {
+            emitFusionDebug();
         } else {
-            Serial.println("Invalid FUSION command. Use FUSION,STATUS.");
+            Serial.println("Invalid FUSION command. Use FUSION,STATUS or FUSION,DEBUG.");
         }
     } else if (command == "RID") {
         if (value.length() == 0 || value == "STATUS") {
@@ -4939,6 +4860,10 @@ void handleHostCommand(const String &line) {
         copyEventId(globalData.environment_mode, sizeof(globalData.environment_mode), "CLEAR");
         copyEventId(globalData.fusion_level, sizeof(globalData.fusion_level), "NONE");
         copyEventId(globalData.fusion_reason, sizeof(globalData.fusion_reason), "NONE");
+        copyEventId(globalData.fusion_stage, sizeof(globalData.fusion_stage), "NONE");
+        globalData.fusion_confidence = 0.0f;
+        globalData.is_multirotor_like = false;
+        globalData.multirotor_score = 0.0f;
         refreshManualSimulationSnapshotLocked(millis());
         portEXIT_CRITICAL(&dataMutex);
         clearSimTrack();
@@ -5378,7 +5303,7 @@ void Ld2451Task(void *pvParameters) {
         AppSerialConfig::Ld2451RxPin,
         AppSerialConfig::Ld2451TxPin
     );
-    Serial.print("LD2451 text UART listening: baud=");
+    Serial.print("LD2451 binary/text UART listening: baud=");
     Serial.print(AppSerialConfig::Ld2451BaudRate);
     Serial.print(",rx=");
     Serial.print(AppSerialConfig::Ld2451RxPin);
@@ -5387,15 +5312,33 @@ void Ld2451Task(void *pvParameters) {
 
     while (1) {
         while (ld2451Serial.available() > 0) {
-            char ch = static_cast<char>(ld2451Serial.read());
+            uint8_t raw = static_cast<uint8_t>(ld2451Serial.read());
+            if (ld2451Parser.feed(raw)) {
+                const Ld2451Frame &frame = ld2451Parser.frame();
+                if (frame.valid && frame.target_count > 0 && frame.selected.valid) {
+                    const float speed_mps = frame.selected.speed_kmh * (1000.0f / 3600.0f);
+                    setLd2451Measurement(
+                        static_cast<float>(frame.selected.range_m),
+                        speed_mps,
+                        frame.selected.approach,
+                        true,
+                        millis()
+                    );
+                } else {
+                    clearLd2451Measurement(millis());
+                }
+                continue;
+            }
+
+            char ch = static_cast<char>(raw);
             if (ch == '\n' || ch == '\r') {
                 if (ld2451CommandBuffer.length() > 0) {
                     handleLd2451SerialLine(ld2451CommandBuffer);
                     ld2451CommandBuffer = "";
                 }
-            } else if (ld2451CommandBuffer.length() < HostCommandMaxLength) {
+            } else if (isPrintable(ch) && ld2451CommandBuffer.length() < HostCommandMaxLength) {
                 ld2451CommandBuffer += ch;
-            } else {
+            } else if (ld2451CommandBuffer.length() >= HostCommandMaxLength) {
                 ld2451CommandBuffer = "";
                 Serial.println("LD2451 serial buffer reset: line too long.");
             }
@@ -5677,6 +5620,10 @@ void TrackingTask(void *pvParameters) {
         copyEventId(flowSnapshot.environment_mode, sizeof(flowSnapshot.environment_mode), globalData.environment_mode);
         copyEventId(flowSnapshot.fusion_level, sizeof(flowSnapshot.fusion_level), globalData.fusion_level);
         copyEventId(flowSnapshot.fusion_reason, sizeof(flowSnapshot.fusion_reason), globalData.fusion_reason);
+        copyEventId(flowSnapshot.fusion_stage, sizeof(flowSnapshot.fusion_stage), globalData.fusion_stage);
+        flowSnapshot.fusion_confidence = globalData.fusion_confidence;
+        flowSnapshot.is_multirotor_like = globalData.is_multirotor_like;
+        flowSnapshot.multirotor_score = globalData.multirotor_score;
         portEXIT_CRITICAL(&dataMutex);
 
         flowSnapshot.is_locked = track_snapshot.is_confirmed && (track_snapshot.y_mm > RadarConfig::LockDistanceThresholdMm);

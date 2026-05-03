@@ -9,6 +9,8 @@ private:
     float Kd;
     float last_x;
     float last_y;
+    float last_vx;
+    float last_vy;
     unsigned long last_time;
     float current_pan_angle;
 

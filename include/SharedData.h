@@ -101,6 +101,11 @@ struct RadarTrack {
     uint16_t lost_count;
     unsigned long first_seen_ms;
     unsigned long last_seen_ms;
+    bool is_multirotor_like;
+    float multirotor_score;
+    unsigned long track_age_ms;
+    float speed_variance_mm_s;
+    float heading_rate_deg_s;
 };
 
 struct SystemData {
@@ -168,6 +173,14 @@ struct SystemData {
     char environment_mode[24];
     char fusion_level[16];
     char fusion_reason[48];
+    char fusion_stage[16];
+    float fusion_confidence;
+    bool range_agreement;
+    bool speed_agreement;
+    bool vision_agreement;
+    uint8_t source_vote_count;
+    bool is_multirotor_like;
+    float multirotor_score;
 };
 
 struct UnifiedOutputSnapshot {
@@ -237,6 +250,10 @@ struct UnifiedOutputSnapshot {
     char environment_mode[24];
     char fusion_level[16];
     char fusion_reason[48];
+    char fusion_stage[16];
+    float fusion_confidence;
+    bool is_multirotor_like;
+    float multirotor_score;
 };
 
 struct EventObject {
@@ -263,6 +280,10 @@ struct EventObject {
     bool far_motion_trigger;
     float ld2451_range_m;
     float ld2451_speed_mps;
+    char fusion_stage[16];
+    float fusion_confidence;
+    bool is_multirotor_like;
+    float multirotor_score;
     unsigned long start_time_ms;
     unsigned long close_time_ms;
     float last_x_mm;

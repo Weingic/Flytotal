@@ -5,8 +5,9 @@ import argparse
 import csv
 import json
 import sys
+import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,13 @@ class VisionSnapshot:
     center_x: int
     center_y: int
     tracker_name: str
+    frame_width: int = 0
+    frame_height: int = 0
+    vision_confidence: float = 0.0
+    bbox_stability_score: float = 0.0
+    tracker_state: str = "LOST"
+    detector_state: str = "DISABLED"
+    yolo_detections: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -314,6 +322,8 @@ def build_snapshot(
     locked: bool,
     bbox: tuple[int, int, int, int] | None,
     tracker_name: str,
+    frame_width: int = 0,
+    frame_height: int = 0,
 ) -> VisionSnapshot:
     timestamp_ms = int(time.time() * 1000)
     if bbox is None:
@@ -322,6 +332,16 @@ def build_snapshot(
         x, y, w, h = bbox
         cx = x + w // 2
         cy = y + h // 2
+
+    bbox_area = float(w * h) if bbox is not None else 0.0
+    frame_area = float(frame_width * frame_height) if frame_width > 0 and frame_height > 0 else 1.0
+    area_ratio = max(0.0, min(1.0, bbox_area / frame_area * 8.0))
+    confidence = 0.0
+    if locked:
+        confidence = max(0.35, min(0.95, 0.55 + area_ratio * 0.25))
+    elif state == VISION_SEARCHING:
+        confidence = 0.25
+    stability = confidence if locked else 0.0
 
     return VisionSnapshot(
         timestamp_ms=timestamp_ms,
@@ -335,6 +355,11 @@ def build_snapshot(
         center_x=cx,
         center_y=cy,
         tracker_name=tracker_name.upper(),
+        frame_width=frame_width,
+        frame_height=frame_height,
+        vision_confidence=confidence,
+        bbox_stability_score=stability,
+        tracker_state="TRACKING" if locked else ("OCCLUDED" if state == VISION_LOST else "LOST"),
     )
 
 
@@ -350,6 +375,160 @@ def print_snapshot(snapshot: VisionSnapshot) -> None:
         f"cy={snapshot.center_y},"
         f"tracker={snapshot.tracker_name}"
     )
+
+
+class SidecarDetector:
+    """Non-blocking detector path for red confirmation boxes.
+
+    The CSRT/KCF tracker remains the primary close-range tracker. This sidecar
+    only writes visual evidence boxes for dashboard/demo use.
+    """
+
+    def __init__(self, cv: Any, enabled: bool, model_path: Path, every_n_frames: int) -> None:
+        self.cv = cv
+        self.enabled = bool(enabled)
+        self.model_path = model_path
+        self.every_n_frames = max(1, int(every_n_frames))
+        self.state = "DISABLED"
+        self._session: Any | None = None
+        self._input_name = ""
+        self._lock = threading.Lock()
+        self._busy = False
+        self._latest: list[dict[str, Any]] = []
+        self._last_gray: Any | None = None
+
+        if not self.enabled:
+            return
+        if not self.model_path.exists():
+            self.state = "FALLBACK_FLOW"
+            return
+        try:
+            import onnxruntime as ort  # type: ignore
+
+            self._session = ort.InferenceSession(str(self.model_path), providers=["CPUExecutionProvider"])
+            self._input_name = self._session.get_inputs()[0].name
+            self.state = "READY_ONNX"
+        except Exception as exc:  # pragma: no cover - depends on local runtime
+            self.state = "FALLBACK_FLOW"
+            print(f"YOLO sidecar fallback: {exc}", file=sys.stderr)
+
+    def submit(self, frame_index: int, frame: Any) -> None:
+        if not self.enabled or frame_index % self.every_n_frames != 0:
+            return
+        if self._session is None:
+            self._run_flow(frame)
+            return
+        with self._lock:
+            if self._busy:
+                return
+            self._busy = True
+        threading.Thread(target=self._run_onnx, args=(frame.copy(),), daemon=True).start()
+
+    def latest(self) -> tuple[str, list[dict[str, Any]]]:
+        with self._lock:
+            return self.state, [dict(item) for item in self._latest]
+
+    def _set_latest(self, state: str, detections: list[dict[str, Any]]) -> None:
+        with self._lock:
+            self.state = state
+            self._latest = detections
+            self._busy = False
+
+    def _run_flow(self, frame: Any) -> None:
+        gray = self.cv.cvtColor(frame, self.cv.COLOR_BGR2GRAY)
+        gray = self.cv.GaussianBlur(gray, (7, 7), 0)
+        if self._last_gray is None:
+            self._last_gray = gray
+            self._set_latest("FALLBACK_FLOW", [])
+            return
+
+        diff = self.cv.absdiff(self._last_gray, gray)
+        self._last_gray = gray
+        _, thresh = self.cv.threshold(diff, 24, 255, self.cv.THRESH_BINARY)
+        thresh = self.cv.dilate(thresh, None, iterations=2)
+        contours, _ = self.cv.findContours(thresh, self.cv.RETR_EXTERNAL, self.cv.CHAIN_APPROX_SIMPLE)
+        detections: list[dict[str, Any]] = []
+        frame_area = max(1, int(frame.shape[0]) * int(frame.shape[1]))
+        for contour in sorted(contours, key=self.cv.contourArea, reverse=True)[:3]:
+            area = float(self.cv.contourArea(contour))
+            if area < max(80.0, frame_area * 0.0004):
+                continue
+            x, y, w, h = self.cv.boundingRect(contour)
+            detections.append(
+                {
+                    "bbox_x": int(x),
+                    "bbox_y": int(y),
+                    "bbox_w": int(w),
+                    "bbox_h": int(h),
+                    "score": round(min(0.75, area / max(1.0, frame_area * 0.02)), 3),
+                    "class_id": -1,
+                    "class_name": "motion",
+                }
+            )
+        self._set_latest("FALLBACK_FLOW", detections)
+
+    def _run_onnx(self, frame: Any) -> None:
+        try:
+            import numpy as np  # type: ignore
+
+            height, width = frame.shape[:2]
+            input_size = 640
+            resized = self.cv.resize(frame, (input_size, input_size))
+            rgb = self.cv.cvtColor(resized, self.cv.COLOR_BGR2RGB)
+            blob = rgb.astype("float32") / 255.0
+            blob = np.transpose(blob, (2, 0, 1))[None, ...]
+            outputs = self._session.run(None, {self._input_name: blob}) if self._session is not None else []
+            predictions = np.array(outputs[0]).squeeze() if outputs else np.empty((0, 0))
+            if predictions.ndim != 2:
+                self._set_latest("READY_ONNX", [])
+                return
+            if predictions.shape[0] < predictions.shape[1] and predictions.shape[0] >= 6:
+                predictions = predictions.T
+
+            boxes: list[list[int]] = []
+            scores: list[float] = []
+            class_id = 4
+            for row in predictions:
+                if row.shape[0] <= class_id + 4:
+                    continue
+                score = float(row[4 + class_id])
+                if score < 0.25:
+                    continue
+                cx, cy, bw, bh = [float(value) for value in row[:4]]
+                x = int((cx - bw / 2.0) * width / input_size)
+                y = int((cy - bh / 2.0) * height / input_size)
+                w = int(bw * width / input_size)
+                h = int(bh * height / input_size)
+                x = max(0, min(width - 1, x))
+                y = max(0, min(height - 1, y))
+                w = max(0, min(width - x, w))
+                h = max(0, min(height - y, h))
+                if w <= 0 or h <= 0:
+                    continue
+                boxes.append([x, y, w, h])
+                scores.append(score)
+
+            keep = self.cv.dnn.NMSBoxes(boxes, scores, 0.25, 0.45) if boxes else []
+            detections: list[dict[str, Any]] = []
+            for index in list(keep)[:5]:
+                item_index = int(index[0] if isinstance(index, (list, tuple)) else index)
+                x, y, w, h = boxes[item_index]
+                detections.append(
+                    {
+                        "bbox_x": x,
+                        "bbox_y": y,
+                        "bbox_w": w,
+                        "bbox_h": h,
+                        "score": round(float(scores[item_index]), 3),
+                        "class_id": class_id,
+                        "class_name": "airplane",
+                    }
+                )
+            self._set_latest("READY_ONNX", detections)
+        except Exception as exc:  # pragma: no cover - depends on local runtime/model
+            print(f"YOLO sidecar failed, switching to fallback flow: {exc}", file=sys.stderr)
+            self._session = None
+            self._run_flow(frame)
 
 
 def sanitize_file_token(value: str) -> str:
@@ -714,6 +893,13 @@ def build_status_payload(
         "bbox_h": snapshot.bbox_h,
         "center_x": snapshot.center_x,
         "center_y": snapshot.center_y,
+        "frame_width": snapshot.frame_width,
+        "frame_height": snapshot.frame_height,
+        "vision_confidence": round(float(snapshot.vision_confidence), 3),
+        "bbox_stability_score": round(float(snapshot.bbox_stability_score), 3),
+        "tracker_state": snapshot.tracker_state,
+        "detector_state": snapshot.detector_state,
+        "yolo_detections": snapshot.yolo_detections,
         "last_capture_reason": "",
         "last_capture_file": "",
         "last_capture_timestamp_ms": 0,
@@ -787,6 +973,28 @@ def draw_overlay(
             2,
         )
         cv.circle(frame, (snapshot.center_x, snapshot.center_y), 3, color, -1)
+
+    for detection in snapshot.yolo_detections:
+        try:
+            dx = int(detection.get("bbox_x", 0))
+            dy = int(detection.get("bbox_y", 0))
+            dw = int(detection.get("bbox_w", 0))
+            dh = int(detection.get("bbox_h", 0))
+            score = float(detection.get("score", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if dw <= 0 or dh <= 0:
+            continue
+        cv.rectangle(frame, (dx, dy), (dx + dw, dy + dh), (0, 0, 255), 2)
+        cv.putText(
+            frame,
+            f"det {score:.2f}",
+            (dx, max(18, dy - 6)),
+            cv.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0, 0, 255),
+            2,
+        )
 
     cv.putText(
         frame,
@@ -989,6 +1197,9 @@ def main() -> int:
         help="Pending window for policy capture reasons waiting for VISION_LOCKED",
     )
     parser.add_argument("--status-file", type=Path, default=Path("captures/latest_status.json"), help="JSON file used to expose latest runtime status to the local web server")
+    parser.add_argument("--yolo-enabled", action="store_true", help="Enable YOLOv8n ONNX sidecar metadata path when model/runtime are available")
+    parser.add_argument("--yolo-model", type=Path, default=Path("models/yolov8n.onnx"), help="Local ignored YOLOv8n ONNX model path")
+    parser.add_argument("--yolo-every-n-frames", type=int, default=10, help="Run sidecar detector every N frames")
     parser.add_argument("--status-write-interval", type=float, default=0.25, help="Minimum seconds between two status JSON writes while state stays unchanged")
     parser.add_argument("--session-file", type=Path, default=Path("captures/latest_test_session.json"), help="JSON file written by track_injector with the current test session")
     parser.add_argument("--session-log-dir", type=Path, default=Path("captures/session_logs"), help="Directory used to store per-session JSONL timeline logs")
@@ -1002,6 +1213,7 @@ def main() -> int:
     args = parser.parse_args()
     args.capture_dir = resolve_path(args.capture_dir)
     args.status_file = resolve_path(args.status_file)
+    args.yolo_model = resolve_path(args.yolo_model)
     args.session_file = resolve_path(args.session_file)
     args.session_log_dir = resolve_path(args.session_log_dir)
     args.active_event_file = resolve_path(args.active_event_file)
@@ -1087,6 +1299,12 @@ def main() -> int:
     last_node_signals = load_node_runtime_signals(args.node_status_file)
     current_gimbal_signals = load_gimbal_signals(args.node_status_file)
     vision_reporter = VisionStateReporter(debounce_frames=3)
+    sidecar_detector = SidecarDetector(
+        cv=cv,
+        enabled=bool(args.yolo_enabled),
+        model_path=args.yolo_model,
+        every_n_frames=args.yolo_every_n_frames,
+    )
     pending_policy_captures: list[dict[str, object]] = []
 
     print("Vision bridge started.")
@@ -1120,6 +1338,10 @@ def main() -> int:
         "Capture backend: "
         f"requested={str(args.backend).lower()}, active={active_backend}, fallback={str(args.backend_fallback).lower()}"
     )
+    print(
+        "Sidecar detector: "
+        f"enabled={int(bool(args.yolo_enabled))}, state={sidecar_detector.state}, every_n={max(1, int(args.yolo_every_n_frames))}"
+    )
     source_width = 0
     source_height = 0
     try:
@@ -1151,6 +1373,7 @@ def main() -> int:
                 return 1
 
             frame_index += 1
+            sidecar_detector.submit(frame_index, frame)
 
             if tracker is not None:
                 success, raw_bbox = tracker.update(frame)
@@ -1173,7 +1396,10 @@ def main() -> int:
                 locked=current_state == VISION_LOCKED,
                 bbox=current_bbox,
                 tracker_name=active_tracker_name,
+                frame_width=int(frame.shape[1]),
+                frame_height=int(frame.shape[0]),
             )
+            snapshot.detector_state, snapshot.yolo_detections = sidecar_detector.latest()
             runtime_event_id, runtime_event_id_source = resolve_runtime_event_id(
                 args.event_id,
                 args.active_event_file,
@@ -1525,7 +1751,10 @@ def main() -> int:
                     locked=False,
                     bbox=current_bbox,
                     tracker_name=active_tracker_name,
+                    frame_width=int(frame.shape[1]),
+                    frame_height=int(frame.shape[0]),
                 )
+                snapshot.detector_state, snapshot.yolo_detections = sidecar_detector.latest()
                 print_snapshot(snapshot)
                 tracker, current_bbox = select_target_roi(cv, frame, active_tracker_name)
                 if tracker is not None and current_bbox is not None:

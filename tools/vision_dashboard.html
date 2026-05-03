@@ -1176,6 +1176,7 @@
         <div class="status-row"><div class="label">跟踪器</div><div class="value" id="runtimeTrackerValue">NONE</div></div>
         <div class="status-row"><div class="label">跟踪策略</div><div class="value" id="runtimeTrackerPlanValue">NONE</div></div>
         <div class="status-row"><div class="label">可用跟踪器</div><div class="value" id="runtimeTrackerAvailableValue">NONE</div></div>
+        <div class="status-row"><div class="label">视觉确认</div><div class="value" id="runtimeVisionConfirmValue">0.00 / NONE</div></div>
         <div class="status-row"><div class="label">当前帧</div><div class="value" id="runtimeFrameValue">0</div></div>
         <div class="status-row"><div class="label">目标框</div><div class="value" id="runtimeBboxValue">0, 0, 0, 0</div></div>
         <div class="status-row"><div class="label">中心点</div><div class="value" id="runtimeCenterValue">0, 0</div></div>
@@ -1198,6 +1199,7 @@
         <div class="status-row"><div class="label">风险</div><div class="value" id="nodeRiskValue">0.0 / NONE</div></div>
         <div class="status-row"><div class="label">视觉贡献</div><div class="value" id="nodeVisionContribValue"><span class="pill offline">NONE</span></div></div>
         <div class="status-row"><div class="label">多源融合</div><div class="value" id="nodeFusionValue">NONE / NONE</div></div>
+        <div class="status-row"><div class="label">多旋翼筛选</div><div class="value" id="nodeMultirotorValue">UNKNOWN / 0.0</div></div>
         <div class="status-row"><div class="label">LD2451 远距</div><div class="value" id="nodeLd2451Value">0.00m / 0.00mps / 0</div></div>
         <div class="status-row"><div class="label">NodeB 身份链</div><div class="value" id="nodeNodeBValue">OFFLINE / NONE</div></div>
         <div class="status-row"><div class="label">链路一致性</div><div class="value" id="nodeConsistencyValue">UNKNOWN</div></div>
@@ -1375,6 +1377,7 @@
           <div class="fact"><span class="label">视觉状态</span><div class="value" id="eventDetailVisionValue">UNKNOWN</div></div>
           <div class="fact"><span class="label">视觉质量</span><div class="value" id="eventDetailVisionQualityValue">NO_VISUAL</div></div>
           <div class="fact"><span class="label">融合等级</span><div class="value" id="eventDetailFusionValue">NONE</div></div>
+          <div class="fact"><span class="label">多旋翼筛选</span><div class="value" id="eventDetailMultirotorValue">UNKNOWN / 0.0</div></div>
           <div class="fact"><span class="label">LD2451 远距</span><div class="value" id="eventDetailLd2451Value">0.00m / 0.00mps / 0</div></div>
           <div class="fact"><span class="label">事件状态</span><div class="value" id="eventDetailStateValue">NONE</div></div>
           <div class="fact"><span class="label">触发原因</span><div class="value" id="eventDetailReasonValue">NONE</div></div>
@@ -2637,6 +2640,7 @@
         document.getElementById("runtimeTrackerValue").textContent = "NONE";
         document.getElementById("runtimeTrackerPlanValue").textContent = "NONE";
         document.getElementById("runtimeTrackerAvailableValue").textContent = "NONE";
+        document.getElementById("runtimeVisionConfirmValue").textContent = "0.00 / NONE";
         document.getElementById("runtimeFrameValue").textContent = "0";
         document.getElementById("runtimeBboxValue").textContent = "0, 0, 0, 0";
         document.getElementById("runtimeCenterValue").textContent = "0, 0";
@@ -2665,6 +2669,8 @@
       document.getElementById("runtimeTrackerPlanValue").textContent =
         `${requestedTracker} -> ${activeTracker} / fallback=${fallbackApplied ? "ON" : "OFF"}`;
       document.getElementById("runtimeTrackerAvailableValue").textContent = availableTrackers;
+      document.getElementById("runtimeVisionConfirmValue").textContent =
+        `CSRT ${formatFixed(status.vision_confidence, 2)} / stable ${formatFixed(status.bbox_stability_score, 2)} / ${status.tracker_state || "UNKNOWN"} / ${status.detector_state || "NONE"}`;
       document.getElementById("runtimeFrameValue").textContent = String(status.frame_index ?? 0);
       document.getElementById("runtimeBboxValue").textContent =
         `${status.bbox_x ?? 0}, ${status.bbox_y ?? 0}, ${status.bbox_w ?? 0}, ${status.bbox_h ?? 0}`;
@@ -2692,6 +2698,7 @@
         document.getElementById("nodeRiskValue").innerHTML = riskLevelPill("NONE");
         document.getElementById("nodeVisionContribValue").innerHTML = visionStatePill("NONE");
         document.getElementById("nodeFusionValue").innerHTML = `${fusionLevelPill("NONE")} <span style="font-size:13px;color:var(--muted);margin-left:6px;">NONE · NO_VISUAL</span>`;
+        document.getElementById("nodeMultirotorValue").innerHTML = `${semanticPill("UNKNOWN", "normal")} <span style="font-size:13px;color:var(--muted);margin-left:6px;">score 0.0</span>`;
         document.getElementById("nodeLd2451Value").innerHTML = `${triggerPill(0)} <span style="font-size:13px;color:var(--muted);margin-left:6px;">0.00m / 0.00mps</span>`;
         document.getElementById("nodeNodeBValue").innerHTML = `${semanticPill("OFFLINE", "offline")} <span style="font-size:13px;color:var(--muted);margin-left:6px;">NONE / NONE / RSSI 0</span>`;
         document.getElementById("nodeConsistencyValue").innerHTML = consistencyStatusPill("UNKNOWN");
@@ -2744,10 +2751,15 @@
       document.getElementById("nodeVisionContribValue").innerHTML =
         `${visionStatePill(vcState)}<span style="font-size:13px;color:var(--muted);margin-left:6px;">${vcDelta}${vcNote}</span>`;
       const fusionLevel = String(status.fusion_level || "NONE").toUpperCase();
+      const fusionStage = String(status.fusion_stage || "NONE").toUpperCase();
+      const fusionConfidence = Number(status.fusion_confidence ?? 0);
       const fusionReason = String(status.fusion_reason || "NONE");
       const visionQuality = String(status.vision_quality || "NO_VISUAL");
       document.getElementById("nodeFusionValue").innerHTML =
-        `${fusionLevelPill(fusionLevel)}<span style="font-size:13px;color:var(--muted);margin-left:6px;">${fusionReason} · ${visionQuality}</span>`;
+        `${fusionLevelPill(fusionLevel)}<span style="font-size:13px;color:var(--muted);margin-left:6px;">${fusionStage} · conf=${fusionConfidence.toFixed(2)} · ${fusionReason} · ${visionQuality}</span>`;
+      const multirotorLike = Number(status.is_multirotor_like ?? 0) === 1;
+      document.getElementById("nodeMultirotorValue").innerHTML =
+        `${semanticPill(multirotorLike ? "LIKE" : "UNKNOWN", multirotorLike ? "ok" : "warn")}<span style="font-size:13px;color:var(--muted);margin-left:6px;">score ${formatFixed(status.multirotor_score, 1)}</span>`;
       document.getElementById("nodeLd2451Value").innerHTML =
         `${triggerPill(status.far_motion_trigger)}<span style="font-size:13px;color:var(--muted);margin-left:6px;">${formatFixed(status.ld2451_range_m, 2)}m / ${formatFixed(status.ld2451_speed_mps, 2)}mps / valid=${Number(status.ld2451_valid ?? 0)}</span>`;
       const nodeBOnline = Number(status.nodeb_online ?? 0) === 1;
@@ -3413,6 +3425,7 @@
       document.getElementById("eventDetailVisionValue").textContent = "UNKNOWN";
       document.getElementById("eventDetailVisionQualityValue").textContent = "NO_VISUAL";
       document.getElementById("eventDetailFusionValue").innerHTML = fusionLevelPill("NONE");
+      document.getElementById("eventDetailMultirotorValue").innerHTML = `${semanticPill("UNKNOWN", "normal")} <span style="font-size:13px;color:var(--muted);margin-left:6px;">score 0.0</span>`;
       document.getElementById("eventDetailLd2451Value").innerHTML = `${triggerPill(0)} <span style="font-size:13px;color:var(--muted);margin-left:6px;">0.00m / 0.00mps</span>`;
       document.getElementById("eventDetailStateValue").textContent = "NONE";
       document.getElementById("eventDetailReasonValue").textContent = "NONE";
@@ -3480,7 +3493,11 @@
       const visionState = String(eventObject.vision_state || eventRecord.vision_state || "UNKNOWN");
       const visionQuality = String(eventObject.vision_quality || eventRecord.vision_quality || "NO_VISUAL");
       const fusionLevel = String(eventObject.fusion_level || eventRecord.fusion_level || "NONE");
+      const fusionStage = String(eventObject.fusion_stage || eventRecord.fusion_stage || "NONE");
+      const fusionConfidence = Number(eventObject.fusion_confidence ?? eventRecord.fusion_confidence ?? 0);
       const fusionReason = String(eventObject.fusion_reason || eventRecord.fusion_reason || "NONE");
+      const isMultirotorLike = Number(eventObject.is_multirotor_like ?? eventRecord.is_multirotor_like ?? 0) === 1;
+      const multirotorScore = Number(eventObject.multirotor_score ?? eventRecord.multirotor_score ?? 0);
       const farMotionTrigger = Number(eventObject.far_motion_trigger ?? eventRecord.far_motion_trigger ?? 0);
       const ld2451RangeM = Number(eventObject.ld2451_range_m ?? eventRecord.ld2451_range_m ?? 0);
       const ld2451SpeedMps = Number(eventObject.ld2451_speed_mps ?? eventRecord.ld2451_speed_mps ?? 0);
@@ -3506,7 +3523,9 @@
       document.getElementById("eventDetailVisionValue").innerHTML = visionStatePill(visionState);
       document.getElementById("eventDetailVisionQualityValue").textContent = visionQuality;
       document.getElementById("eventDetailFusionValue").innerHTML =
-        `${fusionLevelPill(fusionLevel)}<span style="font-size:13px;color:var(--muted);margin-left:6px;">${fusionReason}</span>`;
+        `${fusionLevelPill(fusionLevel)}<span style="font-size:13px;color:var(--muted);margin-left:6px;">${fusionStage} · conf=${fusionConfidence.toFixed(2)} · ${fusionReason}</span>`;
+      document.getElementById("eventDetailMultirotorValue").innerHTML =
+        `${semanticPill(isMultirotorLike ? "LIKE" : "UNKNOWN", isMultirotorLike ? "ok" : "warn")}<span style="font-size:13px;color:var(--muted);margin-left:6px;">score ${multirotorScore.toFixed(1)}</span>`;
       document.getElementById("eventDetailLd2451Value").innerHTML =
         `${triggerPill(farMotionTrigger)}<span style="font-size:13px;color:var(--muted);margin-left:6px;">${formatFixed(ld2451RangeM, 2)}m / ${formatFixed(ld2451SpeedMps, 2)}mps</span>`;
       document.getElementById("eventDetailStateValue").innerHTML = eventStatusPill(eventState);

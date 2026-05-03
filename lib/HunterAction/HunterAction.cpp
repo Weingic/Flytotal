@@ -14,6 +14,7 @@ constexpr uint32_t RiskReasonMotionAnomaly = 1u << 7;
 constexpr uint32_t RiskReasonAudioAnomaly = 1u << 8;
 constexpr uint32_t RiskReasonVisionLocked = 1u << 9;
 constexpr uint32_t RiskReasonVisionLost = 1u << 10;
+constexpr uint32_t RiskReasonMultirotorLike = 1u << 11;
 
 bool isAudioAbnormal(AudioState state) {
     if (state == AUDIO_ANOMALY) {
@@ -205,6 +206,11 @@ HunterRiskAssessment HunterAction::computeRiskAssessment(
         assessment.reason_flags |= RiskReasonAudioAnomaly;
     }
 
+    if (MultirotorConfig::Enabled && track.is_multirotor_like && !cooperative_target) {
+        score += MultirotorConfig::HunterEventBlockScore;
+        assessment.reason_flags |= RiskReasonMultirotorLike;
+    }
+
     if (score < 0.0f) {
         score = 0.0f;
     }
@@ -282,6 +288,11 @@ HunterOutput HunterAction::update(
             target_state = HUNTER_HIGH_RISK;
         } else if (output.risk_score >= HunterConfig::SuspiciousThreshold) {
             target_state = HUNTER_SUSPICIOUS;
+        }
+        if (MultirotorConfig::Enabled &&
+            target_state == HUNTER_EVENT_LOCKED &&
+            !track.is_multirotor_like) {
+            target_state = HUNTER_HIGH_RISK;
         }
         applyStateTarget(target_state, now);
     }

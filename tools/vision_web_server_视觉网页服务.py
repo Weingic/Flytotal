@@ -279,8 +279,12 @@ def build_node_brief_payload(
         "ld2451_speed_mps": safe_float(status_payload.get("ld2451_speed_mps", 0.0), 0.0),
         "far_motion_trigger": safe_int(status_payload.get("far_motion_trigger", 0)),
         "fusion_level": str(status_payload.get("fusion_level", "NONE") or "NONE"),
+        "fusion_stage": str(status_payload.get("fusion_stage", "NONE") or "NONE"),
+        "fusion_confidence": safe_float(status_payload.get("fusion_confidence", 0.0), 0.0),
         "fusion_reason": str(status_payload.get("fusion_reason", "NONE") or "NONE"),
         "vision_quality": str(status_payload.get("vision_quality", "NO_VISUAL") or "NO_VISUAL"),
+        "is_multirotor_like": safe_int(status_payload.get("is_multirotor_like", 0)),
+        "multirotor_score": safe_float(status_payload.get("multirotor_score", 0.0), 0.0),
         "status_file": status_file.as_posix(),
         "events_file": events_file.as_posix(),
     }
@@ -411,7 +415,11 @@ def build_event_object_v1(
     vision_quality = str(event_record.get("vision_quality", "NO_VISUAL") or "NO_VISUAL").strip() or "NO_VISUAL"
     environment_mode = str(event_record.get("environment_mode", "CLEAR") or "CLEAR").strip() or "CLEAR"
     fusion_level = str(event_record.get("fusion_level", "NONE") or "NONE").strip() or "NONE"
+    fusion_stage = str(event_record.get("fusion_stage", "NONE") or "NONE").strip() or "NONE"
+    fusion_confidence = round(safe_float(event_record.get("fusion_confidence", 0.0), 0.0), 2)
     fusion_reason = str(event_record.get("fusion_reason", "NONE") or "NONE").strip() or "NONE"
+    is_multirotor_like = safe_int(event_record.get("is_multirotor_like", 0), 0)
+    multirotor_score = round(safe_float(event_record.get("multirotor_score", 0.0), 0.0), 2)
     far_motion_trigger = safe_int(event_record.get("far_motion_trigger", 0), 0)
     ld2451_range_m = round(safe_float(event_record.get("ld2451_range_m", 0.0), 0.0), 2)
     ld2451_speed_mps = round(safe_float(event_record.get("ld2451_speed_mps", 0.0), 0.0), 2)
@@ -471,7 +479,11 @@ def build_event_object_v1(
         "vision_quality": vision_quality,
         "environment_mode": environment_mode,
         "fusion_level": fusion_level,
+        "fusion_stage": fusion_stage,
+        "fusion_confidence": fusion_confidence,
         "fusion_reason": fusion_reason,
+        "is_multirotor_like": is_multirotor_like,
+        "multirotor_score": multirotor_score,
         "far_motion_trigger": far_motion_trigger,
         "ld2451_range_m": ld2451_range_m,
         "ld2451_speed_mps": ld2451_speed_mps,
@@ -1823,6 +1835,23 @@ def build_mock_bundle() -> dict[str, object]:
             "center_x": 468,
             "center_y": 257,
             "last_capture_reason": "ALERT",
+            "frame_width": 960,
+            "frame_height": 540,
+            "vision_confidence": 0.82,
+            "bbox_stability_score": 0.74,
+            "tracker_state": "TRACKING",
+            "detector_state": "FALLBACK_FLOW",
+            "yolo_detections": [
+                {
+                    "bbox_x": 274,
+                    "bbox_y": 148,
+                    "bbox_w": 390,
+                    "bbox_h": 220,
+                    "score": 0.68,
+                    "class_id": 4,
+                    "class_name": "airplane",
+                }
+            ],
             "data_source_mode": "mock",
         },
         "node_status": {
@@ -1853,6 +1882,22 @@ def build_mock_bundle() -> dict[str, object]:
             "event_level": "INFO",
             "handover_last_result": "NONE",
             "handover_last_target": "NONE",
+            "nodeb_online": 1,
+            "nodeb_status": "ONLINE",
+            "nodeb_node_id": "NODEB-C3",
+            "nodeb_source": "UART2",
+            "nodeb_rssi": -48,
+            "ld2451_valid": 1,
+            "ld2451_range_m": 42.0,
+            "ld2451_speed_mps": 6.1,
+            "far_motion_trigger": 1,
+            "fusion_level": "MID",
+            "fusion_stage": "FAR",
+            "fusion_confidence": 0.72,
+            "fusion_reason": "LD2451_RID",
+            "vision_quality": "VISION_CONFIRM",
+            "is_multirotor_like": 1,
+            "multirotor_score": 8.0,
             "track_id": 1,
             "track_active": 1,
             "track_confirmed": 1,

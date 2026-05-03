@@ -9,7 +9,7 @@ constexpr bool NodeBSerialEnabled = true;
 constexpr unsigned long NodeBBaudRate = 115200;
 constexpr int NodeBRxPin = 15;
 constexpr int NodeBTxPin = 16;
-constexpr bool Ld2451SerialEnabled = false;
+constexpr bool Ld2451SerialEnabled = true;
 constexpr unsigned long Ld2451BaudRate = 115200;
 constexpr int Ld2451RxPin = 13;
 constexpr int Ld2451TxPin = 14;
@@ -24,10 +24,11 @@ constexpr const char *BaselineVersion = "Node_A_Base_Demo_V1.1";
 }
 
 namespace GimbalConfig {
+constexpr bool AdvancedPredictorEnabled = true;
 constexpr float PredictorKp = 0.45f;
 constexpr float PredictorKd = 0.05f;
 constexpr float PredictorFallbackDtSeconds = 0.02f;
-constexpr float PredictorLeadTimeSeconds = 0.00f;
+constexpr float PredictorLeadTimeSeconds = 0.18f;
 constexpr float CenterPanDeg = 90.0f;
 constexpr float CenterTiltDeg = 90.0f;
 constexpr float MinPanDeg = 10.0f;
@@ -59,6 +60,25 @@ constexpr float MaxTriggerRangeM = 100.0f;
 constexpr float MinAbsSpeedMps = 0.2f;
 constexpr unsigned long TriggerHoldMs = 1500;
 constexpr unsigned long StaleTimeoutMs = 3000;
+}
+
+namespace FusionConfig {
+constexpr bool Enabled = true;
+constexpr float RangeAgreementPct = 20.0f;
+constexpr float SpeedAgreementMmS = 1500.0f;
+constexpr unsigned long HighHoldWindowMs = 800;
+constexpr float FarStageMinM = 30.0f;
+constexpr float MidStageMinM = 10.0f;
+}
+
+namespace MultirotorConfig {
+constexpr bool Enabled = true;
+constexpr float MinSpeedMmS = 2000.0f;
+constexpr float MaxSpeedMmS = 25000.0f;
+constexpr unsigned long MinTrackAgeMs = 2000;
+constexpr float HoverVarianceMaxMmS = 900.0f;
+constexpr float HeadingRatePenaltyDegS = 75.0f;
+constexpr float HunterEventBlockScore = 6.0f;
 }
 
 namespace NodeBConfig {
