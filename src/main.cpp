@@ -2456,6 +2456,9 @@ UnifiedOutputSnapshot buildUnifiedOutputSnapshot(const SystemData &snapshot, con
     unified.trigger_flags = snapshot.trigger_flags;
     unified.vision_state = snapshot.vision_state;
     unified.vision_locked = snapshot.vision_locked;
+    unified.vision_confidence = snapshot.vision_confidence;
+    unified.bbox_stability_score = snapshot.bbox_stability_score;
+    copyEventId(unified.tracker_state, sizeof(unified.tracker_state), snapshot.tracker_state);
     unified.capture_ready = snapshot.capture_ready;
     unified.audio_state = snapshot.audio_state;
     unified.uplink_state = snapshot.uplink_state;
@@ -2484,6 +2487,7 @@ UnifiedOutputSnapshot buildUnifiedOutputSnapshot(const SystemData &snapshot, con
     copyEventId(unified.fusion_level, sizeof(unified.fusion_level), snapshot.fusion_level);
     copyEventId(unified.fusion_reason, sizeof(unified.fusion_reason), snapshot.fusion_reason);
     copyEventId(unified.fusion_stage, sizeof(unified.fusion_stage), snapshot.fusion_stage);
+    unified.fusion_enabled = snapshot.fusion_enabled;
     unified.fusion_confidence = snapshot.fusion_confidence;
     unified.is_multirotor_like = snapshot.is_multirotor_like;
     unified.multirotor_score = snapshot.multirotor_score;
@@ -2564,6 +2568,12 @@ void printNormalizedStateFields(const UnifiedOutputSnapshot &snapshot) {
     Serial.print(visionStateName(snapshot.vision_state));
     Serial.print(",vision_locked=");
     Serial.print(snapshot.vision_locked ? 1 : 0);
+    Serial.print(",vision_confidence=");
+    Serial.print(snapshot.vision_confidence, 2);
+    Serial.print(",bbox_stability_score=");
+    Serial.print(snapshot.bbox_stability_score, 2);
+    Serial.print(",tracker_state=");
+    Serial.print(snapshot.tracker_state[0] != '\0' ? snapshot.tracker_state : "LOST");
     Serial.print(",capture_ready=");
     Serial.print(snapshot.capture_ready ? 1 : 0);
     Serial.print(",vision_quality=");
@@ -2598,6 +2608,8 @@ void printNormalizedStateFields(const UnifiedOutputSnapshot &snapshot) {
     Serial.print(snapshot.fusion_level[0] != '\0' ? snapshot.fusion_level : "NONE");
     Serial.print(",fusion_stage=");
     Serial.print(snapshot.fusion_stage[0] != '\0' ? snapshot.fusion_stage : "NONE");
+    Serial.print(",fusion_enabled=");
+    Serial.print(snapshot.fusion_enabled ? 1 : 0);
     Serial.print(",fusion_confidence=");
     Serial.print(snapshot.fusion_confidence, 2);
     Serial.print(",fusion_reason=");
@@ -3382,6 +3394,14 @@ void emitVisionStatus() {
     Serial.print(NodeConfig::NodeZone);
     Serial.print(",vision_state=");
     Serial.print(visionStateName(snapshot.vision_state));
+    Serial.print(",vision_locked=");
+    Serial.print(snapshot.vision_locked ? 1 : 0);
+    Serial.print(",vision_confidence=");
+    Serial.print(snapshot.vision_confidence, 2);
+    Serial.print(",bbox_stability_score=");
+    Serial.print(snapshot.bbox_stability_score, 2);
+    Serial.print(",tracker_state=");
+    Serial.print(snapshot.tracker_state[0] != '\0' ? snapshot.tracker_state : "LOST");
     Serial.print(",rid_status=");
     Serial.print(ridStateName(snapshot.rid_status));
     Serial.print(",wl_status=");
@@ -3813,12 +3833,13 @@ void printHostCommandHelp() {
     Serial.println("    LASTEVENT | LASTEVENT,CLEAR");
     Serial.println("    SUMMARY | SUMMARY,RESET");
     Serial.println("    SELFTEST");
-    Serial.println("    FUSION,STATUS");
+    Serial.println("    FUSION,STATUS | FUSION,DEBUG | FUSION,ENABLE,1 | FUSION,ENABLE,0");
     Serial.println("  [Simulation]");
     Serial.println("    TRACK,x,y | TRACK,CLEAR");
     Serial.println("    RID,MATCHED | RID,NONE | RID,RECEIVED | RID,EXPIRED | RID,INVALID");
     Serial.println("    RID,OK | RID,MISSING | RID,SUSPICIOUS (legacy aliases)");
     Serial.println("    RID,STATUS | RID,CLEAR");
+    Serial.println("    VISION,CONF,confidence=0.82,stability=0.91,state=TRACKING");
     Serial.println("    RID,MSG,rid_id,device_type,source,timestamp_ms,auth_status,whitelist_tag[,signal_strength]");
     Serial.println("    WL,STATUS | WL,LIST");
     Serial.println("    VISION,LOCKED | VISION,LOST | VISION,IDLE | VISION,STATUS");
@@ -4258,6 +4279,40 @@ bool parseLd2451Payload(const String &payload, float &range_m, float &speed_mps,
     return hasRange && range_m >= 0.0f;
 }
 
+bool parseVisionConfidencePayload(const String &payload, float &confidence, float &stability, String &tracker_state) {
+    String confidenceToken;
+    String stabilityToken;
+    String stateToken;
+    const bool hasConfidence =
+        parseKeyValueToken(payload, "confidence", confidenceToken) ||
+        parseKeyValueToken(payload, "conf", confidenceToken);
+    if (hasConfidence) {
+        confidence = constrain(confidenceToken.toFloat(), 0.0f, 1.0f);
+    }
+    if (parseKeyValueToken(payload, "stability", stabilityToken) ||
+        parseKeyValueToken(payload, "bbox_stability_score", stabilityToken)) {
+        stability = constrain(stabilityToken.toFloat(), 0.0f, 1.0f);
+    }
+    if (parseKeyValueToken(payload, "state", stateToken) ||
+        parseKeyValueToken(payload, "tracker_state", stateToken)) {
+        stateToken.trim();
+        stateToken.toUpperCase();
+        tracker_state = stateToken;
+    }
+    return hasConfidence;
+}
+
+void setVisionConfidenceMeasurement(float confidence, float stability, const String &tracker_state, unsigned long now) {
+    portENTER_CRITICAL(&dataMutex);
+    globalData.vision_confidence = constrain(confidence, 0.0f, 1.0f);
+    globalData.bbox_stability_score = constrain(stability, 0.0f, 1.0f);
+    copyStringField(globalData.tracker_state, sizeof(globalData.tracker_state), tracker_state, "UNKNOWN");
+    globalData.timestamp_ms = now;
+    refreshFusionRuntimeLocked(now);
+    syncActiveNodeRuntimeCacheLocked();
+    portEXIT_CRITICAL(&dataMutex);
+}
+
 void emitFusionStatus() {
     SystemData snapshot = {};
     portENTER_CRITICAL(&dataMutex);
@@ -4279,6 +4334,14 @@ void emitFusionStatus() {
     Serial.print(snapshot.ld2451_speed_mps, 2);
     Serial.print(",far_motion_trigger=");
     Serial.print(snapshot.far_motion_trigger ? 1 : 0);
+    Serial.print(",fusion_enabled=");
+    Serial.print(snapshot.fusion_enabled ? 1 : 0);
+    Serial.print(",vision_confidence=");
+    Serial.print(snapshot.vision_confidence, 2);
+    Serial.print(",bbox_stability_score=");
+    Serial.print(snapshot.bbox_stability_score, 2);
+    Serial.print(",tracker_state=");
+    Serial.print(snapshot.tracker_state[0] != '\0' ? snapshot.tracker_state : "LOST");
     Serial.print(",vision_quality=");
     Serial.print(snapshot.vision_quality[0] != '\0' ? snapshot.vision_quality : "NO_VISUAL");
     Serial.print(",environment_mode=");
@@ -4434,8 +4497,33 @@ void handleHostCommand(const String &line) {
             emitFusionStatus();
         } else if (value == "DEBUG") {
             emitFusionDebug();
+        } else if (value.startsWith("ENABLE")) {
+            String enableToken = rawValue;
+            int enableComma = enableToken.indexOf(',');
+            if (enableComma >= 0) {
+                enableToken = enableToken.substring(enableComma + 1);
+            } else {
+                enableToken = value.substring(String("ENABLE").length());
+            }
+            enableToken.trim();
+            if (enableToken.startsWith("=")) {
+                enableToken = enableToken.substring(1);
+                enableToken.trim();
+            }
+            if (enableToken.length() == 0) {
+                Serial.println("Invalid FUSION,ENABLE command. Use FUSION,ENABLE,1 or FUSION,ENABLE,0.");
+                return;
+            }
+            const bool enabled = boolFromToken(enableToken);
+            portENTER_CRITICAL(&dataMutex);
+            globalData.fusion_enabled = enabled;
+            refreshFusionRuntimeLocked(millis());
+            syncActiveNodeRuntimeCacheLocked();
+            portEXIT_CRITICAL(&dataMutex);
+            Serial.print("FUSION runtime advanced mode ");
+            Serial.println(enabled ? "enabled." : "disabled.");
         } else {
-            Serial.println("Invalid FUSION command. Use FUSION,STATUS or FUSION,DEBUG.");
+            Serial.println("Invalid FUSION command. Use FUSION,STATUS, FUSION,DEBUG, FUSION,ENABLE,1, or FUSION,ENABLE,0.");
         }
     } else if (command == "RID") {
         if (value.length() == 0 || value == "STATUS") {
@@ -4543,9 +4631,32 @@ void handleHostCommand(const String &line) {
             return;
         }
 
+        if (value.startsWith("CONF")) {
+            String payload = rawValue;
+            int confComma = payload.indexOf(',');
+            if (confComma >= 0) {
+                payload = payload.substring(confComma + 1);
+            }
+            float confidence = 0.0f;
+            float stability = 0.0f;
+            String trackerState = "UNKNOWN";
+            if (!parseVisionConfidencePayload(payload, confidence, stability, trackerState)) {
+                Serial.println("Invalid VISION,CONF command. Use VISION,CONF,confidence=0.82,stability=0.91,state=TRACKING.");
+                return;
+            }
+            setVisionConfidenceMeasurement(confidence, stability, trackerState, millis());
+            Serial.print("VISION confidence updated: confidence=");
+            Serial.print(confidence, 2);
+            Serial.print(",stability=");
+            Serial.print(stability, 2);
+            Serial.print(",state=");
+            Serial.println(trackerState);
+            return;
+        }
+
         VisionState requested_state = VISION_IDLE;
         if (!parseVisionStateToken(value, requested_state)) {
-            Serial.println("Invalid VISION command. Use VISION,LOCKED|LOST|IDLE|SEARCHING|STATUS.");
+            Serial.println("Invalid VISION command. Use VISION,LOCKED|LOST|IDLE|SEARCHING|STATUS or VISION,CONF,confidence=0.82,stability=0.91,state=TRACKING.");
             return;
         }
 
@@ -4557,6 +4668,15 @@ void handleHostCommand(const String &line) {
         portENTER_CRITICAL(&dataMutex);
         globalData.vision_state = requested_state;
         globalData.vision_locked = requested_state == VISION_LOCKED;
+        if (requested_state == VISION_LOCKED && globalData.vision_confidence <= 0.0f) {
+            globalData.vision_confidence = 1.0f;
+            globalData.bbox_stability_score = 1.0f;
+            copyEventId(globalData.tracker_state, sizeof(globalData.tracker_state), "TRACKING");
+        } else if (requested_state == VISION_IDLE || requested_state == VISION_LOST) {
+            globalData.vision_confidence = 0.0f;
+            globalData.bbox_stability_score = 0.0f;
+            copyEventId(globalData.tracker_state, sizeof(globalData.tracker_state), requested_state == VISION_LOST ? "LOST" : "IDLE");
+        }
         refreshManualSimulationSnapshotLocked(millis());
         portEXIT_CRITICAL(&dataMutex);
 
@@ -4839,6 +4959,9 @@ void handleHostCommand(const String &line) {
         globalData.rid_signal_strength = 0;
         globalData.vision_state = VISION_IDLE;
         globalData.vision_locked = false;
+        globalData.vision_confidence = 0.0f;
+        globalData.bbox_stability_score = 0.0f;
+        copyEventId(globalData.tracker_state, sizeof(globalData.tracker_state), "IDLE");
         globalData.capture_ready = false;
         globalData.audio_state = AUDIO_IDLE;
         globalData.uplink_state = UPLINK_READY;
@@ -4861,6 +4984,7 @@ void handleHostCommand(const String &line) {
         copyEventId(globalData.fusion_level, sizeof(globalData.fusion_level), "NONE");
         copyEventId(globalData.fusion_reason, sizeof(globalData.fusion_reason), "NONE");
         copyEventId(globalData.fusion_stage, sizeof(globalData.fusion_stage), "NONE");
+        globalData.fusion_enabled = FusionConfig::Enabled;
         globalData.fusion_confidence = 0.0f;
         globalData.is_multirotor_like = false;
         globalData.multirotor_score = 0.0f;
@@ -5997,10 +6121,13 @@ void setup() {
     copyEventId(globalData.nodeb_status, sizeof(globalData.nodeb_status), "UNKNOWN");
     copyEventId(globalData.nodeb_node_id, sizeof(globalData.nodeb_node_id), "NONE");
     copyEventId(globalData.nodeb_source, sizeof(globalData.nodeb_source), "NONE");
+    copyEventId(globalData.tracker_state, sizeof(globalData.tracker_state), "IDLE");
     copyEventId(globalData.vision_quality, sizeof(globalData.vision_quality), "NO_VISUAL");
     copyEventId(globalData.environment_mode, sizeof(globalData.environment_mode), "CLEAR");
     copyEventId(globalData.fusion_level, sizeof(globalData.fusion_level), "NONE");
     copyEventId(globalData.fusion_reason, sizeof(globalData.fusion_reason), "NONE");
+    copyEventId(globalData.fusion_stage, sizeof(globalData.fusion_stage), "NONE");
+    globalData.fusion_enabled = FusionConfig::Enabled;
     globalData.timestamp_ms = millis();
     syncActiveNodeRuntimeCacheLocked();
     portEXIT_CRITICAL(&dataMutex);

@@ -206,6 +206,30 @@
       background: #171717;
     }
 
+    .evidence-overlay {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      display: none;
+    }
+
+    .overlay-caption {
+      position: absolute;
+      left: 12px;
+      bottom: 12px;
+      max-width: calc(100% - 24px);
+      padding: 7px 10px;
+      border-radius: 10px;
+      background: rgba(12, 12, 12, 0.72);
+      color: rgba(255, 255, 255, 0.92);
+      font-size: 12px;
+      line-height: 1.35;
+      font-weight: 700;
+      display: none;
+    }
+
     .capture-empty {
       position: absolute;
       inset: 0;
@@ -352,6 +376,63 @@
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 10px;
+    }
+
+    .co-sensing-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+      gap: 16px;
+      padding: 0 20px 20px;
+    }
+
+    .co-sensing-topology {
+      min-height: 180px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: var(--panel-strong);
+      padding: 16px;
+      display: grid;
+      align-content: center;
+      gap: 14px;
+    }
+
+    .node-link-row {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .node-badge {
+      border-radius: 16px;
+      border: 1px solid var(--line);
+      padding: 14px;
+      background: rgba(255, 248, 239, 0.9);
+      text-align: center;
+      font-weight: 800;
+    }
+
+    .node-badge small {
+      display: block;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .handoff-arrow {
+      color: var(--muted);
+      font-weight: 900;
+      font-size: 18px;
+    }
+
+    .co-sensing-history {
+      max-height: 240px;
+      overflow: auto;
+    }
+
+    .co-sensing-history table {
+      min-width: 560px;
     }
 
     .concept-row {
@@ -1048,6 +1129,7 @@
       .suite-gate-grid { grid-template-columns: 1fr; }
       .fleet-grid { grid-template-columns: 1fr; }
       .fleet-card-meta { grid-template-columns: 1fr; }
+      .co-sensing-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -1161,6 +1243,48 @@
               <div class="fact"><span class="label">节点 / 来源</span><div class="value">NONE / NONE</div></div>
               <div class="fact"><span class="label">连续性</span><div class="value">SINGLE_NODE</div></div>
             </div>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section style="margin-bottom: 18px;">
+      <article class="panel records-panel">
+        <div class="table-header">
+          <h2 class="section-title">协同感知视图</h2>
+          <p class="section-subtitle">这里只展示现有 NodeA / NodeB 字段和协同仿真输出，用来回答“节点之间如何联动”。</p>
+        </div>
+        <div class="summary-strip">
+          <div class="summary-chip" id="coSensingAvailableChip">协同 WAIT</div>
+          <div class="summary-chip" id="coSensingStateChip">状态 NONE</div>
+          <div class="summary-chip" id="coSensingNodeBChip">NodeB OFFLINE</div>
+          <div class="summary-chip" id="coSensingLatencyChip">切换 --</div>
+        </div>
+        <div class="result-overview" id="coSensingOverviewValue">总览：等待协同仿真或双节点状态。</div>
+        <div class="co-sensing-grid">
+          <div class="co-sensing-topology" id="coSensingTopology">
+            <div class="node-link-row">
+              <div class="node-badge">NodeA<small id="coSensingNodeAState">WAIT</small></div>
+              <div class="handoff-arrow">-&gt;</div>
+              <div class="node-badge">NodeB<small id="coSensingNodeBState">WAIT</small></div>
+            </div>
+            <div class="fact"><span class="label">最近接力</span><div class="value" id="coSensingHandoffValue">NONE -> NONE</div></div>
+          </div>
+          <div class="co-sensing-history table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>状态</th>
+                  <th>NodeB</th>
+                  <th>接力</th>
+                  <th>轨迹</th>
+                </tr>
+              </thead>
+              <tbody id="coSensingHistoryBody">
+                <tr><td colspan="5">当前还没有协同感知记录。</td></tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </article>
@@ -1280,6 +1404,8 @@
         </div>
         <div class="capture-frame">
           <img id="latestImage" alt="最新抓拍图">
+          <canvas id="latestOverlayCanvas" class="evidence-overlay"></canvas>
+          <div class="overlay-caption" id="latestOverlayCaption">CSRT conf=0.00 / YOLO conf=0.00 / agreement=NO</div>
           <div class="capture-empty" id="emptyState">当前还没有抓拍记录。先运行 vision_bridge_视觉桥接.py 并锁定目标。</div>
         </div>
         <div class="facts">
@@ -1363,6 +1489,8 @@
         </div>
         <div class="capture-frame">
           <img id="eventDetailImage" alt="事件抓拍图">
+          <canvas id="eventDetailOverlayCanvas" class="evidence-overlay"></canvas>
+          <div class="overlay-caption" id="eventDetailOverlayCaption">CSRT conf=0.00 / YOLO conf=0.00 / agreement=NO</div>
           <div class="capture-empty" id="eventDetailEmpty">当前还没有可回放的事件证据。先运行 Node A 串口桥接和 vision_bridge 抓拍。</div>
         </div>
         <div class="facts">
@@ -1649,6 +1777,7 @@
     const STATUS_API_URL = "/api/status";
     const NODE_STATUS_API_URL = "/api/node-status";
     const NODE_FLEET_API_URL = "/api/node-fleet-status";
+    const CO_SENSING_API_URL = "/api/co-sensing";
     const NODE_EVENTS_API_URL = "/api/node-events?limit=10";
     const NODE_EVENT_DETAIL_API_URL = "/api/node-event-detail";
     const NODE_EVENT_EXPORT_API_URL = "/api/node-event-export";
@@ -1675,6 +1804,9 @@
     let latestSessionTimelineRecords = [];
     let latestSessionTimelineSessions = [];
     let latestNodeFleet = [];
+    let latestRuntimeStatus = null;
+    let latestCaptureRecord = null;
+    let latestCoSensingPayload = null;
     let latestNodeEventRecords = [];
     let selectedNodeEventId = "";
     let lastSyncedActiveEventId = "NONE";
@@ -1857,6 +1989,151 @@
 
     function semanticPill(text, kind) {
       return `<span class="pill ${kind}">${text || "NONE"}</span>`;
+    }
+
+    function numericField(source, names, fallback = 0) {
+      if (!source || typeof source !== "object") return fallback;
+      for (const name of names) {
+        const value = Number(source[name]);
+        if (Number.isFinite(value)) return value;
+      }
+      return fallback;
+    }
+
+    function normalizeBBox(source) {
+      if (!source || typeof source !== "object") return null;
+      const box = Array.isArray(source.bbox) ? source.bbox : null;
+      const x = box ? Number(box[0]) : numericField(source, ["bbox_x", "x"], NaN);
+      const y = box ? Number(box[1]) : numericField(source, ["bbox_y", "y"], NaN);
+      const w = box ? Number(box[2]) : numericField(source, ["bbox_w", "w", "width"], NaN);
+      const h = box ? Number(box[3]) : numericField(source, ["bbox_h", "h", "height"], NaN);
+      if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0) return null;
+      return { x, y, w, h };
+    }
+
+    function bboxIou(a, b) {
+      if (!a || !b) return 0;
+      const ax2 = a.x + a.w;
+      const ay2 = a.y + a.h;
+      const bx2 = b.x + b.w;
+      const by2 = b.y + b.h;
+      const ix = Math.max(0, Math.min(ax2, bx2) - Math.max(a.x, b.x));
+      const iy = Math.max(0, Math.min(ay2, by2) - Math.max(a.y, b.y));
+      const inter = ix * iy;
+      const union = a.w * a.h + b.w * b.h - inter;
+      return union > 0 ? inter / union : 0;
+    }
+
+    function drawOverlayBox(ctx, rect, scaleInfo, color, label) {
+      if (!rect || !scaleInfo) return;
+      const x = scaleInfo.offsetX + rect.x * scaleInfo.scale;
+      const y = scaleInfo.offsetY + rect.y * scaleInfo.scale;
+      const w = rect.w * scaleInfo.scale;
+      const h = rect.h * scaleInfo.scale;
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      ctx.shadowColor = "rgba(0, 0, 0, 0.55)";
+      ctx.shadowBlur = 4;
+      ctx.strokeRect(x, y, w, h);
+      if (label) {
+        ctx.font = "700 13px Segoe UI, sans-serif";
+        const textWidth = ctx.measureText(label).width + 12;
+        ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
+        ctx.fillRect(x, Math.max(0, y - 24), textWidth, 22);
+        ctx.fillStyle = color;
+        ctx.fillText(label, x + 6, Math.max(14, y - 8));
+      }
+      ctx.restore();
+    }
+
+    function evidenceSource(record = null) {
+      const source = {};
+      Object.assign(source, latestRuntimeStatus || {});
+      Object.assign(source, record || latestCaptureRecord || {});
+      return source;
+    }
+
+    function yoloDetectionsFrom(source) {
+      const direct = Array.isArray(source?.yolo_detections) ? source.yolo_detections : [];
+      if (direct.length) return direct;
+      const fallbackBox = normalizeBBox({
+        bbox_x: source?.motion_bbox_x ?? source?.detector_bbox_x,
+        bbox_y: source?.motion_bbox_y ?? source?.detector_bbox_y,
+        bbox_w: source?.motion_bbox_w ?? source?.detector_bbox_w,
+        bbox_h: source?.motion_bbox_h ?? source?.detector_bbox_h,
+      });
+      return fallbackBox
+        ? [{ ...fallbackBox, score: source?.detector_confidence ?? source?.motion_confidence ?? 0.5, class_name: source?.detector_state || "FLOW" }]
+        : [];
+    }
+
+    function redrawCaptureOverlay(imageId, canvasId, captionId, record = null) {
+      const image = document.getElementById(imageId);
+      const canvas = document.getElementById(canvasId);
+      const caption = document.getElementById(captionId);
+      if (!image || !canvas || !caption || image.style.display === "none" || !image.complete) {
+        if (canvas) canvas.style.display = "none";
+        if (caption) caption.style.display = "none";
+        return;
+      }
+
+      const source = evidenceSource(record);
+      const sourceW = numericField(source, ["frame_width", "image_width"], image.naturalWidth || 0);
+      const sourceH = numericField(source, ["frame_height", "image_height"], image.naturalHeight || 0);
+      const displayW = image.clientWidth || image.parentElement?.clientWidth || 0;
+      const displayH = image.clientHeight || image.parentElement?.clientHeight || 0;
+      if (sourceW <= 0 || sourceH <= 0 || displayW <= 0 || displayH <= 0) {
+        canvas.style.display = "none";
+        caption.style.display = "none";
+        return;
+      }
+
+      canvas.width = Math.max(1, Math.round(displayW));
+      canvas.height = Math.max(1, Math.round(displayH));
+      const scale = Math.min(canvas.width / sourceW, canvas.height / sourceH);
+      const scaleInfo = {
+        scale,
+        offsetX: (canvas.width - sourceW * scale) / 2,
+        offsetY: (canvas.height - sourceH * scale) / 2,
+      };
+
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const csrtBox = normalizeBBox(source);
+      const detections = yoloDetectionsFrom(source).map((item) => ({
+        ...item,
+        box: normalizeBBox(item),
+      })).filter((item) => item.box);
+
+      const yoloBest = detections.reduce((best, item) => {
+        const score = Number(item.score ?? item.confidence ?? 0);
+        if (!best || score > Number(best.score ?? best.confidence ?? 0)) return item;
+        return best;
+      }, null);
+      const yoloScore = yoloBest ? Number(yoloBest.score ?? yoloBest.confidence ?? 0) : 0;
+      const agreement = !!(csrtBox && detections.some((item) => bboxIou(csrtBox, item.box) >= 0.2));
+
+      if (csrtBox) {
+        drawOverlayBox(ctx, csrtBox, scaleInfo, "#2ecc71", `CSRT ${formatFixed(source.vision_confidence, 2)}`);
+      }
+      detections.slice(0, 4).forEach((item) => {
+        const score = Number(item.score ?? item.confidence ?? 0);
+        const className = String(item.class_name || item.label || item.class_id || "YOLO");
+        drawOverlayBox(ctx, item.box, scaleInfo, "#ff3b30", `${className} ${formatFixed(score, 2)}`);
+      });
+
+      const hasEvidence = !!csrtBox || detections.length > 0;
+      canvas.style.display = hasEvidence ? "block" : "none";
+      caption.style.display = hasEvidence ? "block" : "none";
+      caption.textContent =
+        `CSRT conf=${formatFixed(source.vision_confidence, 2)} / YOLO conf=${formatFixed(yoloScore, 2)} / agreement=${agreement ? "YES" : "NO"}`;
+    }
+
+    function redrawEvidenceOverlays() {
+      redrawCaptureOverlay("latestImage", "latestOverlayCanvas", "latestOverlayCaption", latestCaptureRecord);
+      const detailCapture = currentNodeEventDetail?.latest_capture || null;
+      redrawCaptureOverlay("eventDetailImage", "eventDetailOverlayCanvas", "eventDetailOverlayCaption", detailCapture);
     }
 
     function visionStatePill(state) {
@@ -2634,6 +2911,7 @@
 
     function setRuntimeStatus(status) {
       if (!status || !status.available) {
+        latestRuntimeStatus = null;
         document.getElementById("runtimeStateValue").innerHTML = visionStatePill("NONE");
         document.getElementById("runtimeLockedValue").textContent = "0";
         document.getElementById("runtimeReadyValue").innerHTML = semanticPill("NOT_READY", "warn");
@@ -2647,9 +2925,11 @@
         document.getElementById("runtimeCaptureValue").textContent = "NONE";
         document.getElementById("runtimeEventBindSourceValue").textContent = "NONE";
         document.getElementById("runtimeTimeValue").textContent = "--";
+        redrawEvidenceOverlays();
         return;
       }
 
+      latestRuntimeStatus = status;
       const sourceReady = Number(status.source_ready ?? 0) === 1;
       const trackerReady = Number(status.tracker_ready ?? 0) === 1;
       const chainReady = Number(status.vision_chain_ready ?? 0) === 1;
@@ -2679,6 +2959,7 @@
       document.getElementById("runtimeCaptureValue").textContent = status.last_capture_reason || "NONE";
       document.getElementById("runtimeEventBindSourceValue").textContent = String(status.event_id_source || "none");
       document.getElementById("runtimeTimeValue").textContent = formatTime(status.timestamp_ms);
+      redrawEvidenceOverlays();
     }
 
     function setNodeStatus(status) {
@@ -2928,6 +3209,7 @@
     function setLatest(record) {
       const image = document.getElementById("latestImage");
       const empty = document.getElementById("emptyState");
+      latestCaptureRecord = record && typeof record === "object" ? record : null;
 
       if (!record) {
         image.style.display = "none";
@@ -2939,6 +3221,7 @@
         document.getElementById("visionValue").textContent = "--";
         document.getElementById("bboxValue").textContent = "--";
         document.getElementById("centerValue").textContent = "--";
+        redrawEvidenceOverlays();
         return;
       }
 
@@ -2946,6 +3229,7 @@
       image.src = rawImageUrl.startsWith("data:")
         ? rawImageUrl
         : `${rawImageUrl}?t=${record.timestamp_ms}`;
+      image.onload = () => redrawCaptureOverlay("latestImage", "latestOverlayCanvas", "latestOverlayCaption", latestCaptureRecord);
       image.style.display = "block";
       empty.style.display = "none";
       document.getElementById("reasonValue").innerHTML = reasonPill(record.capture_reason);
@@ -2954,6 +3238,7 @@
       document.getElementById("visionValue").innerHTML = statePill(record.vision_state || "NONE", record.vision_locked ?? 0);
       document.getElementById("bboxValue").textContent = formatBBox(record);
       document.getElementById("centerValue").textContent = `${record.center_x}, ${record.center_y}`;
+      redrawCaptureOverlay("latestImage", "latestOverlayCanvas", "latestOverlayCaption", latestCaptureRecord);
     }
 
     function renderRecords(records) {
@@ -3414,6 +3699,7 @@
       image.removeAttribute("src");
       empty.style.display = "grid";
       empty.textContent = message;
+      redrawCaptureOverlay("eventDetailImage", "eventDetailOverlayCanvas", "eventDetailOverlayCaption", null);
       document.getElementById("eventDetailIdValue").textContent = "NONE";
       document.getElementById("eventDetailTimeValue").textContent = "--";
       document.getElementById("eventDetailRiskValue").textContent = "NONE";
@@ -3470,6 +3756,7 @@
         image.src = captureImageUrl.startsWith("data:")
           ? captureImageUrl
           : `${captureImageUrl}?t=${capture.timestamp_ms || eventRecord.host_logged_ms || eventRecord.timestamp_ms || Date.now()}`;
+        image.onload = () => redrawCaptureOverlay("eventDetailImage", "eventDetailOverlayCanvas", "eventDetailOverlayCaption", capture);
         image.style.display = "block";
         empty.style.display = "none";
       } else {
@@ -3477,6 +3764,7 @@
         image.removeAttribute("src");
         empty.style.display = "grid";
         empty.textContent = captureBindingNote || "该事件暂时没有抓拍图片，已保留事件对象与字段。";
+        redrawCaptureOverlay("eventDetailImage", "eventDetailOverlayCanvas", "eventDetailOverlayCaption", null);
       }
 
       const eventId = normalizeEventId(eventObject.event_id || eventRecord.event_id) || "NONE";
@@ -3564,6 +3852,7 @@
       refreshNodeEventExportButton(currentNodeEventDetail);
       setEventDetailActionMessage(`已绑定事件 ${eventId}，可导出证据 JSON。`);
       renderVerdictBox(eventObject, eventRecord);
+      redrawCaptureOverlay("eventDetailImage", "eventDetailOverlayCanvas", "eventDetailOverlayCaption", capture);
     }
 
     async function setSelectedNodeEvent(eventId) {
@@ -3774,6 +4063,77 @@
               <div class="fact"><span class="label">融合 / 远距</span><div class="value">${fusionText} / ${farText}</div></div>
             </div>
           </div>
+        `;
+      }).join("");
+    }
+
+    function coSensingRecordsFrom(payload) {
+      if (!payload || typeof payload !== "object") return [];
+      for (const key of ["records", "history", "timeline", "events"]) {
+        if (Array.isArray(payload[key])) return payload[key].filter((item) => item && typeof item === "object");
+      }
+      return [];
+    }
+
+    function renderCoSensing(payload, fleetPayload = null) {
+      latestCoSensingPayload = payload && typeof payload === "object" ? payload : null;
+      const safeFleet = fleetPayload && typeof fleetPayload === "object" ? fleetPayload : {};
+      const fleetNodes = Array.isArray(safeFleet.nodes) ? safeFleet.nodes : latestNodeFleet;
+      const records = coSensingRecordsFrom(payload);
+      const lastRecord = records.length ? records[records.length - 1] : null;
+      const nodeA = fleetNodes.find((node) => String(node.label || node.node_id || "").toUpperCase().includes("A1")) || fleetNodes[0] || {};
+      const nodeB = fleetNodes.find((node) => String(node.label || node.node_id || "").toUpperCase().includes("A2")) || fleetNodes[1] || {};
+      const nodeAOnline = Number(nodeA.online ?? 0) === 1;
+      const nodeBOnline = Number(lastRecord?.nodeb_online ?? nodeB.online ?? 0) === 1;
+      const continuity = String(lastRecord?.continuity_hint || nodeA.continuity_hint || nodeB.continuity_hint || "SINGLE_NODE");
+      const handoffFrom = String(lastRecord?.handoff_from || nodeA.handoff_from || nodeB.handoff_from || "NONE");
+      const handoffTo = String(lastRecord?.handoff_to || nodeA.handoff_to || nodeB.handoff_to || "NONE");
+      const firstHandoff = records.find((item) => String(item.continuity_hint || "").includes("HANDOFF"));
+      const lastHandoff = [...records].reverse().find((item) => String(item.continuity_hint || "").includes("HANDOFF"));
+      const latency = firstHandoff && lastHandoff
+        ? Math.max(0, Number(lastHandoff.timestamp_ms || 0) - Number(firstHandoff.timestamp_ms || 0))
+        : null;
+
+      document.getElementById("coSensingAvailableChip").innerHTML =
+        semanticPill(records.length ? "仿真 READY" : (fleetNodes.length ? "双节点 READY" : "协同 WAIT"), records.length || fleetNodes.length ? "ok" : "warn");
+      document.getElementById("coSensingStateChip").innerHTML = handoverPill(continuity);
+      document.getElementById("coSensingNodeBChip").innerHTML = semanticPill(nodeBOnline ? "NodeB ONLINE" : "NodeB OFFLINE", nodeBOnline ? "ok" : "offline");
+      document.getElementById("coSensingLatencyChip").textContent = latency == null ? "切换 --" : `切换 ${latency}ms`;
+      document.getElementById("coSensingNodeAState").innerHTML = nodeAOnline ? "ONLINE" : "WAIT";
+      document.getElementById("coSensingNodeBState").innerHTML = nodeBOnline ? "ONLINE" : "OFFLINE";
+      document.getElementById("coSensingHandoffValue").textContent = `${handoffFrom} -> ${handoffTo}`;
+
+      const overview = document.getElementById("coSensingOverviewValue");
+      if (records.length) {
+        overview.className = "result-overview ok";
+        overview.textContent =
+          `总览：已读取协同仿真 ${records.length} 条；当前 ${continuity}，NodeB=${nodeBOnline ? "ONLINE" : "OFFLINE"}，接力 ${handoffFrom}->${handoffTo}。`;
+      } else if (fleetNodes.length) {
+        overview.className = nodeBOnline ? "result-overview ok" : "result-overview warn";
+        overview.textContent =
+          `总览：未读取协同仿真文件，当前使用双节点状态兜底；NodeB=${nodeBOnline ? "ONLINE" : "OFFLINE"}，连续性=${continuity}。`;
+      } else {
+        overview.className = "result-overview";
+        overview.textContent = "总览：等待 co_sensing_simulator 输出或双节点状态。";
+      }
+
+      const body = document.getElementById("coSensingHistoryBody");
+      const tableRows = records.length ? records.slice(-8).reverse() : [];
+      if (!tableRows.length) {
+        body.innerHTML = '<tr><td colspan="5">当前还没有协同感知记录。</td></tr>';
+        return;
+      }
+      body.innerHTML = tableRows.map((record) => {
+        const state = String(record.continuity_hint || "SINGLE_NODE");
+        const nodeb = Number(record.nodeb_online || 0) === 1;
+        return `
+          <tr>
+            <td>${Number(record.timestamp_ms ?? 0)} ms</td>
+            <td>${handoverPill(state)}</td>
+            <td>${semanticPill(nodeb ? "ONLINE" : "OFFLINE", nodeb ? "ok" : "offline")}</td>
+            <td>${record.handoff_from || "NONE"} -> ${record.handoff_to || "NONE"}</td>
+            <td>x=${formatFixed(record.track_x_m, 2)}m</td>
+          </tr>
         `;
       }).join("");
     }
@@ -4218,6 +4578,11 @@
       return response.json();
     }
 
+    async function loadCoSensing() {
+      const response = await fetch(apiUrlWithMode(CO_SENSING_API_URL), { cache: "no-store" });
+      return response.json();
+    }
+
     async function loadCaptures() {
       const response = await fetch(apiUrlWithMode(CAPTURES_API_URL), { cache: "no-store" });
       return response.json();
@@ -4276,10 +4641,11 @@
 
     async function loadData() {
       try {
-        const [status, nodeStatus, nodeFleet, captures, nodeEvents, testSession, testResult, testResults, deliveryAssets, sessionTimelineSessions, dataSource] = await Promise.all([
+        const [status, nodeStatus, nodeFleet, coSensing, captures, nodeEvents, testSession, testResult, testResults, deliveryAssets, sessionTimelineSessions, dataSource] = await Promise.all([
           loadStatus(),
           loadNodeStatus(),
           loadNodeFleet(),
+          loadCoSensing(),
           loadCaptures(),
           loadNodeEvents(),
           loadTestSession(),
@@ -4299,6 +4665,7 @@
         setRuntimeStatus(status);
         setNodeStatus(nodeStatus);
         renderNodeFleet(nodeFleet);
+        renderCoSensing(coSensing, nodeFleet);
         setParameterStatus(nodeStatus);
         setTestSession(testSession);
         setTestResult(testResult);
@@ -4339,6 +4706,10 @@
           `<tr><td colspan="5">读取联调时间线失败：${error}</td></tr>`;
         document.getElementById("sessionCapturesBody").innerHTML =
           `<tr><td colspan="5">读取本轮抓拍证据失败：${error}</td></tr>`;
+        document.getElementById("coSensingOverviewValue").className = "result-overview warn";
+        document.getElementById("coSensingOverviewValue").textContent = `总览：读取协同感知视图失败：${error}`;
+        document.getElementById("coSensingHistoryBody").innerHTML =
+          `<tr><td colspan="5">读取协同感知记录失败：${error}</td></tr>`;
         document.getElementById("eventExportHistoryBody").innerHTML =
           `<tr><td colspan="4">读取导出历史失败：${error}</td></tr>`;
         document.getElementById("deliveryOverviewValue").className = "result-overview warn";
@@ -4478,6 +4849,10 @@
 
     document.getElementById("coachPortInput").addEventListener("input", () => {
       updateOperationCoach();
+    });
+
+    window.addEventListener("resize", () => {
+      redrawEvidenceOverlays();
     });
 
     eventMatchMode = readEventMatchMode();

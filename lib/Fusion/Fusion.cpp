@@ -49,17 +49,24 @@ bool isLimitedVisionEnvironment(const SystemData &snapshot) {
            strcmp(snapshot.environment_mode, "VISION_LOST") == 0;
 }
 
+bool hasConfidentVision(const SystemData &snapshot) {
+    return snapshot.vision_locked ||
+           snapshot.vision_state == VISION_LOCKED ||
+           snapshot.vision_confidence >= FusionConfig::VisionConfidenceThreshold;
+}
+
 void deriveVisionQuality(const SystemData &snapshot, char *destination, size_t destination_size) {
+    const bool visualActive = hasConfidentVision(snapshot);
     if (strcmp(snapshot.environment_mode, "VISION_LOST") == 0) {
         copyField(destination, destination_size, "VISION_LOST");
         return;
     }
     if (strcmp(snapshot.environment_mode, "LOW_LIGHT") == 0 ||
         strcmp(snapshot.environment_mode, "FOG_OR_BLUR") == 0) {
-        copyField(destination, destination_size, snapshot.vision_locked ? "DEGRADED_LOCKED" : "DEGRADED_VISUAL");
+        copyField(destination, destination_size, visualActive ? "DEGRADED_LOCKED" : "DEGRADED_VISUAL");
         return;
     }
-    if (snapshot.vision_locked) {
+    if (visualActive) {
         copyField(destination, destination_size, "CLEAR_LOCKED");
     } else if (snapshot.vision_state == VISION_SEARCHING) {
         copyField(destination, destination_size, "SEARCHING");
@@ -150,25 +157,37 @@ void updateFusionFields(SystemData &data, unsigned long now) {
                            data.rid_status == RID_MATCHED ||
                            data.rid_status == RID_INVALID;
     const bool ridMatched = data.rid_status == RID_MATCHED;
-    const bool visualActive = data.vision_locked || data.vision_state == VISION_LOCKED;
+    const bool visualActive = hasConfidentVision(data);
+    const bool advancedFusionEnabled = data.fusion_enabled;
 
     data.range_agreement = computeRangeAgreement(data, ld2451Fresh);
     data.speed_agreement = computeSpeedAgreement(data, ld2451Fresh);
     data.vision_agreement = visualActive && nearRadar;
 
-    uint8_t votes = 0;
+    uint8_t advancedVotes = 0;
     if (nearRadar) {
-        votes++;
+        advancedVotes++;
     }
     if (farRadar) {
-        votes++;
+        advancedVotes++;
     }
     if (ridActive) {
-        votes++;
+        advancedVotes++;
     }
     if (visualActive) {
-        votes++;
+        advancedVotes++;
     }
+    uint8_t legacyVotes = 0;
+    if (nearRadar || farRadar) {
+        legacyVotes++;
+    }
+    if (ridActive) {
+        legacyVotes++;
+    }
+    if (visualActive) {
+        legacyVotes++;
+    }
+    const uint8_t votes = advancedFusionEnabled ? advancedVotes : legacyVotes;
     data.source_vote_count = votes;
 
     const float radarRangeM = nearRadar ? radarRangeMm(data.radar_track) / 1000.0f : 0.0f;
@@ -187,7 +206,7 @@ void updateFusionFields(SystemData &data, unsigned long now) {
     const char *level = "NONE";
     const char *reason = "NONE";
 
-    if (!FusionConfig::Enabled) {
+    if (!advancedFusionEnabled) {
         if (votes >= 3) {
             level = "HIGH";
         } else if (votes == 2) {
@@ -248,6 +267,7 @@ void updateFusionFields(SystemData &data, unsigned long now) {
     confidence += data.range_agreement ? 0.12f : 0.0f;
     confidence += data.speed_agreement ? 0.10f : 0.0f;
     confidence += data.vision_agreement ? 0.10f : 0.0f;
+    confidence += visualActive && data.vision_confidence > 0.0f ? data.vision_confidence * 0.08f : 0.0f;
     confidence += highAllowed ? 0.10f : 0.0f;
     if (strcmp(level, "NONE") == 0) {
         confidence = 0.0f;
@@ -269,6 +289,8 @@ void printDebug(const SystemData &snapshot, Print &out) {
     out.print(snapshot.fusion_level[0] != '\0' ? snapshot.fusion_level : "NONE");
     out.print(",confidence=");
     out.print(snapshot.fusion_confidence, 2);
+    out.print(",enabled=");
+    out.print(snapshot.fusion_enabled ? 1 : 0);
     out.print(",votes=");
     out.print(snapshot.source_vote_count);
     out.print(",range_agreement=");
@@ -277,6 +299,12 @@ void printDebug(const SystemData &snapshot, Print &out) {
     out.print(snapshot.speed_agreement ? 1 : 0);
     out.print(",vision_agreement=");
     out.print(snapshot.vision_agreement ? 1 : 0);
+    out.print(",vision_confidence=");
+    out.print(snapshot.vision_confidence, 2);
+    out.print(",bbox_stability_score=");
+    out.print(snapshot.bbox_stability_score, 2);
+    out.print(",tracker_state=");
+    out.print(snapshot.tracker_state[0] != '\0' ? snapshot.tracker_state : "LOST");
     out.print(",window_ms=");
     out.print(highCandidateSinceMs > 0 ? millis() - highCandidateSinceMs : 0);
     out.print(",multirotor_like=");

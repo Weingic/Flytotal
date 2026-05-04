@@ -2,6 +2,14 @@
 
 Last updated: 2026-05-01
 
+## 2026-05-03 P0 默认策略补充
+
+- 固件默认 `FusionConfig::Enabled=false`，基础验收先走旧三源计数逻辑，避免六个基线场景被高级融合规则影响。
+- 答辩或 v5.2 demo 前，通过串口发送 `FUSION,ENABLE,1` 开启 FAR / MID / NEAR 三阶段融合。
+- 需要回到基础稳定模式时，发送 `FUSION,ENABLE,0`。
+- `FUSION,STATUS` 会输出 `fusion_enabled=0/1`，`FUSION,DEBUG` 会输出视觉置信度、一致性和投票过程。
+- 视觉投票不再只看 `vision_locked`，还会接受 `VISION,CONF,confidence=0.82,stability=0.91,state=TRACKING` 注入的 `vision_confidence >= 0.5`。
+
 ## 目标
 
 v5.2 直接把主线升级为多模态融合版本。普通 `pio run` 构建的就是 v5.2：LD2450、LD2451、NodeB 身份链、视觉状态一起参与判断。

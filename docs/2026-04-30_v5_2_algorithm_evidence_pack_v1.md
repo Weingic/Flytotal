@@ -2,6 +2,19 @@
 
 Last updated: 2026-05-01
 
+## 2026-05-03 P0 证据工具更新
+
+本轮 P0 要求证据工具优先读历史数据，不再只输出 mock：
+
+```powershell
+python tools/fusion_simulator.py --compare --input captures --output-dir outputs
+python tools/multirotor_classifier_验证.py --input captures --output-dir outputs
+python tools/gimbal_prediction_simulator.py --lead-times 0,0.12,0.18 --output-dir outputs
+python tools/co_sensing_simulator.py --scenario boundary_crossing
+```
+
+输出默认放在 `outputs/`，该目录不进 Git。历史数据没有真实标签时，多旋翼工具只输出特征分布和 `needs_labels` 提示，不伪造 ROC。
+
 ## 证据目标
 
 v5.2 的每个创新点都要有代码或仿真证据对应，避免答辩时只停留在概念。

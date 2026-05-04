@@ -63,12 +63,13 @@ constexpr unsigned long StaleTimeoutMs = 3000;
 }
 
 namespace FusionConfig {
-constexpr bool Enabled = true;
+constexpr bool Enabled = false;
 constexpr float RangeAgreementPct = 20.0f;
 constexpr float SpeedAgreementMmS = 1500.0f;
 constexpr unsigned long HighHoldWindowMs = 800;
 constexpr float FarStageMinM = 30.0f;
 constexpr float MidStageMinM = 10.0f;
+constexpr float VisionConfidenceThreshold = 0.5f;
 }
 
 namespace MultirotorConfig {

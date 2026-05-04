@@ -280,9 +280,13 @@ def build_node_brief_payload(
         "far_motion_trigger": safe_int(status_payload.get("far_motion_trigger", 0)),
         "fusion_level": str(status_payload.get("fusion_level", "NONE") or "NONE"),
         "fusion_stage": str(status_payload.get("fusion_stage", "NONE") or "NONE"),
+        "fusion_enabled": safe_int(status_payload.get("fusion_enabled", 0)),
         "fusion_confidence": safe_float(status_payload.get("fusion_confidence", 0.0), 0.0),
         "fusion_reason": str(status_payload.get("fusion_reason", "NONE") or "NONE"),
         "vision_quality": str(status_payload.get("vision_quality", "NO_VISUAL") or "NO_VISUAL"),
+        "vision_confidence": safe_float(status_payload.get("vision_confidence", 0.0), 0.0),
+        "bbox_stability_score": safe_float(status_payload.get("bbox_stability_score", 0.0), 0.0),
+        "tracker_state": str(status_payload.get("tracker_state", "LOST") or "LOST"),
         "is_multirotor_like": safe_int(status_payload.get("is_multirotor_like", 0)),
         "multirotor_score": safe_float(status_payload.get("multirotor_score", 0.0), 0.0),
         "status_file": status_file.as_posix(),
@@ -309,6 +313,47 @@ def build_node_fleet_payload(
         "total_tracks": total_tracks,
         "total_events": total_events,
         "nodes": nodes,
+    }
+
+
+def build_co_sensing_payload(
+    co_sensing_file: Path,
+    node_status_file: Path,
+    node_status_file_a2: Path,
+    offline_timeout_ms: int = 5000,
+) -> dict[str, object]:
+    payload = load_json_file(co_sensing_file)
+    records = payload.get("records", []) if isinstance(payload, dict) else []
+    if not isinstance(records, list):
+        records = []
+    records = [item for item in records if isinstance(item, dict)]
+
+    node_a = refresh_node_runtime_flags(load_json_file(node_status_file), offline_timeout_ms)
+    node_b = refresh_node_runtime_flags(load_json_file(node_status_file_a2), offline_timeout_ms)
+    latest = records[-1] if records else {}
+    nodeb_online = safe_int(latest.get("nodeb_online", node_b.get("online", 0)), 0)
+    continuity = str(
+        latest.get(
+            "continuity_hint",
+            node_a.get("continuity_hint", node_b.get("continuity_hint", "SINGLE_NODE")),
+        )
+        or "SINGLE_NODE"
+    )
+
+    return {
+        "ok": True,
+        "available": bool(records) or bool(node_a.get("available", False)) or bool(node_b.get("available", False)),
+        "source_file": co_sensing_file.as_posix(),
+        "source_available": co_sensing_file.exists(),
+        "scenario": str(payload.get("scenario", "live_fallback") if isinstance(payload, dict) else "live_fallback"),
+        "count": len(records),
+        "latest": latest,
+        "records": records,
+        "nodea_online": safe_int(node_a.get("online", 0), 0),
+        "nodeb_online": nodeb_online,
+        "continuity_hint": continuity,
+        "handoff_from": str(latest.get("handoff_from", node_a.get("handoff_from", "NONE")) or "NONE"),
+        "handoff_to": str(latest.get("handoff_to", node_a.get("handoff_to", "NONE")) or "NONE"),
     }
 
 
@@ -416,6 +461,7 @@ def build_event_object_v1(
     environment_mode = str(event_record.get("environment_mode", "CLEAR") or "CLEAR").strip() or "CLEAR"
     fusion_level = str(event_record.get("fusion_level", "NONE") or "NONE").strip() or "NONE"
     fusion_stage = str(event_record.get("fusion_stage", "NONE") or "NONE").strip() or "NONE"
+    fusion_enabled = safe_int(event_record.get("fusion_enabled", 0), 0)
     fusion_confidence = round(safe_float(event_record.get("fusion_confidence", 0.0), 0.0), 2)
     fusion_reason = str(event_record.get("fusion_reason", "NONE") or "NONE").strip() or "NONE"
     is_multirotor_like = safe_int(event_record.get("is_multirotor_like", 0), 0)
@@ -480,6 +526,7 @@ def build_event_object_v1(
         "environment_mode": environment_mode,
         "fusion_level": fusion_level,
         "fusion_stage": fusion_stage,
+        "fusion_enabled": fusion_enabled,
         "fusion_confidence": fusion_confidence,
         "fusion_reason": fusion_reason,
         "is_multirotor_like": is_multirotor_like,
@@ -1893,9 +1940,13 @@ def build_mock_bundle() -> dict[str, object]:
             "far_motion_trigger": 1,
             "fusion_level": "MID",
             "fusion_stage": "FAR",
+            "fusion_enabled": 0,
             "fusion_confidence": 0.72,
             "fusion_reason": "LD2451_RID",
             "vision_quality": "VISION_CONFIRM",
+            "vision_confidence": 0.82,
+            "bbox_stability_score": 0.74,
+            "tracker_state": "TRACKING",
             "is_multirotor_like": 1,
             "multirotor_score": 8.0,
             "track_id": 1,
@@ -2272,6 +2323,7 @@ def create_handler(
     test_results_file: Path,
     session_log_dir: Path,
     event_export_dir: Path,
+    co_sensing_file: Path,
     default_limit: int,
     capture_fallback_window_ms: int,
     node_offline_timeout_ms: int,
@@ -2407,6 +2459,9 @@ def create_handler(
                 node_payload = load_json_file(node_status_file)
                 vision_payload = load_json_file(status_file)
                 v_state = str(vision_payload.get("vision_state", "NONE") or "NONE").strip().upper() or "NONE"
+                node_payload["vision_confidence"] = safe_float(vision_payload.get("vision_confidence", node_payload.get("vision_confidence", 0.0)), 0.0)
+                node_payload["bbox_stability_score"] = safe_float(vision_payload.get("bbox_stability_score", node_payload.get("bbox_stability_score", 0.0)), 0.0)
+                node_payload["tracker_state"] = str(vision_payload.get("tracker_state", node_payload.get("tracker_state", "LOST")) or "LOST")
                 wl = str(node_payload.get("wl_status", node_payload.get("whitelist_status", "WL_UNKNOWN")) or "WL_UNKNOWN").strip().upper() or "WL_UNKNOWN"
                 node_payload["vision_state"] = v_state
                 node_payload["vision_contribution"] = compute_vision_contribution(v_state, wl)
@@ -2422,6 +2477,9 @@ def create_handler(
                 # （供网页风险区显示；score_delta 由 compute_vision_contribution 计算）。
                 vision_payload = load_json_file(status_file)
                 v_state = str(vision_payload.get("vision_state", "NONE") or "NONE").strip().upper() or "NONE"
+                node_payload["vision_confidence"] = safe_float(vision_payload.get("vision_confidence", node_payload.get("vision_confidence", 0.0)), 0.0)
+                node_payload["bbox_stability_score"] = safe_float(vision_payload.get("bbox_stability_score", node_payload.get("bbox_stability_score", 0.0)), 0.0)
+                node_payload["tracker_state"] = str(vision_payload.get("tracker_state", node_payload.get("tracker_state", "LOST")) or "LOST")
                 wl = str(
                     node_payload.get("wl_status",
                         node_payload.get("whitelist_status", "WL_UNKNOWN"))
@@ -2546,6 +2604,60 @@ def create_handler(
                             ("A2", node_status_file_a2, node_events_file_a2),
                         ],
                         offline_timeout_ms=node_offline_timeout_ms,
+                    )
+                )
+                return
+            if parsed.path == "/api/co-sensing":
+                if mock_mode and isinstance(mock_bundle, dict):
+                    now_ms = int(time.time() * 1000)
+                    records = [
+                        {
+                            "timestamp_ms": 0,
+                            "node_id": "NodeA",
+                            "nodeb_online": 1,
+                            "track_x_m": -1.2,
+                            "continuity_hint": "SINGLE_NODE",
+                            "handoff_from": "NONE",
+                            "handoff_to": "NONE",
+                        },
+                        {
+                            "timestamp_ms": 400,
+                            "node_id": "NodeA",
+                            "nodeb_online": 1,
+                            "track_x_m": 0.4,
+                            "continuity_hint": "HANDOFF_PENDING",
+                            "handoff_from": "A1",
+                            "handoff_to": "A2",
+                        },
+                        {
+                            "timestamp_ms": 800,
+                            "node_id": "NodeA",
+                            "nodeb_online": 1,
+                            "track_x_m": 2.6,
+                            "continuity_hint": "HANDOFF_ACTIVE",
+                            "handoff_from": "A1",
+                            "handoff_to": "A2",
+                        },
+                    ]
+                    self.send_json(
+                        {
+                            "ok": True,
+                            "available": True,
+                            "scenario": "mock_boundary_crossing",
+                            "count": len(records),
+                            "records": records,
+                            "latest": records[-1],
+                            "updated_ms": now_ms,
+                            "data_source_mode": "mock",
+                        }
+                    )
+                    return
+                self.send_json(
+                    build_co_sensing_payload(
+                        co_sensing_file,
+                        node_status_file,
+                        node_status_file_a2,
+                        node_offline_timeout_ms,
                     )
                 )
                 return
@@ -2883,6 +2995,7 @@ def main() -> int:
     parser.add_argument("--test-results-file", type=Path, default=Path("captures/latest_test_results.json"), help="JSON file containing recent summarized test results")
     parser.add_argument("--session-log-dir", type=Path, default=Path("captures/session_logs"), help="Directory containing per-session JSONL timeline logs")
     parser.add_argument("--event-export-dir", type=Path, default=Path("captures/event_exports"), help="Directory used to persist exported event evidence JSON files")
+    parser.add_argument("--co-sensing-file", type=Path, default=Path("captures/v5_2/co_sensing_boundary_crossing.json"), help="JSON file generated by co_sensing_simulator")
     parser.add_argument("--dashboard-file", type=Path, default=DASHBOARD_FILE, help="HTML dashboard file to serve")
     parser.add_argument("--limit", type=int, default=10, help="Default number of records returned by the API")
     parser.add_argument("--capture-fallback-window-ms", type=int, default=8000, help="Time window used to fallback-match NONE captures to selected events")
@@ -2904,6 +3017,7 @@ def main() -> int:
     test_results_file = resolve_path(args.test_results_file)
     session_log_dir = resolve_path(args.session_log_dir)
     event_export_dir = resolve_path(args.event_export_dir)
+    co_sensing_file = resolve_path(args.co_sensing_file)
     dashboard_file = resolve_path(args.dashboard_file)
     handler = create_handler(
         dashboard_file,
@@ -2922,6 +3036,7 @@ def main() -> int:
         test_results_file,
         session_log_dir,
         event_export_dir,
+        co_sensing_file,
         args.limit,
         max(0, args.capture_fallback_window_ms),
         max(0, args.node_offline_timeout_ms),
@@ -2944,6 +3059,7 @@ def main() -> int:
     print(f"Test results history file: {test_results_file.as_posix()}")
     print(f"Session log dir: {session_log_dir.as_posix()}")
     print(f"Event export dir: {event_export_dir.as_posix()}")
+    print(f"Co-sensing file: {co_sensing_file.as_posix()}")
     print(f"Capture fallback window ms: {max(0, args.capture_fallback_window_ms)}")
     print(f"Node offline timeout ms: {max(0, args.node_offline_timeout_ms)}")
     try:

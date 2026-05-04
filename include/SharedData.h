@@ -150,6 +150,9 @@ struct SystemData {
     uint32_t trigger_flags;
     VisionState vision_state;
     bool vision_locked;
+    float vision_confidence;
+    float bbox_stability_score;
+    char tracker_state[16];
     bool capture_ready;
     AudioState audio_state;
     UplinkState uplink_state;
@@ -174,6 +177,7 @@ struct SystemData {
     char fusion_level[16];
     char fusion_reason[48];
     char fusion_stage[16];
+    bool fusion_enabled;
     float fusion_confidence;
     bool range_agreement;
     bool speed_agreement;
@@ -227,6 +231,9 @@ struct UnifiedOutputSnapshot {
     uint32_t trigger_flags;
     VisionState vision_state;
     bool vision_locked;
+    float vision_confidence;
+    float bbox_stability_score;
+    char tracker_state[16];
     bool capture_ready;
     AudioState audio_state;
     UplinkState uplink_state;
@@ -251,6 +258,7 @@ struct UnifiedOutputSnapshot {
     char fusion_level[16];
     char fusion_reason[48];
     char fusion_stage[16];
+    bool fusion_enabled;
     float fusion_confidence;
     bool is_multirotor_like;
     float multirotor_score;
