@@ -6153,8 +6153,8 @@ void setup() {
     if (AppSerialConfig::Ld2451SerialEnabled) {
         xTaskCreatePinnedToCore(Ld2451Task, "LD2451_Task", 4096, NULL, 1, NULL, 0);
     }
-    xTaskCreatePinnedToCore(TrackingTask, "Track_Task", 12288, NULL, 2, NULL, 1);
-    xTaskCreatePinnedToCore(CloudTask, "Cloud_Task", 4096, NULL, 1, NULL, 1);
+    xTaskCreatePinnedToCore(TrackingTask, "Track_Task", 24576, NULL, 2, NULL, 1);
+    xTaskCreatePinnedToCore(CloudTask, "Cloud_Task", 12288, NULL, 1, NULL, 1);
 }
 
 void loop() {
