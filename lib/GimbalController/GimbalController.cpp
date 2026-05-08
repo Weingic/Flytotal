@@ -7,6 +7,7 @@ GimbalController::GimbalController(GimbalPredictor &predictor)
     current_state_ = STATE_SCANNING;
     state_entered_ms_ = 0;
     last_target_seen_ms_ = 0;
+    last_track_id_ = 0;
 }
 
 void GimbalController::setState(GimbalState next_state, unsigned long now) {
@@ -24,6 +25,7 @@ GimbalOutput GimbalController::update(const RadarTrack &track, unsigned long now
     output.state_changed = false;
 
     bool has_target = track.is_confirmed;
+    const bool new_target = has_target && track.track_id != 0 && track.track_id != last_track_id_;
 
     switch (current_state_) {
         case STATE_SCANNING:
@@ -31,6 +33,8 @@ GimbalOutput GimbalController::update(const RadarTrack &track, unsigned long now
                                GimbalConfig::ScanningAmplitudeDeg * sin(now / GimbalConfig::ScanningPeriodDivisor);
             output.tilt_angle = GimbalConfig::CenterTiltDeg;
             if (has_target) {
+                predictor_.resetMotionState(track.x_mm, track.y_mm, now);
+                last_track_id_ = track.track_id;
                 setState(STATE_ACQUIRING, now);
             }
             break;
@@ -38,6 +42,10 @@ GimbalOutput GimbalController::update(const RadarTrack &track, unsigned long now
         case STATE_ACQUIRING:
             output.pan_angle = predictor_.getCurrentAngle();
             if (has_target) {
+                if (new_target) {
+                    predictor_.resetMotionState(track.x_mm, track.y_mm, now);
+                    last_track_id_ = track.track_id;
+                }
                 if (now - state_entered_ms_ > TrackingConfig::AcquireConfirmMs) {
                     setState(STATE_TRACKING, now);
                 }
@@ -47,6 +55,10 @@ GimbalOutput GimbalController::update(const RadarTrack &track, unsigned long now
             break;
 
         case STATE_TRACKING:
+            if (new_target) {
+                predictor_.resetMotionState(track.x_mm, track.y_mm, now);
+                last_track_id_ = track.track_id;
+            }
             output.pan_angle = predictor_.calculateFiringAngle(track.x_mm, track.y_mm);
             output.tilt_angle = map(
                 static_cast<long>(track.y_mm),
@@ -63,6 +75,7 @@ GimbalOutput GimbalController::update(const RadarTrack &track, unsigned long now
 
             if (has_target) {
                 last_target_seen_ms_ = now;
+                last_track_id_ = track.track_id;
             } else {
                 setState(STATE_LOST, now);
             }
@@ -71,8 +84,11 @@ GimbalOutput GimbalController::update(const RadarTrack &track, unsigned long now
         case STATE_LOST:
             output.pan_angle = predictor_.getCurrentAngle();
             if (has_target) {
+                predictor_.resetMotionState(track.x_mm, track.y_mm, now);
+                last_track_id_ = track.track_id;
                 setState(STATE_TRACKING, now);
             } else if (now - last_target_seen_ms_ > TrackingConfig::LostRecoveryTimeoutMs) {
+                last_track_id_ = 0;
                 setState(STATE_SCANNING, now);
             }
             break;

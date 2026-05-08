@@ -17,6 +17,7 @@ private:
     GimbalState current_state_;
     unsigned long state_entered_ms_;
     unsigned long last_target_seen_ms_;
+    uint32_t last_track_id_;
     GimbalPredictor &predictor_;
 
     void setState(GimbalState next_state, unsigned long now);

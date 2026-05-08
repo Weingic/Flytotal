@@ -80,3 +80,13 @@ void GimbalPredictor::setTunings(float p, float d) {
     Kp = p;
     Kd = d;
 }
+
+void GimbalPredictor::resetMotionState(float target_x, float target_y, unsigned long now) {
+    last_x = target_x;
+    last_y = target_y;
+    last_vx = 0.0f;
+    last_vy = 0.0f;
+    filtered_ax = 0.0f;
+    filtered_ay = 0.0f;
+    last_time = now;
+}

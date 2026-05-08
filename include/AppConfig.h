@@ -53,6 +53,7 @@ constexpr int PulseMaxUs = 2500;
 
 namespace RadarConfig {
 constexpr float LockDistanceThresholdMm = 500.0f;
+constexpr float MaxCoordinateAbsMm = 100000.0f;
 constexpr unsigned long PollDelayMs = 10;
 }
 
@@ -87,12 +88,22 @@ constexpr float HunterEventBlockScore = 6.0f;
 namespace NodeBConfig {
 constexpr unsigned long StaleTimeoutMs = 3000;
 constexpr unsigned long ReconnectIntervalMs = 3000;
+constexpr uint8_t FastReconnectAttempts = 5;
+constexpr unsigned long SlowReconnectIntervalMs = 15000;
 }
 
 namespace WatchdogConfig {
 constexpr bool Enabled = true;
-constexpr int TimeoutSeconds = 8;
+constexpr int TimeoutSeconds = 12;
 constexpr bool PanicOnTimeout = true;
+}
+
+namespace SerialLineConfig {
+constexpr unsigned int BufferSize = 256;
+}
+
+namespace Ld2451Config {
+constexpr uint8_t RequiredStableFrames = 2;
 }
 
 namespace TrackConfig {

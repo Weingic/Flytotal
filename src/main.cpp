@@ -21,6 +21,7 @@ SystemData globalData = {};
 portMUX_TYPE dataMutex = portMUX_INITIALIZER_UNLOCKED;
 uint32_t nodeBReconnectCount = 0;
 unsigned long nodeBLastReconnectMs = 0;
+bool nodeBNeedsReconnect = false;
 
 GimbalPredictor myGimbal(GimbalConfig::PredictorKp, GimbalConfig::PredictorKd);
 GimbalController myGimbalController(myGimbal);
@@ -303,11 +304,19 @@ struct SummaryStats {
 
 constexpr size_t HostCommandMaxLength = 192;
 
-String commandBuffer;
-String nodeBCommandBuffer;
-String ld2451CommandBuffer;
+struct SerialLineBuffer {
+    char data[SerialLineConfig::BufferSize];
+    size_t length;
+    bool overflow;
+};
+
+SerialLineBuffer commandBuffer = {};
+SerialLineBuffer nodeBCommandBuffer = {};
+SerialLineBuffer ld2451CommandBuffer = {};
 HardwareSerial ld2451Serial(0);
 Ld2451Parser ld2451Parser;
+Ld2451Frame pendingLd2451Frame = {};
+uint8_t ld2451StableFrameCount = 0;
 float runtimeKp = GimbalConfig::PredictorKp;
 float runtimeKd = GimbalConfig::PredictorKd;
 SimTrackInput simTrack = {false, 0.0f, 0.0f, 0};
@@ -402,6 +411,46 @@ constexpr uint32_t EventReasonFlagMask = TriggerFlagRidMissing |
                                          TriggerFlagVisionLocked;
 
 void printRiskReasonFlags(uint32_t flags);
+
+void resetSerialLineBuffer(SerialLineBuffer &buffer) {
+    buffer.length = 0;
+    buffer.overflow = false;
+    buffer.data[0] = '\0';
+}
+
+void markSerialLineOverflow(SerialLineBuffer &buffer, const char *source) {
+    buffer.length = 0;
+    buffer.overflow = true;
+    buffer.data[0] = '\0';
+    Serial.print(source != nullptr ? source : "SERIAL");
+    Serial.println(" line buffer reset: line too long.");
+}
+
+void appendSerialLineChar(SerialLineBuffer &buffer, char ch, const char *source) {
+    if (buffer.overflow) {
+        return;
+    }
+    if (buffer.length >= (SerialLineConfig::BufferSize - 1)) {
+        markSerialLineOverflow(buffer, source);
+        return;
+    }
+    buffer.data[buffer.length++] = ch;
+    buffer.data[buffer.length] = '\0';
+}
+
+bool takeSerialLine(SerialLineBuffer &buffer, String &line) {
+    if (buffer.overflow) {
+        resetSerialLineBuffer(buffer);
+        return false;
+    }
+    if (buffer.length == 0) {
+        return false;
+    }
+    buffer.data[buffer.length] = '\0';
+    line = String(buffer.data);
+    resetSerialLineBuffer(buffer);
+    return true;
+}
 
 constexpr WhitelistEntry RidWhitelistTable[] = {
     {"SIM-RID", "TeamA", "LegalDemo", true, 0, "默认合法演示目标"},
@@ -3878,7 +3927,7 @@ void printHostCommandHelp() {
     Serial.println("    VISION,LOCKED | VISION,LOST | VISION,IDLE | VISION,STATUS");
     Serial.println("    NODEB,RID,node=B1,source=BLE,rssi=-62,status=SEEN,id=TEST-RID-001");
     Serial.println("    NODEB,HEARTBEAT,node=B1,status=OK,ble=1,wifi=1 | NODEB,OFFLINE");
-    Serial.println("    LD2451,range_m=30.0,speed_mps=1.2,approach=1,valid=1 | LD2451,CLEAR");
+    Serial.println("    LD2451,range_m=30.0,speed_mps=1.2,approach=1,valid=1 | LD2451,CLEAR | LD2451,SELFTEST");
     Serial.println("    ENV,CLEAR | ENV,LOW_LIGHT | ENV,FOG_OR_BLUR | ENV,VISION_LOST");
     Serial.println("    AUDIO,ANOMALY | AUDIO,BACKGROUND | AUDIO,NORMAL | AUDIO,STATUS");
     Serial.println("    KP,value");
@@ -4199,6 +4248,22 @@ void emitSummarySnapshot() {
 }
 
 void applyTrackMeasurement(float px, float py, unsigned long now) {
+    const bool validMeasurement = isfinite(px) &&
+                                  isfinite(py) &&
+                                  fabsf(px) <= RadarConfig::MaxCoordinateAbsMm &&
+                                  fabsf(py) <= RadarConfig::MaxCoordinateAbsMm;
+    static unsigned long lastInvalidWarnMs = 0;
+    if (!validMeasurement) {
+        if (lastInvalidWarnMs == 0 || (now - lastInvalidWarnMs) >= 1000) {
+            Serial.print("WARN,RADAR_INVALID,x=");
+            Serial.print(px);
+            Serial.print(",y=");
+            Serial.println(py);
+            lastInvalidWarnMs = now;
+        }
+        return;
+    }
+
     const RadarTrack &track = myTrackManager.updateTrack(px, py, now);
 
     portENTER_CRITICAL(&dataMutex);
@@ -4209,6 +4274,8 @@ void applyTrackMeasurement(float px, float py, unsigned long now) {
     refreshFusionRuntimeLocked(now);
     portEXIT_CRITICAL(&dataMutex);
 }
+
+void clearNodeBRidFieldsLocked(unsigned long now);
 
 void setNodeBStatusFromPayload(const String &payload, unsigned long now) {
     String node = "B1";
@@ -4227,13 +4294,58 @@ void setNodeBStatusFromPayload(const String &payload, unsigned long now) {
     portENTER_CRITICAL(&dataMutex);
     globalData.nodeb_online = nodeOnline;
     copyStringField(globalData.nodeb_status, sizeof(globalData.nodeb_status), status, "OK");
-    copyStringField(globalData.nodeb_node_id, sizeof(globalData.nodeb_node_id), node, "B1");
-    copyStringField(globalData.nodeb_source, sizeof(globalData.nodeb_source), source, "NONE");
-    globalData.nodeb_rssi = rssi.toInt();
-    globalData.nodeb_last_update_ms = now;
+    if (nodeOnline) {
+        copyStringField(globalData.nodeb_node_id, sizeof(globalData.nodeb_node_id), node, "B1");
+        copyStringField(globalData.nodeb_source, sizeof(globalData.nodeb_source), source, "NONE");
+        globalData.nodeb_rssi = rssi.toInt();
+        globalData.nodeb_last_update_ms = now;
+        nodeBNeedsReconnect = false;
+        nodeBReconnectCount = 0;
+        nodeBLastReconnectMs = 0;
+    } else {
+        copyEventId(globalData.nodeb_node_id, sizeof(globalData.nodeb_node_id), "NONE");
+        copyEventId(globalData.nodeb_source, sizeof(globalData.nodeb_source), "NONE");
+        globalData.nodeb_rssi = 0;
+        globalData.nodeb_last_update_ms = 0;
+        nodeBNeedsReconnect = true;
+        clearNodeBRidFieldsLocked(now);
+    }
     refreshFusionRuntimeLocked(now);
     syncActiveNodeRuntimeCacheLocked();
     portEXIT_CRITICAL(&dataMutex);
+}
+
+void clearNodeBRidFieldsLocked(unsigned long now) {
+    const bool ridFromNodeB = strncmp(ridIdentity.source, "NODEB_", 6) == 0 ||
+                              strncmp(globalData.rid_source, "NODEB_", 6) == 0;
+    if (!ridFromNodeB) {
+        return;
+    }
+    ridIdentity.valid = false;
+    ridIdentity.rid_id[0] = '\0';
+    ridIdentity.device_type[0] = '\0';
+    ridIdentity.source[0] = '\0';
+    ridIdentity.packet_timestamp_ms = 0;
+    ridIdentity.auth_status[0] = '\0';
+    ridIdentity.whitelist_tag[0] = '\0';
+    ridIdentity.signal_strength = 0;
+    ridIdentity.received_ms = 0;
+
+    globalData.rid_status = RID_NONE;
+    globalData.rid_whitelist_hit = false;
+    globalData.wl_status = WL_UNKNOWN;
+    globalData.wl_expire_time_ms = 0;
+    globalData.wl_owner[0] = '\0';
+    globalData.wl_label[0] = '\0';
+    globalData.wl_note[0] = '\0';
+    globalData.rid_last_update_ms = now;
+    globalData.rid_last_match_ms = 0;
+    globalData.rid_id[0] = '\0';
+    globalData.rid_device_type[0] = '\0';
+    globalData.rid_source[0] = '\0';
+    globalData.rid_auth_status[0] = '\0';
+    globalData.rid_whitelist_tag[0] = '\0';
+    globalData.rid_signal_strength = 0;
 }
 
 void markNodeBOfflineIfStale(unsigned long now) {
@@ -4244,6 +4356,12 @@ void markNodeBOfflineIfStale(unsigned long now) {
         (now - globalData.nodeb_last_update_ms) > NodeBConfig::StaleTimeoutMs) {
         globalData.nodeb_online = false;
         copyEventId(globalData.nodeb_status, sizeof(globalData.nodeb_status), "OFFLINE_OR_TIMEOUT");
+        copyEventId(globalData.nodeb_node_id, sizeof(globalData.nodeb_node_id), "NONE");
+        copyEventId(globalData.nodeb_source, sizeof(globalData.nodeb_source), "NONE");
+        globalData.nodeb_rssi = 0;
+        globalData.nodeb_last_update_ms = 0;
+        nodeBNeedsReconnect = true;
+        clearNodeBRidFieldsLocked(now);
         refreshFusionRuntimeLocked(now);
         syncActiveNodeRuntimeCacheLocked();
         markedOffline = true;
@@ -4306,7 +4424,46 @@ void setLd2451Measurement(float range_m, float speed_mps, bool approach, bool va
 }
 
 void clearLd2451Measurement(unsigned long now) {
+    pendingLd2451Frame = {};
+    ld2451StableFrameCount = 0;
     setLd2451Measurement(0.0f, 0.0f, false, false, now);
+}
+
+bool ld2451FramesSimilar(const Ld2451Frame &a, const Ld2451Frame &b) {
+    if (!a.valid || !b.valid || !a.selected.valid || !b.selected.valid) {
+        return false;
+    }
+    return abs(static_cast<int>(a.selected.range_m) - static_cast<int>(b.selected.range_m)) <= 1 &&
+           abs(static_cast<int>(a.selected.speed_kmh) - static_cast<int>(b.selected.speed_kmh)) <= 2 &&
+           abs(static_cast<int>(a.selected.angle_deg) - static_cast<int>(b.selected.angle_deg)) <= 2 &&
+           a.selected.approach == b.selected.approach;
+}
+
+void acceptLd2451BinaryFrame(const Ld2451Frame &frame, unsigned long now) {
+    if (!frame.valid || frame.target_count == 0 || !frame.selected.valid) {
+        clearLd2451Measurement(now);
+        return;
+    }
+
+    if (ld2451FramesSimilar(frame, pendingLd2451Frame)) {
+        if (ld2451StableFrameCount < Ld2451Config::RequiredStableFrames) {
+            ld2451StableFrameCount++;
+        }
+    } else {
+        pendingLd2451Frame = frame;
+        ld2451StableFrameCount = 1;
+    }
+
+    if (ld2451StableFrameCount >= Ld2451Config::RequiredStableFrames) {
+        const float speed_mps = frame.selected.speed_kmh * (1000.0f / 3600.0f);
+        setLd2451Measurement(
+            static_cast<float>(frame.selected.range_m),
+            speed_mps,
+            frame.selected.approach,
+            true,
+            now
+        );
+    }
 }
 
 bool parseLd2451Payload(const String &payload, float &range_m, float &speed_mps, bool &approach, bool &valid) {
@@ -4329,6 +4486,92 @@ bool parseLd2451Payload(const String &payload, float &range_m, float &speed_mps,
         valid = boolFromToken(validToken);
     }
     return hasRange && range_m >= 0.0f;
+}
+
+bool runLd2451ParserSelfTestCase(
+    const char *name,
+    const uint8_t *bytes,
+    size_t length,
+    bool expectParsed,
+    uint8_t expectedTargetCount,
+    uint16_t expectedRangeM = 0
+) {
+    Ld2451Parser parser;
+    bool parsed = false;
+    for (size_t index = 0; index < length; ++index) {
+        if (parser.feed(bytes[index])) {
+            parsed = true;
+        }
+    }
+    const Ld2451Frame &frame = parser.frame();
+    bool pass = parsed == expectParsed;
+    if (expectParsed) {
+        pass = pass &&
+               frame.valid &&
+               frame.target_count == expectedTargetCount &&
+               (!frame.selected.valid || expectedRangeM == 0 || frame.selected.range_m == expectedRangeM);
+    } else {
+        pass = pass && parser.stats().rejected > 0;
+    }
+
+    Serial.print("LD2451,SELFTEST,case=");
+    Serial.print(name);
+    Serial.print(",result=");
+    Serial.print(pass ? "PASS" : "FAIL");
+    Serial.print(",parsed=");
+    Serial.print(parsed ? 1 : 0);
+    Serial.print(",targets=");
+    Serial.print(frame.target_count);
+    Serial.print(",range_m=");
+    Serial.print(frame.selected.valid ? frame.selected.range_m : 0);
+    Serial.print(",rejected=");
+    Serial.print(parser.stats().rejected);
+    Serial.print(",bad_length=");
+    Serial.print(parser.stats().bad_length);
+    Serial.print(",bad_tail=");
+    Serial.print(parser.stats().bad_tail);
+    Serial.print(",bad_payload=");
+    Serial.print(parser.stats().bad_payload);
+    Serial.print(",invalid_field=");
+    Serial.println(parser.stats().invalid_field);
+    return pass;
+}
+
+void emitLd2451SelfTest() {
+    constexpr uint8_t normalFrame[] = {
+        0xF4, 0xF3, 0xF2, 0xF1, 0x07, 0x00,
+        0x01, 0x01, 0x8A, 40, 0x00, 60, 0x15,
+        0xF8, 0xF7, 0xF6, 0xF5
+    };
+    constexpr uint8_t noTargetFrame[] = {
+        0xF4, 0xF3, 0xF2, 0xF1, 0x02, 0x00,
+        0x00, 0x00,
+        0xF8, 0xF7, 0xF6, 0xF5
+    };
+    constexpr uint8_t badTailFrame[] = {
+        0xF4, 0xF3, 0xF2, 0xF1, 0x07, 0x00,
+        0x01, 0x01, 0x8A, 40, 0x00, 60, 0x15,
+        0xF8, 0xF7, 0xF6, 0x00
+    };
+    constexpr uint8_t badLengthFrame[] = {
+        0xF4, 0xF3, 0xF2, 0xF1, 0x02, 0x00,
+        0x01, 0x00,
+        0xF8, 0xF7, 0xF6, 0xF5
+    };
+    constexpr uint8_t invalidFieldFrame[] = {
+        0xF4, 0xF3, 0xF2, 0xF1, 0x07, 0x00,
+        0x01, 0x01, 0x8A, 40, 0x7F, 60, 0x15,
+        0xF8, 0xF7, 0xF6, 0xF5
+    };
+
+    bool pass = true;
+    pass &= runLd2451ParserSelfTestCase("normal", normalFrame, sizeof(normalFrame), true, 1, 40);
+    pass &= runLd2451ParserSelfTestCase("no_target", noTargetFrame, sizeof(noTargetFrame), true, 0);
+    pass &= runLd2451ParserSelfTestCase("bad_tail", badTailFrame, sizeof(badTailFrame), false, 0);
+    pass &= runLd2451ParserSelfTestCase("bad_length", badLengthFrame, sizeof(badLengthFrame), false, 0);
+    pass &= runLd2451ParserSelfTestCase("invalid_field", invalidFieldFrame, sizeof(invalidFieldFrame), false, 0);
+    Serial.print("LD2451,SELFTEST,summary=");
+    Serial.println(pass ? "PASS" : "FAIL");
 }
 
 bool parseVisionConfidencePayload(const String &payload, float &confidence, float &stability, String &tracker_state) {
@@ -4419,6 +4662,21 @@ void emitFusionDebug() {
     snapshot = globalData;
     portEXIT_CRITICAL(&dataMutex);
     Fusion::printDebug(snapshot, Serial);
+    const Ld2451ParserStats &stats = ld2451Parser.stats();
+    Serial.print("LD2451,PARSER,ok=");
+    Serial.print(stats.ok);
+    Serial.print(",rejected=");
+    Serial.print(stats.rejected);
+    Serial.print(",bad_length=");
+    Serial.print(stats.bad_length);
+    Serial.print(",bad_tail=");
+    Serial.print(stats.bad_tail);
+    Serial.print(",bad_payload=");
+    Serial.print(stats.bad_payload);
+    Serial.print(",invalid_field=");
+    Serial.print(stats.invalid_field);
+    Serial.print(",stable_frames=");
+    Serial.println(ld2451StableFrameCount);
 }
 
 void handleHostCommand(const String &line) {
@@ -4496,13 +4754,7 @@ void handleHostCommand(const String &line) {
         }
 
         if (nodeBType == "OFFLINE" || nodeBType == "CLEAR") {
-            portENTER_CRITICAL(&dataMutex);
-            globalData.nodeb_online = false;
-            copyEventId(globalData.nodeb_status, sizeof(globalData.nodeb_status), "OFFLINE_OR_TIMEOUT");
-            globalData.nodeb_last_update_ms = now;
-            refreshFusionRuntimeLocked(now);
-            syncActiveNodeRuntimeCacheLocked();
-            portEXIT_CRITICAL(&dataMutex);
+            setNodeBStatusFromPayload("status=OFFLINE_OR_TIMEOUT,node=NONE,source=NONE,rssi=0", now);
             Serial.println("NODEB marked offline.");
             return;
         }
@@ -4511,6 +4763,10 @@ void handleHostCommand(const String &line) {
     } else if (command == "LD2451") {
         if (value == "STATUS" || value.length() == 0) {
             emitFusionStatus();
+            return;
+        }
+        if (value == "SELFTEST") {
+            emitLd2451SelfTest();
             return;
         }
         if (value == "CLEAR" || value == "OFF") {
@@ -4526,6 +4782,8 @@ void handleHostCommand(const String &line) {
             Serial.println("Invalid LD2451 command. Use LD2451,range_m=30.0,speed_mps=1.2,approach=1,valid=1.");
             return;
         }
+        pendingLd2451Frame = {};
+        ld2451StableFrameCount = 0;
         setLd2451Measurement(range_m, speed_mps, approach, valid, millis());
         Serial.println("LD2451 far trigger updated.");
     } else if (command == "ENV") {
@@ -5025,6 +5283,9 @@ void handleHostCommand(const String &line) {
         copyEventId(globalData.nodeb_source, sizeof(globalData.nodeb_source), "NONE");
         globalData.nodeb_rssi = 0;
         globalData.nodeb_last_update_ms = 0;
+        nodeBNeedsReconnect = false;
+        nodeBReconnectCount = 0;
+        nodeBLastReconnectMs = 0;
         globalData.ld2451_valid = false;
         globalData.ld2451_range_m = 0.0f;
         globalData.ld2451_speed_mps = 0.0f;
@@ -5045,6 +5306,12 @@ void handleHostCommand(const String &line) {
         clearSimTrack();
         clearVisionOverride();
         clearRidIdentityPacket(0);
+        ld2451Parser.resetStats();
+        pendingLd2451Frame = {};
+        ld2451StableFrameCount = 0;
+        resetSerialLineBuffer(commandBuffer);
+        resetSerialLineBuffer(nodeBCommandBuffer);
+        resetSerialLineBuffer(ld2451CommandBuffer);
         runtimeKp = GimbalConfig::PredictorKp;
         runtimeKd = GimbalConfig::PredictorKd;
         stopServoDiagnostic(nullptr);
@@ -5089,12 +5356,12 @@ void pollHostCommands() {
     while (Serial.available() > 0) {
         char ch = static_cast<char>(Serial.read());
         if (ch == '\n' || ch == '\r') {
-            if (commandBuffer.length() > 0) {
-                handleHostCommand(commandBuffer);
-                commandBuffer = "";
+            String line;
+            if (takeSerialLine(commandBuffer, line)) {
+                handleHostCommand(line);
             }
         } else {
-            commandBuffer += ch;
+            appendSerialLineChar(commandBuffer, ch, "HOST");
         }
     }
 }
@@ -5407,8 +5674,15 @@ void beginNodeBSerialLink() {
     );
 }
 
+unsigned long nodeBReconnectIntervalMs() {
+    return nodeBReconnectCount < NodeBConfig::FastReconnectAttempts
+               ? NodeBConfig::ReconnectIntervalMs
+               : NodeBConfig::SlowReconnectIntervalMs;
+}
+
 void restartNodeBSerialIfDue(unsigned long now) {
-    if ((now - nodeBLastReconnectMs) < NodeBConfig::ReconnectIntervalMs) {
+    const unsigned long intervalMs = nodeBReconnectIntervalMs();
+    if (nodeBLastReconnectMs != 0 && (now - nodeBLastReconnectMs) < intervalMs) {
         return;
     }
     nodeBLastReconnectMs = now;
@@ -5418,6 +5692,8 @@ void restartNodeBSerialIfDue(unsigned long now) {
     beginNodeBSerialLink();
     Serial.print("NODEB,UART_RESTART,count=");
     Serial.print(nodeBReconnectCount);
+    Serial.print(",interval_ms=");
+    Serial.print(intervalMs);
     Serial.print(",rx=");
     Serial.print(AppSerialConfig::NodeBRxPin);
     Serial.print(",tx=");
@@ -5425,12 +5701,12 @@ void restartNodeBSerialIfDue(unsigned long now) {
 }
 
 bool shouldRestartNodeBSerial(unsigned long now) {
-    bool stale = false;
+    (void)now;
+    bool needsReconnect = false;
     portENTER_CRITICAL(&dataMutex);
-    stale = globalData.nodeb_last_update_ms > 0 &&
-            (now - globalData.nodeb_last_update_ms) > NodeBConfig::StaleTimeoutMs;
+    needsReconnect = nodeBNeedsReconnect;
     portEXIT_CRITICAL(&dataMutex);
-    return stale;
+    return needsReconnect;
 }
 }  // namespace
 
@@ -5498,15 +5774,12 @@ void NodeBTask(void *pvParameters) {
             feedCurrentTaskWatchdog();
             char ch = static_cast<char>(Serial2.read());
             if (ch == '\n' || ch == '\r') {
-                if (nodeBCommandBuffer.length() > 0) {
-                    handleNodeBSerialLine(nodeBCommandBuffer);
-                    nodeBCommandBuffer = "";
+                String line;
+                if (takeSerialLine(nodeBCommandBuffer, line)) {
+                    handleNodeBSerialLine(line);
                 }
-            } else if (nodeBCommandBuffer.length() < HostCommandMaxLength) {
-                nodeBCommandBuffer += ch;
             } else {
-                nodeBCommandBuffer = "";
-                Serial.println("NODEB serial buffer reset: line too long.");
+                appendSerialLineChar(nodeBCommandBuffer, ch, "NODEB");
             }
         }
 
@@ -5538,32 +5811,18 @@ void Ld2451Task(void *pvParameters) {
             uint8_t raw = static_cast<uint8_t>(ld2451Serial.read());
             if (ld2451Parser.feed(raw)) {
                 const Ld2451Frame &frame = ld2451Parser.frame();
-                if (frame.valid && frame.target_count > 0 && frame.selected.valid) {
-                    const float speed_mps = frame.selected.speed_kmh * (1000.0f / 3600.0f);
-                    setLd2451Measurement(
-                        static_cast<float>(frame.selected.range_m),
-                        speed_mps,
-                        frame.selected.approach,
-                        true,
-                        millis()
-                    );
-                } else {
-                    clearLd2451Measurement(millis());
-                }
+                acceptLd2451BinaryFrame(frame, millis());
                 continue;
             }
 
             char ch = static_cast<char>(raw);
             if (ch == '\n' || ch == '\r') {
-                if (ld2451CommandBuffer.length() > 0) {
-                    handleLd2451SerialLine(ld2451CommandBuffer);
-                    ld2451CommandBuffer = "";
+                String line;
+                if (takeSerialLine(ld2451CommandBuffer, line)) {
+                    handleLd2451SerialLine(line);
                 }
-            } else if (isPrintable(ch) && ld2451CommandBuffer.length() < HostCommandMaxLength) {
-                ld2451CommandBuffer += ch;
-            } else if (ld2451CommandBuffer.length() >= HostCommandMaxLength) {
-                ld2451CommandBuffer = "";
-                Serial.println("LD2451 serial buffer reset: line too long.");
+            } else if (isPrintable(ch)) {
+                appendSerialLineChar(ld2451CommandBuffer, ch, "LD2451");
             }
         }
 

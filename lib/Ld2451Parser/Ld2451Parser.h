@@ -21,11 +21,22 @@ struct Ld2451Frame {
     Ld2451Target selected;
 };
 
+struct Ld2451ParserStats {
+    uint32_t ok;
+    uint32_t rejected;
+    uint32_t bad_length;
+    uint32_t bad_tail;
+    uint32_t bad_payload;
+    uint32_t invalid_field;
+};
+
 class Ld2451Parser {
 public:
     Ld2451Parser();
     bool feed(uint8_t byte_in);
     const Ld2451Frame &frame() const;
+    const Ld2451ParserStats &stats() const;
+    void resetStats();
     void reset();
 
 private:
@@ -44,7 +55,12 @@ private:
     uint16_t payload_index_;
     uint8_t payload_[64];
     Ld2451Frame frame_;
+    Ld2451ParserStats stats_;
 
     bool parsePayload();
     void resetFrame();
+    void rejectBadLength();
+    void rejectBadTail();
+    void rejectBadPayload();
+    void rejectInvalidField();
 };

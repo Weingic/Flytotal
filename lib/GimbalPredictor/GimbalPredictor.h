@@ -21,4 +21,5 @@ public:
     float calculateFiringAngle(float target_x, float target_y);
     float getCurrentAngle();
     void setTunings(float p, float d);
+    void resetMotionState(float target_x, float target_y, unsigned long now);
 };

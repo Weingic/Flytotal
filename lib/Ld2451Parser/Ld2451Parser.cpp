@@ -5,7 +5,9 @@
 namespace {
 constexpr uint8_t Header[] = {0xF4, 0xF3, 0xF2, 0xF1};
 constexpr uint8_t Tail[] = {0xF8, 0xF7, 0xF6, 0xF5};
-constexpr float KmhToMps = 1000.0f / 3600.0f;
+constexpr int8_t MinAngleDeg = -90;
+constexpr int8_t MaxAngleDeg = 90;
+constexpr uint16_t MaxSpeedKmh = 250;
 
 int selectedScore(const Ld2451Target &target) {
     int score = 0;
@@ -17,6 +19,7 @@ int selectedScore(const Ld2451Target &target) {
 }  // namespace
 
 Ld2451Parser::Ld2451Parser() {
+    memset(&stats_, 0, sizeof(stats_));
     reset();
 }
 
@@ -36,6 +39,34 @@ void Ld2451Parser::reset() {
 
 const Ld2451Frame &Ld2451Parser::frame() const {
     return frame_;
+}
+
+const Ld2451ParserStats &Ld2451Parser::stats() const {
+    return stats_;
+}
+
+void Ld2451Parser::resetStats() {
+    memset(&stats_, 0, sizeof(stats_));
+}
+
+void Ld2451Parser::rejectBadLength() {
+    stats_.bad_length++;
+    stats_.rejected++;
+}
+
+void Ld2451Parser::rejectBadTail() {
+    stats_.bad_tail++;
+    stats_.rejected++;
+}
+
+void Ld2451Parser::rejectBadPayload() {
+    stats_.bad_payload++;
+    stats_.rejected++;
+}
+
+void Ld2451Parser::rejectInvalidField() {
+    stats_.invalid_field++;
+    stats_.rejected++;
 }
 
 bool Ld2451Parser::feed(uint8_t byte_in) {
@@ -60,6 +91,7 @@ bool Ld2451Parser::feed(uint8_t byte_in) {
         case READ_LEN1:
             payload_length_ |= static_cast<uint16_t>(byte_in) << 8;
             if (payload_length_ > sizeof(payload_)) {
+                rejectBadLength();
                 reset();
             } else if (payload_length_ == 0) {
                 state_ = READ_TAIL;
@@ -87,9 +119,13 @@ bool Ld2451Parser::feed(uint8_t byte_in) {
                     tail_index_ = 0;
                     payload_length_ = 0;
                     payload_index_ = 0;
+                    if (parsed) {
+                        stats_.ok++;
+                    }
                     return parsed;
                 }
             } else {
+                rejectBadTail();
                 reset();
             }
             break;
@@ -106,13 +142,19 @@ bool Ld2451Parser::parsePayload() {
         return true;
     }
     if (payload_length_ < 2) {
+        rejectBadPayload();
         return false;
     }
 
     parsed.target_count = payload_[0];
     parsed.alarm = payload_[1] == 0x01;
+    if (parsed.target_count > Ld2451MaxTargets || (payload_[1] != 0x00 && payload_[1] != 0x01)) {
+        rejectInvalidField();
+        return false;
+    }
     const uint16_t expectedLength = 2 + static_cast<uint16_t>(parsed.target_count) * 5;
     if (payload_length_ != expectedLength) {
+        rejectBadLength();
         return false;
     }
 
@@ -128,6 +170,14 @@ bool Ld2451Parser::parsePayload() {
         target.approach = payload_[offset + 2] == 0x00;
         target.speed_kmh = payload_[offset + 3];
         target.snr = payload_[offset + 4];
+        if (target.angle_deg < MinAngleDeg ||
+            target.angle_deg > MaxAngleDeg ||
+            target.range_m == 0 ||
+            (payload_[offset + 2] != 0x00 && payload_[offset + 2] != 0x01) ||
+            target.speed_kmh > MaxSpeedKmh) {
+            rejectInvalidField();
+            return false;
+        }
         parsed.targets[i] = target;
 
         const int score = selectedScore(target);

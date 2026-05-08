@@ -18,6 +18,15 @@ v5.2 的目标不是把低成本样机包装成军用级系统，而是把“能
 3. 数据大屏展示度不足：Dashboard 展示融合阶段、视觉红绿双框、NodeA/NodeB 状态。
 4. 复杂环境解释不足：弱光/雾天视觉降级时由雷达主导，视觉清晰时辅助确认。
 
+由此落成 6 个系统目标：
+
+1. 保住 NodeA 单板基础链路：LD2450、云台、串口命令、状态输出不能被 v5.2 破坏。
+2. 完成 NodeA + NodeB 双节点联调：NodeB 在线、掉线、重连都可观测。
+3. 接入 LD2451 远距触发：只承诺远距运动预警，不把 LD2451 包装成无人机专用识别雷达。
+4. 让视觉真正进入主链：视觉置信度通过 `VISION,CONF` 注入融合，而不只是网页显示。
+5. 形成抗干扰解释：多旋翼特征筛选、连续帧确认、异常值守卫共同降低误报。
+6. 形成答辩证据闭环：Dashboard 截图/录屏、仿真 PNG、串口日志、测试表格能互相对应。
+
 ## v5.2 系统架构
 
 ```text
@@ -50,6 +59,15 @@ NodeB C3 身份链 ----/
 - NodeB 掉线约 `3s` 后 `nodeb_online=0`，NodeA 不阻塞。
 - 无 LD2451 数据时 `ld2451_valid=0`，主循环不阻塞。
 - Dashboard 能显示视觉置信度、红绿双框、NodeA/NodeB 状态。
+
+## 证据映射
+
+| 创新点 | 代码证据 | 测试/答辩证据 |
+| --- | --- | --- |
+| 多模态融合 | `lib/Fusion/`、`VISION,CONF`、LD2451 字段 | `outputs/fusion_compare_*.png`、`FUSION,DEBUG` |
+| 抗干扰筛选 | `TrackManager` 多旋翼评分、LD2451 连续帧确认、雷达异常值守卫 | `multirotor_features.png`、`LD2451,SELFTEST` |
+| 协同感知 | NodeB UART、掉线 supervisor、Dashboard 协同视图 | NodeB 拔线/重启视频、协同视图截图 |
+| 实时跟踪 | `GimbalPredictor` 二阶预测、换目标 reset | `gimbal_prediction.png`、云台实测视频 |
 
 ## 给小白的解释
 

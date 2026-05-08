@@ -129,6 +129,102 @@ y_pred = y + vy * lead + 0.5 * ay_filt * lead^2
 
 当前 `lead=0.18s`，用于覆盖云台机械响应、串口和主循环延迟。
 
+v5.2 P0.2 增加换目标复位：
+
+```text
+if new_track_id != last_track_id:
+    last_x = x_now
+    last_y = y_now
+    last_vx = 0
+    last_vy = 0
+    ax_filt = 0
+    ay_filt = 0
+```
+
+这样新目标不会继承前一个目标的速度和加速度，避免云台在目标切换瞬间抽搐。
+
+## 7. LD2451 串口完整性策略
+
+LD2451 官方帧在当前接入协议中使用：
+
+```text
+Header  = F4 F3 F2 F1
+Length  = uint16 little-endian
+Payload = target_count + alarm + target[5] * N
+Tail    = F8 F7 F6 F5
+```
+
+当前不伪造 CRC。原因是官方上报帧没有可用于校验的 CRC 字段，如果自己定义 CRC，只能用于文本仿真或自定义上位机，不能验证真实 LD2451 二进制帧。
+
+实际采用四层防护：
+
+```text
+1. header/tail 必须匹配
+2. payload length 必须等于 2 + target_count * 5
+3. 字段范围必须合法：target_count、alarm、angle、range、direction、speed
+4. 真实二进制帧需要连续 2 帧稳定才写入主链
+```
+
+连续帧稳定条件：
+
+```text
+abs(range_now - range_pending) <= 1m
+abs(speed_now - speed_pending) <= 2km/h
+abs(angle_now - angle_pending) <= 2deg
+approach_now == approach_pending
+```
+
+验收命令：
+
+```text
+LD2451,SELFTEST
+```
+
+该命令会跑正常帧、无目标帧、错误帧尾、长度错误、字段非法 5 个样例。
+
+## 8. 异常值守卫
+
+雷达测量进入 TrackManager 前必须满足：
+
+```text
+isfinite(x_mm) == true
+isfinite(y_mm) == true
+abs(x_mm) <= RadarConfig::MaxCoordinateAbsMm
+abs(y_mm) <= RadarConfig::MaxCoordinateAbsMm
+```
+
+当前 `MaxCoordinateAbsMm=100000`，也就是 100m 量级边界。非法值只输出节流警告，不进入云台和风险状态。
+
+## 9. ConfirmFrames=5 的答辩口径
+
+`TrackConfig::ConfirmFrames=5` 保持不改。理由：
+
+- LD2450 是近距航迹源，近距直接影响云台和事件状态，宁愿慢一点也要降低误报。
+- 100m 远距预警不依赖 LD2450 的 5 帧确认，而由 LD2451 的 FAR 触发链承担。
+- 如果把 5 帧改成 3 帧，近距响应更快，但行人/摆动物体/串口毛刺更容易进入确认航迹。
+- 答辩口径：近距确认重稳定，远距预警重触发，两个链路职责不同。
+
+## 10. Watchdog 和串口缓冲
+
+Watchdog 当前 `TimeoutSeconds=12`：
+
+```text
+RadarTask / NodeBTask / Ld2451Task / TrackingTask / CloudTask
+均注册 esp_task_wdt_add(nullptr)
+并在主循环喂狗
+```
+
+串口逐字符输入使用固定行缓冲：
+
+```text
+char line[256]
+length++
+newline => 构造一次 String 并进入原解析链
+overflow => 丢弃当前行并等待下一次换行
+```
+
+这样保留原有命令解析逻辑，同时避免每个字符都触发 `String += ch` 的堆重分配。
+
 ## 给小白的解释
 
 融合算法不是“哪个传感器说了算”，而是“多个证据有没有互相支持”。远处先预警，近处再确认；视觉好就加分，视觉差也不会让系统完全失明。
