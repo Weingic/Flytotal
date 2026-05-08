@@ -1,6 +1,6 @@
 #include <Arduino.h>
-#include <Arduino.h>
 #include <ESP32Servo.h>
+#include <esp_task_wdt.h>
 #include <freertos/FreeRTOS.h>
 #include <math.h>
 #include <stdlib.h>
@@ -19,6 +19,8 @@
 
 SystemData globalData = {};
 portMUX_TYPE dataMutex = portMUX_INITIALIZER_UNLOCKED;
+uint32_t nodeBReconnectCount = 0;
+unsigned long nodeBLastReconnectMs = 0;
 
 GimbalPredictor myGimbal(GimbalConfig::PredictorKp, GimbalConfig::PredictorKd);
 GimbalController myGimbalController(myGimbal);
@@ -29,6 +31,37 @@ Servo servoPan;
 Servo servoTilt;
 
 namespace {
+
+void initializeWatchdog() {
+    if (!WatchdogConfig::Enabled) {
+        return;
+    }
+    const esp_err_t err = esp_task_wdt_init(WatchdogConfig::TimeoutSeconds, WatchdogConfig::PanicOnTimeout);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        Serial.print("WARN,WDT_INIT_FAILED,err=");
+        Serial.println(static_cast<int>(err));
+    }
+}
+
+void registerCurrentTaskWatchdog(const char *taskName) {
+    if (!WatchdogConfig::Enabled) {
+        return;
+    }
+    const esp_err_t err = esp_task_wdt_add(nullptr);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        Serial.print("WARN,WDT_ADD_FAILED,task=");
+        Serial.print(taskName != nullptr ? taskName : "UNKNOWN");
+        Serial.print(",err=");
+        Serial.println(static_cast<int>(err));
+    }
+}
+
+void feedCurrentTaskWatchdog() {
+    if (WatchdogConfig::Enabled) {
+        esp_task_wdt_reset();
+    }
+}
+
 struct SimTrackInput {
     bool enabled;
     float x_mm;
@@ -1952,7 +1985,7 @@ void deriveFusionFields(SystemData &data, unsigned long now) {
 }
 
 void refreshFusionRuntimeLocked(unsigned long now) {
-    deriveFusionFields(globalData, now);
+    Fusion::updateRuntimeFusionFields(globalData, now);
 }
 
 NodeRuntimeCache *findNodeRuntimeCacheLocked(const char *node_id) {
@@ -4203,6 +4236,25 @@ void setNodeBStatusFromPayload(const String &payload, unsigned long now) {
     portEXIT_CRITICAL(&dataMutex);
 }
 
+void markNodeBOfflineIfStale(unsigned long now) {
+    bool markedOffline = false;
+    portENTER_CRITICAL(&dataMutex);
+    if (globalData.nodeb_online &&
+        globalData.nodeb_last_update_ms > 0 &&
+        (now - globalData.nodeb_last_update_ms) > NodeBConfig::StaleTimeoutMs) {
+        globalData.nodeb_online = false;
+        copyEventId(globalData.nodeb_status, sizeof(globalData.nodeb_status), "OFFLINE_OR_TIMEOUT");
+        refreshFusionRuntimeLocked(now);
+        syncActiveNodeRuntimeCacheLocked();
+        markedOffline = true;
+    }
+    portEXIT_CRITICAL(&dataMutex);
+
+    if (markedOffline) {
+        Serial.println("NODEB,STATE,online=0,status=OFFLINE_OR_TIMEOUT,reason=stale_timeout");
+    }
+}
+
 bool acceptNodeBRidPayload(const String &payload, unsigned long now) {
     String rid_id;
     String node = "B1";
@@ -5345,10 +5397,46 @@ void emitCloudEvent(
     printRuntimeEventFields(eventStatusSnapshot);
     Serial.println();
 }
+
+void beginNodeBSerialLink() {
+    Serial2.begin(
+        AppSerialConfig::NodeBBaudRate,
+        SERIAL_8N1,
+        AppSerialConfig::NodeBRxPin,
+        AppSerialConfig::NodeBTxPin
+    );
+}
+
+void restartNodeBSerialIfDue(unsigned long now) {
+    if ((now - nodeBLastReconnectMs) < NodeBConfig::ReconnectIntervalMs) {
+        return;
+    }
+    nodeBLastReconnectMs = now;
+    nodeBReconnectCount++;
+    Serial2.end();
+    vTaskDelay(pdMS_TO_TICKS(20));
+    beginNodeBSerialLink();
+    Serial.print("NODEB,UART_RESTART,count=");
+    Serial.print(nodeBReconnectCount);
+    Serial.print(",rx=");
+    Serial.print(AppSerialConfig::NodeBRxPin);
+    Serial.print(",tx=");
+    Serial.println(AppSerialConfig::NodeBTxPin);
+}
+
+bool shouldRestartNodeBSerial(unsigned long now) {
+    bool stale = false;
+    portENTER_CRITICAL(&dataMutex);
+    stale = globalData.nodeb_last_update_ms > 0 &&
+            (now - globalData.nodeb_last_update_ms) > NodeBConfig::StaleTimeoutMs;
+    portEXIT_CRITICAL(&dataMutex);
+    return stale;
+}
 }  // namespace
 
 void RadarTask(void *pvParameters) {
     (void)pvParameters;
+    registerCurrentTaskWatchdog("Radar_Task");
     Serial1.begin(
         AppSerialConfig::RadarBaudRate,
         SERIAL_8N1,
@@ -5357,11 +5445,13 @@ void RadarTask(void *pvParameters) {
     );
 
     while (1) {
+        feedCurrentTaskWatchdog();
         unsigned long now = millis();
         SimTrackInput simSnapshot = {};
         bool simActive = getSimTrackSnapshot(simSnapshot) && isSimTrackActive(simSnapshot, now);
 
         while (Serial1.available() > 0) {
+            feedCurrentTaskWatchdog();
             uint8_t byteIn = Serial1.read();
 
             if (myRadar.feedByte(byteIn) && !simActive) {
@@ -5380,18 +5470,15 @@ void RadarTask(void *pvParameters) {
             portEXIT_CRITICAL(&dataMutex);
         }
 
+        feedCurrentTaskWatchdog();
         vTaskDelay(pdMS_TO_TICKS(RadarConfig::PollDelayMs));
     }
 }
 
 void NodeBTask(void *pvParameters) {
     (void)pvParameters;
-    Serial2.begin(
-        AppSerialConfig::NodeBBaudRate,
-        SERIAL_8N1,
-        AppSerialConfig::NodeBRxPin,
-        AppSerialConfig::NodeBTxPin
-    );
+    registerCurrentTaskWatchdog("NodeB_Task");
+    beginNodeBSerialLink();
     Serial.print("NodeB UART listening: baud=");
     Serial.print(AppSerialConfig::NodeBBaudRate);
     Serial.print(",rx=");
@@ -5400,7 +5487,15 @@ void NodeBTask(void *pvParameters) {
     Serial.println(AppSerialConfig::NodeBTxPin);
 
     while (1) {
+        feedCurrentTaskWatchdog();
+        const unsigned long now = millis();
+        markNodeBOfflineIfStale(now);
+        if (shouldRestartNodeBSerial(now)) {
+            restartNodeBSerialIfDue(now);
+        }
+
         while (Serial2.available() > 0) {
+            feedCurrentTaskWatchdog();
             char ch = static_cast<char>(Serial2.read());
             if (ch == '\n' || ch == '\r') {
                 if (nodeBCommandBuffer.length() > 0) {
@@ -5415,12 +5510,14 @@ void NodeBTask(void *pvParameters) {
             }
         }
 
+        feedCurrentTaskWatchdog();
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
 void Ld2451Task(void *pvParameters) {
     (void)pvParameters;
+    registerCurrentTaskWatchdog("LD2451_Task");
     ld2451Serial.begin(
         AppSerialConfig::Ld2451BaudRate,
         SERIAL_8N1,
@@ -5435,7 +5532,9 @@ void Ld2451Task(void *pvParameters) {
     Serial.println(AppSerialConfig::Ld2451TxPin);
 
     while (1) {
+        feedCurrentTaskWatchdog();
         while (ld2451Serial.available() > 0) {
+            feedCurrentTaskWatchdog();
             uint8_t raw = static_cast<uint8_t>(ld2451Serial.read());
             if (ld2451Parser.feed(raw)) {
                 const Ld2451Frame &frame = ld2451Parser.frame();
@@ -5468,12 +5567,14 @@ void Ld2451Task(void *pvParameters) {
             }
         }
 
+        feedCurrentTaskWatchdog();
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
 void TrackingTask(void *pvParameters) {
     (void)pvParameters;
+    registerCurrentTaskWatchdog("Track_Task");
     ESP32PWM::allocateTimer(0);
     ESP32PWM::allocateTimer(1);
 
@@ -5499,6 +5600,7 @@ void TrackingTask(void *pvParameters) {
     char lastCaptureReason[32] = {0};
 
     while (1) {
+        feedCurrentTaskWatchdog();
         pollHostCommands();
 
         RadarTrack track_snapshot = {};
@@ -5871,12 +5973,14 @@ void TrackingTask(void *pvParameters) {
             publishTelemetry(track_snapshot, outputPan, hunter_output, now);
         }
 
+        feedCurrentTaskWatchdog();
         vTaskDelay(pdMS_TO_TICKS(TrackingConfig::LoopDelayMs));
     }
 }
 
 void CloudTask(void *pvParameters) {
     (void)pvParameters;
+    registerCurrentTaskWatchdog("Cloud_Task");
     unsigned long lastHeartbeatMs = 0;
     unsigned long lastTrackReportMs = 0;
     uint32_t lastTrackId = 0;
@@ -5887,6 +5991,7 @@ void CloudTask(void *pvParameters) {
     EventContext eventContext = {false, 0, 0, 0, {0}};
 
     while (1) {
+        feedCurrentTaskWatchdog();
         unsigned long now = millis();
         bool uplinkFrameSent = false;
 
@@ -6109,6 +6214,7 @@ void CloudTask(void *pvParameters) {
         }
         refreshDerivedSystemFields(now);
 
+        feedCurrentTaskWatchdog();
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
@@ -6145,6 +6251,8 @@ void setup() {
     Serial.println("CloudTask publishes UPLINK,HB / UPLINK,TRACK / UPLINK,EVENT frames.");
     printHostCommandHelp();
     Serial.println("========================================");
+
+    initializeWatchdog();
 
     xTaskCreatePinnedToCore(RadarTask, "Radar_Task", 4096, NULL, 1, NULL, 0);
     if (AppSerialConfig::NodeBSerialEnabled) {

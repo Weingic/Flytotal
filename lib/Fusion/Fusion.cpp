@@ -137,13 +137,8 @@ bool highHoldSatisfied(unsigned long now) {
     return highCandidateSinceMs > 0 && (now - highCandidateSinceMs) >= FusionConfig::HighHoldWindowMs;
 }
 
-}  // namespace
-
-namespace Fusion {
-
-void updateFusionFields(SystemData &data, unsigned long now) {
+void evaluateFusionFields(SystemData &data, unsigned long now, bool updateRuntimeHold) {
     data.nodeb_online = isNodeBOnline(data, now);
-    data.far_motion_trigger = computeFarMotionTrigger(data, now);
 
     if (data.environment_mode[0] == '\0') {
         copyField(data.environment_mode, sizeof(data.environment_mode), "CLEAR");
@@ -151,6 +146,14 @@ void updateFusionFields(SystemData &data, unsigned long now) {
     deriveVisionQuality(data, data.vision_quality, sizeof(data.vision_quality));
 
     const bool ld2451Fresh = isLd2451Fresh(data, now);
+    if (!ld2451Fresh &&
+        data.ld2451_valid &&
+        data.ld2451_last_update_ms > 0 &&
+        (now - data.ld2451_last_update_ms) > FarRadarConfig::StaleTimeoutMs) {
+        data.ld2451_valid = false;
+    }
+    data.far_motion_trigger = computeFarMotionTrigger(data, now);
+
     const bool nearRadar = data.radar_track.is_confirmed;
     const bool farRadar = data.far_motion_trigger;
     const bool ridActive = data.rid_status == RID_RECEIVED ||
@@ -199,7 +202,9 @@ void updateFusionFields(SystemData &data, unsigned long now) {
     const bool twoSourceCandidate = votes >= 2;
     const bool consistencyOk = data.range_agreement || data.speed_agreement || ridActive || visualActive;
     const bool highCandidate = twoSourceCandidate && consistencyOk;
-    updateHighHold(highCandidate, now);
+    if (updateRuntimeHold) {
+        updateHighHold(highCandidate, now);
+    }
     const bool highAllowed = highHoldSatisfied(now);
 
     const bool limitedVision = isLimitedVisionEnvironment(data);
@@ -278,6 +283,18 @@ void updateFusionFields(SystemData &data, unsigned long now) {
     data.fusion_confidence = confidence;
     data.is_multirotor_like = data.radar_track.is_multirotor_like;
     data.multirotor_score = data.radar_track.multirotor_score;
+}
+
+}  // namespace
+
+namespace Fusion {
+
+void updateFusionFields(SystemData &data, unsigned long now) {
+    evaluateFusionFields(data, now, false);
+}
+
+void updateRuntimeFusionFields(SystemData &data, unsigned long now) {
+    evaluateFusionFields(data, now, true);
 }
 
 void printDebug(const SystemData &snapshot, Print &out) {

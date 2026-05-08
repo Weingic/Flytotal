@@ -1,6 +1,6 @@
 # Flytotal v5.2 Algorithm Evidence Index
 
-Last updated: 2026-05-03
+Last updated: 2026-05-08
 
 This directory is the lightweight index for v5.2 defense evidence. Large generated images, videos, model files, and raw captures stay outside Git by default.
 
@@ -31,6 +31,4 @@ python tools/co_sensing_simulator.py --scenario boundary_crossing
 
 ## 给小白的解释
 
-这是什么：这是答辩证据的目录说明，不是放大文件的仓库。
-有什么用：你答辩时可以按这里快速找到“融合对比图、视觉双框、筛选图、云台预测图、协同状态”。
-你现在该怎么做：先跑上面的命令生成 `outputs/`，截图或录屏后，把文件路径填到答辩素材文档里。
+这是答辩证据目录，不是存放大视频和原始数据的地方。你先运行上面的命令生成 `outputs/`，再把关键截图、录屏路径和测试结论写进答辩素材文档。

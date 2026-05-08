@@ -11,6 +11,8 @@ private:
     float last_y;
     float last_vx;
     float last_vy;
+    float filtered_ax;
+    float filtered_ay;
     unsigned long last_time;
     float current_pan_angle;
 

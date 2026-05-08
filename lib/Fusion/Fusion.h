@@ -7,6 +7,7 @@
 namespace Fusion {
 
 void updateFusionFields(SystemData &data, unsigned long now);
+void updateRuntimeFusionFields(SystemData &data, unsigned long now);
 void printDebug(const SystemData &snapshot, Print &out);
 
 }  // namespace Fusion

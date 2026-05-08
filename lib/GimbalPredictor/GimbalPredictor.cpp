@@ -2,6 +2,18 @@
 
 #include "AppConfig.h"
 
+namespace {
+float clampFloat(float value, float minValue, float maxValue) {
+    if (value < minValue) {
+        return minValue;
+    }
+    if (value > maxValue) {
+        return maxValue;
+    }
+    return value;
+}
+}
+
 GimbalPredictor::GimbalPredictor(float p, float d) {
     Kp = p;
     Kd = d;
@@ -9,6 +21,8 @@ GimbalPredictor::GimbalPredictor(float p, float d) {
     last_y = 0.0f;
     last_vx = 0.0f;
     last_vy = 0.0f;
+    filtered_ax = 0.0f;
+    filtered_ay = 0.0f;
     last_time = 0;
     current_pan_angle = GimbalConfig::CenterPanDeg;
 }
@@ -22,15 +36,19 @@ float GimbalPredictor::calculateFiringAngle(float target_x, float target_y) {
 
     float vx = (target_x - last_x) / dt;
     float vy = (target_y - last_y) / dt;
-    float ax = (vx - last_vx) / dt;
-    float ay = (vy - last_vy) / dt;
+    const float maxAccel = GimbalConfig::PredictorMaxAccelMmS2;
+    float ax = clampFloat((vx - last_vx) / dt, -maxAccel, maxAccel);
+    float ay = clampFloat((vy - last_vy) / dt, -maxAccel, maxAccel);
+    const float alpha = GimbalConfig::PredictorAccelFilterAlpha;
+    filtered_ax = (alpha * filtered_ax) + ((1.0f - alpha) * ax);
+    filtered_ay = (alpha * filtered_ay) + ((1.0f - alpha) * ay);
 
     float predicted_x = target_x + (vx * GimbalConfig::PredictorLeadTimeSeconds);
     float predicted_y = target_y + (vy * GimbalConfig::PredictorLeadTimeSeconds);
     if (GimbalConfig::AdvancedPredictorEnabled) {
         const float lead = GimbalConfig::PredictorLeadTimeSeconds;
-        predicted_x = target_x + (vx * lead) + (0.5f * ax * lead * lead);
-        predicted_y = target_y + (vy * lead) + (0.5f * ay * lead * lead);
+        predicted_x = target_x + (vx * lead) + (0.5f * filtered_ax * lead * lead);
+        predicted_y = target_y + (vy * lead) + (0.5f * filtered_ay * lead * lead);
     }
 
     float target_angle = GimbalConfig::CenterPanDeg + (atan2(predicted_x, predicted_y) * 180.0f / PI);

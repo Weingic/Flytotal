@@ -29,6 +29,8 @@ constexpr float PredictorKp = 0.45f;
 constexpr float PredictorKd = 0.05f;
 constexpr float PredictorFallbackDtSeconds = 0.02f;
 constexpr float PredictorLeadTimeSeconds = 0.18f;
+constexpr float PredictorMaxAccelMmS2 = 5000.0f;
+constexpr float PredictorAccelFilterAlpha = 0.70f;
 constexpr float CenterPanDeg = 90.0f;
 constexpr float CenterTiltDeg = 90.0f;
 constexpr float MinPanDeg = 10.0f;
@@ -84,6 +86,13 @@ constexpr float HunterEventBlockScore = 6.0f;
 
 namespace NodeBConfig {
 constexpr unsigned long StaleTimeoutMs = 3000;
+constexpr unsigned long ReconnectIntervalMs = 3000;
+}
+
+namespace WatchdogConfig {
+constexpr bool Enabled = true;
+constexpr int TimeoutSeconds = 8;
+constexpr bool PanicOnTimeout = true;
 }
 
 namespace TrackConfig {
