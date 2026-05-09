@@ -37,12 +37,29 @@ v5.2 已经具备多模态融合、视觉置信度、NodeB 协同和 LD2451 远�
 | 多旋翼筛选 | `TrackManager` 特征评分 | 支撑抗干扰和非无人机过滤 |
 | 云台预测 | `GimbalPredictor` 二阶外推 | 支撑实时跟踪和预测能力 |
 
+## v5.2 关键 commit 时间线
+
+| Commit | 日期 | 主题 | 为什么改 |
+|---|---|---|---|
+| `5affbe0` | 2026-04 早 | checkpoint before v5.1 multimodal upgrade | 锚点：v5.1 freeze 前打 tag，回退路径基线 |
+| `8508623` | 2026-04 中 | feat: add v5.1 nodeb ld2451 fusion fields | 新增 LD2451 / NodeB 字段（lr_*, nodeb_*），定下数据契约 |
+| `93a977c` | 2026-04-26 | feat/win-codex 合入 mac-claude（31 文件 +1954） | v5.2 算法核心：FAR/MID/NEAR + 多旋翼 + 云台二阶 + handoff 字段 |
+| `0a84c12` | 2026-04-29 | feat: add v5.2 p0 defense evidence support | P0-1 ~ P0-6 答辩素材：FusionConfig::Enabled=false 默认、VISION,CONF 注入、dashboard 双框 + 协同 tab、fusion_simulator 接历史数据 |
+| `963ee66` | 2026-05-04 | fix: increase v5.2 task stack margins | 5 任务 stack 调整，避免 demo 期间栈溢出 |
+| `d550410` | 2026-05-08 | fix: harden v5.2 runtime and docs | 上次审计的 3 个 critical：watchdog 全注册 + GimbalPredictor 加速度 clamp+LPF + NodeB 重连框架；同步新增 5 个核心 docs |
+| `58a764f` | 2026-05-09 | fix: harden v5.2 field stability | P0.2 现场稳定性：track_id reset、固定行缓冲、isfinite 守卫、LD2451 self-test、parser 合法性统计 |
+
 ## 后续保留项
 
-- 主链 ESP-NOW handoff 四态机。
-- NodeB Wi-Fi OUI / NimBLE Remote ID 被动扫描。
-- pyserial 双端 ESP-NOW 真实抓包统计。
-- 证据 ZIP 一键打包工具。
+- NodeB 重连**硬上限**（当前 5 次后切慢速永不停，需加 MaxTotalAttempts）
+- LD2451 真 CRC（当前用 4 层结构守卫 + 连续帧确认替代）
+- main.cpp critical section 平衡审查（grep 78 ENTER vs 79 EXIT 不平衡）
+- vision_confidence 读取加 critical section 保护
+- multirotor_score 赋值加 [0,1] clamp
+- 主链 ESP-NOW handoff 四态机
+- NodeB Wi-Fi OUI / NimBLE Remote ID 被动扫描
+- pyserial 双端 ESP-NOW 真实抓包统计
+- 证据 ZIP 一键打包工具
 
 ## 给小白的解释
 
