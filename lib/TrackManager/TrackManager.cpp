@@ -26,6 +26,15 @@ TrackManager::TrackManager() {
     last_measurement_ms_ = 0;
 }
 
+void TrackManager::clear(unsigned long now) {
+    current_track_ = {0, false, false, 0.0f, 0.0f, 0.0f, 0.0f, 0, 0, now, 0, false, 0.0f, 0, 0.0f, 0.0f};
+    last_measurement_x_ = 0.0f;
+    last_measurement_y_ = 0.0f;
+    last_speed_mm_s_ = 0.0f;
+    last_heading_deg_ = 0.0f;
+    last_measurement_ms_ = 0;
+}
+
 void TrackManager::resetTrack(unsigned long now, float x_mm, float y_mm) {
     current_track_.track_id = next_track_id_++;
     current_track_.is_active = true;

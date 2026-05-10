@@ -19,6 +19,7 @@ private:
 
 public:
     TrackManager();
+    void clear(unsigned long now);
     const RadarTrack &updateTrack(float x_mm, float y_mm, unsigned long now);
     const RadarTrack &refresh(unsigned long now);
     const RadarTrack &getTrack() const;

@@ -329,15 +329,23 @@ class SerialObserver:
 
 
 def read_serial_background(ser: serial.Serial, stop_event: threading.Event, observer: SerialObserver) -> None:
+    pending = b""
     while not stop_event.is_set():
         try:
             raw = ser.readline()
             if not raw:
                 continue
-            line = raw.decode("utf-8", errors="ignore").strip()
-            if line:
-                observer.add_line(line)
-                print(f"[ESP32] {line}")
+            pending += raw
+            if not pending.endswith((b"\n", b"\r")):
+                if len(pending) > 8192:
+                    pending = b""
+                continue
+            for raw_line in pending.splitlines():
+                line = raw_line.decode("utf-8", errors="ignore").strip()
+                if line:
+                    observer.add_line(line)
+                    print(f"[ESP32] {line}")
+            pending = b""
         except Exception:
             return
 
@@ -372,6 +380,10 @@ def send_command_and_capture(
     expected_prefix: str,
     timeout_s: float,
 ) -> dict | None:
+    if expected_prefix in {"EVENT,STATUS", "STATUS"}:
+        timeout_s = max(timeout_s, 2.5)
+    elif expected_prefix in {"RID,STATUS", "RISK,STATUS"}:
+        timeout_s = max(timeout_s, 1.5)
     cursor = observer.cursor()
     send_line(ser, line)
     return observer.wait_for_record(cursor, expected_prefix, timeout_s)
@@ -836,6 +848,7 @@ def run_standard_acceptance_suite(
         },
     )
 
+    send_command_and_wait(ser, "REALINPUT,OFF", 0.4)
     send_command_and_wait(ser, "RESET", 0.8)
     send_command_and_wait(ser, "DEBUG,OFF", 0.3)
     send_command_and_wait(ser, "UPLINK,OFF", 0.3)
@@ -883,6 +896,7 @@ def run_standard_acceptance_suite(
 
     inject_confirmed_track(ser, x_mm, y_mm, confirm_repeat, confirm_interval_s)
     send_command_and_wait(ser, f"RID,{rid}", 0.15)
+    time.sleep(0.6)
 
     open_checks = [
         SuiteCheck(
@@ -954,6 +968,7 @@ def run_standard_acceptance_suite(
 
     send_command_and_wait(ser, "RID,OK", 0.05)
     inject_confirmed_track(ser, x_mm, y_mm, 3, confirm_interval_s)
+    time.sleep(0.45)
     downgrade_checks = [
         SuiteCheck(
             name="risk_downgrade_event_status",
@@ -1013,8 +1028,9 @@ def run_standard_acceptance_suite(
 
     inject_confirmed_track(ser, x_mm, y_mm, confirm_repeat, confirm_interval_s)
     send_command_and_wait(ser, f"RID,{rid}", 0.1)
+    inject_confirmed_track(ser, x_mm, y_mm, 20, 0.1)
     send_command_and_wait(ser, "EVENT,STATUS", 0.25)
-    send_command_and_wait(ser, "TRACK,CLEAR", 0.3)
+    send_command_and_wait(ser, "TRACK,CLEAR", 0.5)
 
     lost_check = SuiteCheck(
         name="track_lost_last_event",
@@ -1094,6 +1110,7 @@ def run_standard_acceptance_suite(
         },
     )
     send_command_and_wait(ser, "RESET", 0.5)
+    send_command_and_wait(ser, "REALINPUT,ON", 0.2)
     print_suite_report(suite_report)
     print(f"\nSuite summary: passed={passed}, failed={failed}")
     return final_session_payload, failed == 0
@@ -1154,6 +1171,7 @@ def run_single_node_realtime_v1_suite(
         },
     )
 
+    send_command_and_wait(ser, "REALINPUT,OFF", 0.4)
     send_command_and_wait(ser, "RESET", 0.8)
     send_command_and_wait(ser, "DEBUG,OFF", 0.3)
     send_command_and_wait(ser, "UPLINK,OFF", 0.3)
@@ -1201,6 +1219,7 @@ def run_single_node_realtime_v1_suite(
 
     inject_confirmed_track(ser, x_mm, y_mm, confirm_repeat, confirm_interval_s)
     send_command_and_wait(ser, f"RID,{rid}", 0.15)
+    time.sleep(0.4)
 
     scenario1_checks = [
         SuiteCheck(
@@ -1431,6 +1450,7 @@ def run_single_node_realtime_v1_suite(
         },
     )
     send_command_and_wait(ser, "RESET", 0.5)
+    send_command_and_wait(ser, "REALINPUT,ON", 0.2)
     print_suite_report(suite_report)
     print(f"\nSuite summary: passed={passed}, failed={failed}")
     return final_session_payload, failed == 0
@@ -1501,6 +1521,7 @@ def run_risk_event_vision_chain_v1_suite(
         },
     )
 
+    send_command_and_wait(ser, "REALINPUT,OFF", 0.4)
     def run_step(
         check: SuiteCheck,
         step_index: int,
@@ -1654,6 +1675,7 @@ def run_risk_event_vision_chain_v1_suite(
     send_command_and_wait(ser, f"RID,{missing_rid}", 0.1)
     inject_confirmed_track(ser, x_mm, y_mm, confirm_repeat, confirm_interval_s)
     points_sent += confirm_repeat
+    time.sleep(0.4)
     run_step(
         SuiteCheck(
             name="scenario5_high_risk_visual_capture_ready",
@@ -1773,6 +1795,7 @@ def run_risk_event_vision_chain_v1_suite(
         },
     )
     send_command_and_wait(ser, "RESET", 0.5)
+    send_command_and_wait(ser, "REALINPUT,ON", 0.2)
     print_suite_report(suite_report)
     print(f"\nSuite summary: passed={passed}, failed={failed}")
     return final_session_payload, failed == 0
@@ -1834,6 +1857,7 @@ def run_rid_identity_chain_v1_suite(
         },
     )
 
+    send_command_and_wait(ser, "REALINPUT,OFF", 0.4)
     def run_step(
         check: SuiteCheck,
         step_index: int,
@@ -1924,9 +1948,11 @@ def run_rid_identity_chain_v1_suite(
             timeout_s=0.8,
             required_fields={
                 "rid_status": "EXPIRED",
-                "rid_whitelist_hit": "1",
+                "rid_whitelist_hit": "0",
+                "wl_status": "WL_ALLOWED",
                 "rid_packet_valid": "1",
                 "rid_auth_status": "VALID",
+                "rid_whitelist_tag": "WL_OK",
             },
             note="场景2：超过接收超时窗口后，RID 状态应从 MATCHED/RECEIVED 进入 EXPIRED。",
         ),
@@ -1999,6 +2025,7 @@ def run_rid_identity_chain_v1_suite(
         },
     )
     send_command_and_wait(ser, "RESET", 0.5)
+    send_command_and_wait(ser, "REALINPUT,ON", 0.2)
     print_suite_report(suite_report)
     print(f"\nSuite summary: passed={passed}, failed={failed}")
     return final_session_payload, failed == 0

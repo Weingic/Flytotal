@@ -206,6 +206,12 @@ struct UplinkOutputControl {
     bool enabled;
 };
 
+struct RuntimeInputControl {
+    bool real_radar_enabled;
+    bool nodeb_uart_enabled;
+    bool ld2451_uart_enabled;
+};
+
 struct SafetyControl {
     bool safe_mode_enabled;
 };
@@ -323,8 +329,18 @@ SimTrackInput simTrack = {false, 0.0f, 0.0f, 0};
 RidIdentityPacket ridIdentity = {false, {0}, {0}, {0}, 0, {0}, {0}, 0, 0};
 ManualServoControl manualServo = {false, true, GimbalConfig::CenterPanDeg, GimbalConfig::CenterTiltDeg};
 VisionOverrideControl visionOverride = {false, VISION_IDLE};
-DebugOutputControl debugOutput = {true, false, 0, 0, 0, MAIN_IDLE, STATE_SCANNING, false};
-UplinkOutputControl uplinkOutput = {true};
+DebugOutputControl debugOutput = {
+    AppSerialConfig::LocalDebugEnabledByDefault,
+    AppSerialConfig::QuietModeEnabledByDefault,
+    0,
+    0,
+    0,
+    MAIN_IDLE,
+    STATE_SCANNING,
+    false
+};
+UplinkOutputControl uplinkOutput = {AppSerialConfig::UplinkOutputEnabledByDefault};
+RuntimeInputControl inputControl = {true, true, true};
 SafetyControl safetyControl = {false};
 ServoDiagnosticControl servoDiagnostic = {false, 0, 0};
 HandoverRequest handoverRequest = {false, 0, {0}};
@@ -422,6 +438,9 @@ void markSerialLineOverflow(SerialLineBuffer &buffer, const char *source) {
     buffer.length = 0;
     buffer.overflow = true;
     buffer.data[0] = '\0';
+    if (source == nullptr || strcmp(source, "HOST") != 0) {
+        return;
+    }
     Serial.print(source != nullptr ? source : "SERIAL");
     Serial.println(" line buffer reset: line too long.");
 }
@@ -436,6 +455,34 @@ void appendSerialLineChar(SerialLineBuffer &buffer, char ch, const char *source)
     }
     buffer.data[buffer.length++] = ch;
     buffer.data[buffer.length] = '\0';
+}
+
+char asciiUpperChar(char ch) {
+    if (ch >= 'a' && ch <= 'z') {
+        return static_cast<char>(ch - ('a' - 'A'));
+    }
+    return ch;
+}
+
+void appendLd2451TextCommandChar(SerialLineBuffer &buffer, char ch) {
+    constexpr char Prefix[] = "LD2451,";
+    constexpr size_t PrefixLength = sizeof(Prefix) - 1;
+    const char upper = asciiUpperChar(ch);
+
+    if (buffer.length < PrefixLength) {
+        if (upper == Prefix[buffer.length]) {
+            appendSerialLineChar(buffer, upper, "LD2451");
+            return;
+        }
+
+        resetSerialLineBuffer(buffer);
+        if (upper == Prefix[0]) {
+            appendSerialLineChar(buffer, upper, "LD2451");
+        }
+        return;
+    }
+
+    appendSerialLineChar(buffer, ch, "LD2451");
 }
 
 bool takeSerialLine(SerialLineBuffer &buffer, String &line) {
@@ -1979,6 +2026,36 @@ bool boolFromToken(const String &token) {
     return value == "1" || value == "TRUE" || value == "YES" || value == "APPROACH";
 }
 
+RuntimeInputControl getInputControlSnapshot() {
+    RuntimeInputControl snapshot = {};
+    portENTER_CRITICAL(&dataMutex);
+    snapshot = inputControl;
+    portEXIT_CRITICAL(&dataMutex);
+    return snapshot;
+}
+
+bool isRealRadarInputEnabled() {
+    return getInputControlSnapshot().real_radar_enabled;
+}
+
+bool isNodeBUartInputEnabled() {
+    return getInputControlSnapshot().nodeb_uart_enabled;
+}
+
+bool isLd2451UartInputEnabled() {
+    return getInputControlSnapshot().ld2451_uart_enabled;
+}
+
+void emitRealInputStatus() {
+    RuntimeInputControl snapshot = getInputControlSnapshot();
+    Serial.print("REALINPUT,STATUS,radar=");
+    Serial.print(snapshot.real_radar_enabled ? 1 : 0);
+    Serial.print(",nodeb=");
+    Serial.print(snapshot.nodeb_uart_enabled ? 1 : 0);
+    Serial.print(",ld2451=");
+    Serial.println(snapshot.ld2451_uart_enabled ? 1 : 0);
+}
+
 bool isNodeBOnline(const SystemData &snapshot, unsigned long now) {
     return snapshot.nodeb_last_update_ms > 0 &&
            (now - snapshot.nodeb_last_update_ms) <= NodeBConfig::StaleTimeoutMs &&
@@ -3427,6 +3504,10 @@ void emitEventLifecycleLog(
     const EventContext *context = nullptr,
     const char *detail = nullptr
 ) {
+    if (!shouldEmitFlowDebug()) {
+        return;
+    }
+
     EventLifecycleState lifecycleSnapshot = getEventLifecycleStateSnapshot();
     Serial.print("EVENT,LIFECYCLE,node=");
     Serial.print(NodeConfig::NodeId);
@@ -3916,6 +3997,8 @@ void printHostCommandHelp() {
     Serial.println("    SUMMARY | SUMMARY,RESET");
     Serial.println("    SELFTEST");
     Serial.println("    FUSION,STATUS | FUSION,DEBUG | FUSION,ENABLE,1 | FUSION,ENABLE,0");
+    Serial.println("    REALINPUT,STATUS | REALINPUT,OFF | REALINPUT,ON");
+    Serial.println("    MONITOR,CLEAN | MONITOR,VERBOSE");
     Serial.println("  [Simulation]");
     Serial.println("    TRACK,x,y | TRACK,CLEAR");
     Serial.println("    RID,MATCHED | RID,NONE | RID,RECEIVED | RID,EXPIRED | RID,INVALID");
@@ -4427,6 +4510,57 @@ void clearLd2451Measurement(unsigned long now) {
     pendingLd2451Frame = {};
     ld2451StableFrameCount = 0;
     setLd2451Measurement(0.0f, 0.0f, false, false, now);
+}
+
+void clearHardwareInputStateForAcceptance(unsigned long now) {
+    myTrackManager.clear(now);
+    pendingLd2451Frame = {};
+    ld2451StableFrameCount = 0;
+
+    portENTER_CRITICAL(&dataMutex);
+    globalData.radar_track = {};
+    globalData.is_locked = false;
+    globalData.x_pos = 0.0f;
+    globalData.y_pos = 0.0f;
+    globalData.nodeb_online = false;
+    copyEventId(globalData.nodeb_status, sizeof(globalData.nodeb_status), "UNKNOWN");
+    copyEventId(globalData.nodeb_node_id, sizeof(globalData.nodeb_node_id), "NONE");
+    copyEventId(globalData.nodeb_source, sizeof(globalData.nodeb_source), "NONE");
+    globalData.nodeb_rssi = 0;
+    globalData.nodeb_last_update_ms = 0;
+    nodeBNeedsReconnect = false;
+    nodeBReconnectCount = 0;
+    nodeBLastReconnectMs = 0;
+    globalData.ld2451_valid = false;
+    globalData.ld2451_range_m = 0.0f;
+    globalData.ld2451_speed_mps = 0.0f;
+    globalData.ld2451_approach = false;
+    globalData.far_motion_trigger = false;
+    globalData.ld2451_last_update_ms = 0;
+    refreshFusionRuntimeLocked(now);
+    syncActiveNodeRuntimeCacheLocked();
+    portEXIT_CRITICAL(&dataMutex);
+
+    clearRidIdentityPacket(now);
+}
+
+void setRealInputsEnabled(bool enabled, unsigned long now) {
+    portENTER_CRITICAL(&dataMutex);
+    inputControl.real_radar_enabled = enabled;
+    inputControl.nodeb_uart_enabled = enabled;
+    inputControl.ld2451_uart_enabled = enabled;
+    if (!enabled) {
+        nodeBNeedsReconnect = false;
+        nodeBReconnectCount = 0;
+        nodeBLastReconnectMs = 0;
+    }
+    portEXIT_CRITICAL(&dataMutex);
+
+    if (!enabled) {
+        clearHardwareInputStateForAcceptance(now);
+        resetSerialLineBuffer(nodeBCommandBuffer);
+        resetSerialLineBuffer(ld2451CommandBuffer);
+    }
 }
 
 bool ld2451FramesSimilar(const Ld2451Frame &a, const Ld2451Frame &b) {
@@ -5047,6 +5181,34 @@ void handleHostCommand(const String &line) {
         } else {
             Serial.println("Invalid QUIET command. Use QUIET,ON or QUIET,OFF.");
         }
+    } else if (command == "MONITOR") {
+        if (value == "CLEAN" || value == "QUIET" || value == "OFF") {
+            debugOutput.enabled = false;
+            debugOutput.quiet_mode_enabled = false;
+            debugOutput.telemetry_initialized = false;
+            uplinkOutput.enabled = false;
+            Serial.println("Monitor clean mode enabled. Automatic GIMBAL/FLOW/UPLINK lines are disabled.");
+        } else if (value == "VERBOSE" || value == "ON") {
+            debugOutput.enabled = true;
+            debugOutput.quiet_mode_enabled = false;
+            debugOutput.telemetry_initialized = false;
+            uplinkOutput.enabled = true;
+            Serial.println("Monitor verbose mode enabled. Automatic debug and UPLINK lines are enabled.");
+        } else {
+            Serial.println("Invalid MONITOR command. Use MONITOR,CLEAN or MONITOR,VERBOSE.");
+        }
+    } else if (command == "REALINPUT") {
+        if (value.length() == 0 || value == "STATUS") {
+            emitRealInputStatus();
+        } else if (value == "OFF" || value == "0" || value == "TEST" || value == "SIM") {
+            setRealInputsEnabled(false, millis());
+            Serial.println("Real hardware inputs disabled for host acceptance tests.");
+        } else if (value == "ON" || value == "1" || value == "LIVE") {
+            setRealInputsEnabled(true, millis());
+            Serial.println("Real hardware inputs enabled.");
+        } else {
+            Serial.println("Invalid REALINPUT command. Use REALINPUT,STATUS, REALINPUT,OFF, or REALINPUT,ON.");
+        }
     } else if (command == "UPLINK") {
         if (value == "ON") {
             uplinkOutput.enabled = true;
@@ -5325,10 +5487,10 @@ void handleHostCommand(const String &line) {
         setManualServoAngles(GimbalConfig::CenterPanDeg, GimbalConfig::CenterTiltDeg);
         setServoEnabled(true);
         setSafeMode(false);
-        debugOutput.enabled = true;
-        debugOutput.quiet_mode_enabled = false;
+        debugOutput.enabled = AppSerialConfig::LocalDebugEnabledByDefault;
+        debugOutput.quiet_mode_enabled = AppSerialConfig::QuietModeEnabledByDefault;
         debugOutput.telemetry_initialized = false;
-        uplinkOutput.enabled = true;
+        uplinkOutput.enabled = AppSerialConfig::UplinkOutputEnabledByDefault;
         myGimbal.setTunings(runtimeKp, runtimeKd);
         Serial.println("Simulation state reset.");
     } else if (command == "STATUS") {
@@ -5373,27 +5535,35 @@ void handleNodeBSerialLine(const String &line) {
         return;
     }
     if (normalized.length() > HostCommandMaxLength) {
-        Serial.println("NODEB serial line ignored: too long.");
         return;
     }
 
     String upper = normalized;
     upper.toUpperCase();
+    String rawValue = normalized;
     if (upper.startsWith("NODEB,")) {
-        handleHostCommand(normalized);
-        return;
-    }
-    if (upper.startsWith("RID,") ||
-        upper.startsWith("HEARTBEAT") ||
-        upper.startsWith("STATUS") ||
-        upper.startsWith("OFFLINE") ||
-        upper.startsWith("CLEAR")) {
-        handleHostCommand("NODEB," + normalized);
-        return;
+        rawValue = normalized.substring(6);
+        rawValue.trim();
+        upper = rawValue;
+        upper.toUpperCase();
     }
 
-    Serial.print("NODEB serial line ignored: ");
-    Serial.println(normalized);
+    String nodeBType = rawValue;
+    int nodeBComma = rawValue.indexOf(',');
+    if (nodeBComma >= 0) {
+        nodeBType = rawValue.substring(0, nodeBComma);
+    }
+    nodeBType.trim();
+    nodeBType.toUpperCase();
+
+    const unsigned long now = millis();
+    if (nodeBType == "RID") {
+        acceptNodeBRidPayload(rawValue, now);
+    } else if (nodeBType == "HEARTBEAT" || nodeBType == "STATUS") {
+        setNodeBStatusFromPayload(rawValue, now);
+    } else if (nodeBType == "OFFLINE" || nodeBType == "CLEAR") {
+        setNodeBStatusFromPayload("status=OFFLINE_OR_TIMEOUT,node=NONE,source=NONE,rssi=0", now);
+    }
 }
 
 void handleLd2451SerialLine(const String &line) {
@@ -5411,8 +5581,6 @@ void handleLd2451SerialLine(const String &line) {
     upper.toUpperCase();
     if (upper.startsWith("LD2451,")) {
         handleHostCommand(normalized);
-    } else {
-        handleHostCommand("LD2451," + normalized);
     }
 }
 
@@ -5690,14 +5858,16 @@ void restartNodeBSerialIfDue(unsigned long now) {
     Serial2.end();
     vTaskDelay(pdMS_TO_TICKS(20));
     beginNodeBSerialLink();
-    Serial.print("NODEB,UART_RESTART,count=");
-    Serial.print(nodeBReconnectCount);
-    Serial.print(",interval_ms=");
-    Serial.print(intervalMs);
-    Serial.print(",rx=");
-    Serial.print(AppSerialConfig::NodeBRxPin);
-    Serial.print(",tx=");
-    Serial.println(AppSerialConfig::NodeBTxPin);
+    if (debugOutput.enabled || debugOutput.quiet_mode_enabled) {
+        Serial.print("NODEB,UART_RESTART,count=");
+        Serial.print(nodeBReconnectCount);
+        Serial.print(",interval_ms=");
+        Serial.print(intervalMs);
+        Serial.print(",rx=");
+        Serial.print(AppSerialConfig::NodeBRxPin);
+        Serial.print(",tx=");
+        Serial.println(AppSerialConfig::NodeBTxPin);
+    }
 }
 
 bool shouldRestartNodeBSerial(unsigned long now) {
@@ -5725,12 +5895,13 @@ void RadarTask(void *pvParameters) {
         unsigned long now = millis();
         SimTrackInput simSnapshot = {};
         bool simActive = getSimTrackSnapshot(simSnapshot) && isSimTrackActive(simSnapshot, now);
+        bool realRadarEnabled = isRealRadarInputEnabled();
 
         while (Serial1.available() > 0) {
             feedCurrentTaskWatchdog();
             uint8_t byteIn = Serial1.read();
 
-            if (myRadar.feedByte(byteIn) && !simActive) {
+            if (realRadarEnabled && myRadar.feedByte(byteIn) && !simActive) {
                 applyTrackMeasurement(myRadar.getParsedX(), myRadar.getParsedY(), millis());
             }
         }
@@ -5755,24 +5926,32 @@ void NodeBTask(void *pvParameters) {
     (void)pvParameters;
     registerCurrentTaskWatchdog("NodeB_Task");
     beginNodeBSerialLink();
-    Serial.print("NodeB UART listening: baud=");
-    Serial.print(AppSerialConfig::NodeBBaudRate);
-    Serial.print(",rx=");
-    Serial.print(AppSerialConfig::NodeBRxPin);
-    Serial.print(",tx=");
-    Serial.println(AppSerialConfig::NodeBTxPin);
+    if (debugOutput.enabled || debugOutput.quiet_mode_enabled) {
+        Serial.print("NodeB UART listening: baud=");
+        Serial.print(AppSerialConfig::NodeBBaudRate);
+        Serial.print(",rx=");
+        Serial.print(AppSerialConfig::NodeBRxPin);
+        Serial.print(",tx=");
+        Serial.println(AppSerialConfig::NodeBTxPin);
+    }
 
     while (1) {
         feedCurrentTaskWatchdog();
         const unsigned long now = millis();
-        markNodeBOfflineIfStale(now);
-        if (shouldRestartNodeBSerial(now)) {
+        bool nodeBUartEnabled = isNodeBUartInputEnabled();
+        if (nodeBUartEnabled) {
+            markNodeBOfflineIfStale(now);
+        }
+        if (nodeBUartEnabled && shouldRestartNodeBSerial(now)) {
             restartNodeBSerialIfDue(now);
         }
 
         while (Serial2.available() > 0) {
             feedCurrentTaskWatchdog();
             char ch = static_cast<char>(Serial2.read());
+            if (!nodeBUartEnabled) {
+                continue;
+            }
             if (ch == '\n' || ch == '\r') {
                 String line;
                 if (takeSerialLine(nodeBCommandBuffer, line)) {
@@ -5791,24 +5970,33 @@ void NodeBTask(void *pvParameters) {
 void Ld2451Task(void *pvParameters) {
     (void)pvParameters;
     registerCurrentTaskWatchdog("LD2451_Task");
+    if (AppSerialConfig::Ld2451RxPullupEnabled) {
+        pinMode(AppSerialConfig::Ld2451RxPin, INPUT_PULLUP);
+    }
     ld2451Serial.begin(
         AppSerialConfig::Ld2451BaudRate,
         SERIAL_8N1,
         AppSerialConfig::Ld2451RxPin,
         AppSerialConfig::Ld2451TxPin
     );
-    Serial.print("LD2451 binary/text UART listening: baud=");
-    Serial.print(AppSerialConfig::Ld2451BaudRate);
-    Serial.print(",rx=");
-    Serial.print(AppSerialConfig::Ld2451RxPin);
-    Serial.print(",tx=");
-    Serial.println(AppSerialConfig::Ld2451TxPin);
+    if (debugOutput.enabled || debugOutput.quiet_mode_enabled) {
+        Serial.print("LD2451 binary/text UART listening: baud=");
+        Serial.print(AppSerialConfig::Ld2451BaudRate);
+        Serial.print(",rx=");
+        Serial.print(AppSerialConfig::Ld2451RxPin);
+        Serial.print(",tx=");
+        Serial.println(AppSerialConfig::Ld2451TxPin);
+    }
 
     while (1) {
         feedCurrentTaskWatchdog();
+        bool ld2451UartEnabled = isLd2451UartInputEnabled();
         while (ld2451Serial.available() > 0) {
             feedCurrentTaskWatchdog();
             uint8_t raw = static_cast<uint8_t>(ld2451Serial.read());
+            if (!ld2451UartEnabled) {
+                continue;
+            }
             if (ld2451Parser.feed(raw)) {
                 const Ld2451Frame &frame = ld2451Parser.frame();
                 acceptLd2451BinaryFrame(frame, millis());
@@ -5822,7 +6010,7 @@ void Ld2451Task(void *pvParameters) {
                     handleLd2451SerialLine(line);
                 }
             } else if (isPrintable(ch)) {
-                appendSerialLineChar(ld2451CommandBuffer, ch, "LD2451");
+                appendLd2451TextCommandChar(ld2451CommandBuffer, ch);
             }
         }
 
@@ -6507,8 +6695,7 @@ void setup() {
     Serial.println(NodeConfig::BaselineVersion);
     Serial.println("Single-board test mode is supported over USB serial.");
     Serial.println("NodeB identity-chain UART keeps LD2450 tracking path unchanged.");
-    Serial.println("CloudTask publishes UPLINK,HB / UPLINK,TRACK / UPLINK,EVENT frames.");
-    printHostCommandHelp();
+    Serial.println("Monitor clean mode is the default. Use HELP, DEBUG,ON, or UPLINK,ON when needed.");
     Serial.println("========================================");
 
     initializeWatchdog();
@@ -6518,7 +6705,7 @@ void setup() {
         xTaskCreatePinnedToCore(NodeBTask, "NodeB_Task", 4096, NULL, 1, NULL, 0);
     }
     if (AppSerialConfig::Ld2451SerialEnabled) {
-        xTaskCreatePinnedToCore(Ld2451Task, "LD2451_Task", 4096, NULL, 1, NULL, 0);
+        xTaskCreatePinnedToCore(Ld2451Task, "LD2451_Task", AppSerialConfig::Ld2451TaskStackSize, NULL, 1, NULL, 0);
     }
     xTaskCreatePinnedToCore(TrackingTask, "Track_Task", 24576, NULL, 2, NULL, 1);
     xTaskCreatePinnedToCore(CloudTask, "Cloud_Task", 12288, NULL, 1, NULL, 1);

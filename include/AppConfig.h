@@ -13,6 +13,11 @@ constexpr bool Ld2451SerialEnabled = true;
 constexpr unsigned long Ld2451BaudRate = 115200;
 constexpr int Ld2451RxPin = 13;
 constexpr int Ld2451TxPin = 14;
+constexpr bool Ld2451RxPullupEnabled = true;
+constexpr unsigned int Ld2451TaskStackSize = 12288;
+constexpr bool LocalDebugEnabledByDefault = false;
+constexpr bool QuietModeEnabledByDefault = false;
+constexpr bool UplinkOutputEnabledByDefault = false;
 constexpr unsigned long StartupDelayMs = 2000;
 }
 
