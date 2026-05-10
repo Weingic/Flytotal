@@ -292,6 +292,8 @@ class SuiteCheck:
     required_fields: dict[str, str]
     allowed_fields: dict[str, set[str]] | None = None
     note: str = ""
+    keepalive_command: str | None = None
+    keepalive_interval_s: float = 0.35
 
 
 class SerialObserver:
@@ -379,6 +381,8 @@ def send_command_and_capture(
     line: str,
     expected_prefix: str,
     timeout_s: float,
+    keepalive_line: str | None = None,
+    keepalive_interval_s: float = 0.35,
 ) -> dict | None:
     if expected_prefix in {"EVENT,STATUS", "STATUS"}:
         timeout_s = max(timeout_s, 2.5)
@@ -386,7 +390,22 @@ def send_command_and_capture(
         timeout_s = max(timeout_s, 1.5)
     cursor = observer.cursor()
     send_line(ser, line)
-    return observer.wait_for_record(cursor, expected_prefix, timeout_s)
+    if keepalive_line is None:
+        return observer.wait_for_record(cursor, expected_prefix, timeout_s)
+
+    deadline = time.time() + timeout_s
+    next_keepalive = time.time() + keepalive_interval_s
+    while True:
+        for record in observer.records_since(cursor):
+            if record["prefix"] == expected_prefix or record["command"] == expected_prefix:
+                return record
+        now = time.time()
+        if now >= deadline:
+            return None
+        if now >= next_keepalive:
+            send_line(ser, keepalive_line)
+            next_keepalive = now + keepalive_interval_s
+        time.sleep(min(0.05, max(0.0, deadline - now)))
 
 
 def extract_record_fields(record: dict | None) -> dict[str, str]:
@@ -467,7 +486,15 @@ def execute_suite_check(
     observer: SerialObserver,
     check: SuiteCheck,
 ) -> dict:
-    record = send_command_and_capture(ser, observer, check.command, check.expected_prefix, check.timeout_s)
+    record = send_command_and_capture(
+        ser,
+        observer,
+        check.command,
+        check.expected_prefix,
+        check.timeout_s,
+        check.keepalive_command,
+        check.keepalive_interval_s,
+    )
     if record is None:
         return {
             "name": check.name,
@@ -897,6 +924,7 @@ def run_standard_acceptance_suite(
     inject_confirmed_track(ser, x_mm, y_mm, confirm_repeat, confirm_interval_s)
     send_command_and_wait(ser, f"RID,{rid}", 0.15)
     time.sleep(0.6)
+    track_keepalive = f"TRACK,{x_mm},{y_mm}"
 
     open_checks = [
         SuiteCheck(
@@ -920,6 +948,7 @@ def run_standard_acceptance_suite(
             required_fields={"risk_level": "SUSPICIOUS", "track_active": "1", "track_confirmed": "1"},
             allowed_fields={"risk_level": {"SUSPICIOUS", "HIGH_RISK", "EVENT"}},
             note="风险状态允许继续向上升级，但不能还是 NONE/NORMAL。",
+            keepalive_command=track_keepalive,
         ),
         SuiteCheck(
             name="event_open_status",
@@ -932,6 +961,7 @@ def run_standard_acceptance_suite(
                 "event_active": "1",
             },
             note="事件对象要处于 OPEN，且还没有关闭原因。",
+            keepalive_command=track_keepalive,
         ),
     ]
 
@@ -981,6 +1011,7 @@ def run_standard_acceptance_suite(
                 "event_active": "0",
             },
             note="RID 恢复 OK 后，事件对象应因风险回落而关闭。",
+            keepalive_command=track_keepalive,
         ),
         SuiteCheck(
             name="risk_downgrade_last_event",
@@ -992,6 +1023,7 @@ def run_standard_acceptance_suite(
                 "event_status": "CLOSED",
             },
             note="最近事件留痕里也要保住 RISK_DOWNGRADE。",
+            keepalive_command=track_keepalive,
         ),
     ]
 
