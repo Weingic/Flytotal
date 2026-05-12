@@ -28,11 +28,12 @@ Only GND is shared.
 
 ## Protocol Sent To NodeA
 
-NodeB sends clean text lines on UART1:
+NodeB sends clean text lines on UART1. The default RID is a cooperative demo
+identity already present in NodeA's whitelist table:
 
 ```text
 NODEB,HEARTBEAT,node=B1,source=BLE_WIFI,status=OK,rssi=-62,ble=1,wifi=1
-NODEB,RID,node=B1,source=BLE,rssi=-62,status=SEEN,id=TEST-RID-001,auth_status=VALID,whitelist_tag=PENDING
+NODEB,RID,node=B1,source=BLE,rssi=-62,status=SEEN,id=SIM-RID-001,auth_status=VALID,whitelist_tag=WL_OK
 NODEB,OFFLINE
 ```
 
@@ -52,10 +53,34 @@ a  toggle automatic RID events
 
 Heartbeat is always sent once per second. RID is sent every three seconds while auto RID is enabled.
 
+## Demo Identity
+
+The default build uses:
+
+```text
+NODEB_RID_ID=SIM-RID-001
+NODEB_RID_AUTH_STATUS=VALID
+NODEB_RID_WHITELIST_TAG=WL_OK
+```
+
+With the current NodeA whitelist, this should produce:
+
+```text
+wl_status=WL_ALLOWED
+rid_whitelist_hit=1
+target_verdict=CONFIRMED_COOPERATIVE_DRONE
+event_active=0
+```
+
 ## Build
 
 ```powershell
 pio run -d examples/nodeb_c3_identity_uart
 ```
 
-Flash with the same project folder selected in PlatformIO, or set the upload port in `platformio.ini` if needed.
+Flash with the same project folder selected in PlatformIO, or specify the upload
+port explicitly:
+
+```powershell
+pio run -d examples/nodeb_c3_identity_uart -t upload --upload-port COM6
+```

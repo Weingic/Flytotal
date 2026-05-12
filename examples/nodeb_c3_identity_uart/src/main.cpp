@@ -17,6 +17,18 @@
 #define NODEA_UART_BAUD 115200
 #endif
 
+#ifndef NODEB_RID_ID
+#define NODEB_RID_ID "SIM-RID-001"
+#endif
+
+#ifndef NODEB_RID_AUTH_STATUS
+#define NODEB_RID_AUTH_STATUS "VALID"
+#endif
+
+#ifndef NODEB_RID_WHITELIST_TAG
+#define NODEB_RID_WHITELIST_TAG "WL_OK"
+#endif
+
 namespace {
 
 HardwareSerial NodeALink(1);
@@ -57,9 +69,12 @@ void sendRid(unsigned long now) {
     snprintf(
         line,
         sizeof(line),
-        "NODEB,RID,node=%s,source=BLE,rssi=%d,status=SEEN,id=TEST-RID-001,auth_status=VALID,whitelist_tag=PENDING",
+        "NODEB,RID,node=%s,source=BLE,rssi=%d,status=SEEN,id=%s,auth_status=%s,whitelist_tag=%s",
         NODEB_NODE_ID,
-        simulatedRssi(now)
+        simulatedRssi(now),
+        NODEB_RID_ID,
+        NODEB_RID_AUTH_STATUS,
+        NODEB_RID_WHITELIST_TAG
     );
     writeNodeALine(line);
 }
@@ -79,6 +94,12 @@ void printHelp() {
     Serial.print(NODEA_UART_RX_PIN);
     Serial.println(" <- NodeA TX optional");
     Serial.println("Commands: h=heartbeat, r=RID, o=offline, a=toggle auto RID, ?=help");
+    Serial.print("RID demo identity: ");
+    Serial.print(NODEB_RID_ID);
+    Serial.print(" / ");
+    Serial.print(NODEB_RID_AUTH_STATUS);
+    Serial.print(" / ");
+    Serial.println(NODEB_RID_WHITELIST_TAG);
     Serial.println();
 }
 
