@@ -18,6 +18,7 @@ __pycache__/
 # Runtime output and local evidence caches
 captures/latest_*.json
 captures/latest_*.tmp
+captures/e2e_*.json
 captures/local_*.json
 captures/session_logs/
 captures/event_exports/

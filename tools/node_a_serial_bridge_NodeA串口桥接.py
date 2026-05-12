@@ -1091,6 +1091,26 @@ def maybe_send_command(ser: Any, last_sent_at: float, interval_s: float, command
     return last_sent_at
 
 
+def send_startup_commands(ser: Any, commands: list[str], delay_s: float = 0.2) -> None:
+    for command in commands:
+        line = str(command or "").strip()
+        if not line:
+            continue
+        ser.write((line + "\n").encode("utf-8"))
+        ser.flush()
+        time.sleep(max(delay_s, 0.0))
+
+
+def maybe_send_command_bundle(ser: Any, last_sent_at: float, interval_s: float, commands: list[str]) -> float:
+    if interval_s <= 0 or not commands:
+        return last_sent_at
+    now = time.monotonic()
+    if last_sent_at == 0.0 or (now - last_sent_at) >= interval_s:
+        send_startup_commands(ser, commands)
+        return now
+    return last_sent_at
+
+
 def main() -> int:
     serial_module = require_pyserial()
 
@@ -1121,6 +1141,9 @@ def main() -> int:
     parser.add_argument("--center-base-url", default="", help="Optional central dashboard server base URL, for example http://192.168.1.10:8765")
     parser.add_argument("--center-node-label", default="", help="Node label used when reporting to the central dashboard server")
     parser.add_argument("--center-timeout", type=float, default=1.5, help="HTTP timeout in seconds for central dashboard reports")
+    parser.add_argument("--startup-command", action="append", default=[], help="Serial command sent once after boot wait; can be repeated")
+    parser.add_argument("--repeat-command", action="append", default=[], help="Serial command repeated at --repeat-command-interval; can be repeated")
+    parser.add_argument("--repeat-command-interval", type=float, default=0.0, help="Seconds between repeated command bundles, set to 0 to disable")
     parser.add_argument("--echo", action="store_true", help="Echo raw serial lines to the terminal")
     args = parser.parse_args()
 
@@ -1184,6 +1207,7 @@ def main() -> int:
     summary_sent_at = 0.0
     event_status_sent_at = 0.0
     last_event_sent_at = 0.0
+    repeat_command_sent_at = 0.0
 
     with ser:
         time.sleep(0.5)
@@ -1208,6 +1232,7 @@ def main() -> int:
             )
 
         time.sleep(max(args.boot_wait, 0.0))
+        send_startup_commands(ser, args.startup_command)
 
         try:
             while True:
@@ -1219,6 +1244,9 @@ def main() -> int:
                 )
                 last_event_sent_at = maybe_send_command(
                     ser, last_event_sent_at, args.last_event_interval, "LASTEVENT"
+                )
+                repeat_command_sent_at = maybe_send_command_bundle(
+                    ser, repeat_command_sent_at, args.repeat_command_interval, args.repeat_command
                 )
 
                 raw = ser.readline()
