@@ -233,6 +233,50 @@ def confusion(rows: list[dict[str, object]]) -> dict[str, int]:
     return result
 
 
+def safe_ratio(numerator: float, denominator: float) -> float:
+    if denominator <= 0:
+        return 0.0
+    return numerator / denominator
+
+
+def metrics_from_confusion(matrix: dict[str, int]) -> dict[str, float]:
+    tp = int(matrix.get("tp", 0))
+    fp = int(matrix.get("fp", 0))
+    tn = int(matrix.get("tn", 0))
+    fn = int(matrix.get("fn", 0))
+    total = tp + fp + tn + fn
+    return {
+        "accuracy": round(safe_ratio(tp + tn, total), 4),
+        "precision": round(safe_ratio(tp, tp + fp), 4),
+        "recall": round(safe_ratio(tp, tp + fn), 4),
+        "specificity": round(safe_ratio(tn, tn + fp), 4),
+        "total": float(total),
+    }
+
+
+def build_acceptance(
+    has_labels: bool,
+    metrics: dict[str, float],
+    min_accuracy: float,
+    min_recall: float,
+) -> dict[str, object]:
+    failures: list[str] = []
+    checked = min_accuracy > 0.0 or min_recall > 0.0
+    if checked and not has_labels:
+        failures.append("labels_missing")
+    if has_labels and min_accuracy > 0.0 and metrics.get("accuracy", 0.0) < min_accuracy:
+        failures.append(f"accuracy_below_{min_accuracy:.2f}")
+    if has_labels and min_recall > 0.0 and metrics.get("recall", 0.0) < min_recall:
+        failures.append(f"recall_below_{min_recall:.2f}")
+    return {
+        "checked": checked,
+        "passed": len(failures) == 0,
+        "min_accuracy": round(max(0.0, min_accuracy), 4),
+        "min_recall": round(max(0.0, min_recall), 4),
+        "failures": failures,
+    }
+
+
 def write_confusion_plot(rows: list[dict[str, object]], output_path: Path) -> str:
     try:
         import matplotlib.pyplot as plt  # type: ignore
@@ -287,6 +331,8 @@ def main() -> int:
     parser.add_argument("--label-column", default="label")
     parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
     parser.add_argument("--output", type=Path, default=None, help="Legacy JSON output path")
+    parser.add_argument("--min-accuracy", type=float, default=0.0, help="Optional labeled-set acceptance threshold")
+    parser.add_argument("--min-recall", type=float, default=0.0, help="Optional drone recall acceptance threshold")
     args = parser.parse_args()
 
     if args.input and not args.mock:
@@ -315,6 +361,8 @@ def main() -> int:
             confusion_path.unlink()
         confusion_plot = ""
     matrix = confusion(rows) if has_labels else {}
+    metrics = metrics_from_confusion(matrix) if has_labels else {}
+    acceptance = build_acceptance(has_labels, metrics, float(args.min_accuracy), float(args.min_recall))
     needs_labels = not has_labels or source.endswith("fallback_mock")
 
     payload = {
@@ -326,6 +374,8 @@ def main() -> int:
         "label_column": args.label_column,
         "rows": rows,
         "confusion_matrix": matrix,
+        "metrics": metrics,
+        "acceptance": acceptance,
         "feature_plot": feature_plot,
         "confusion_plot": confusion_plot,
         "note": "needs_real_labels_for_roc" if needs_labels else "labels_available_confusion_matrix_generated",
@@ -350,7 +400,7 @@ def main() -> int:
         print(feature_plot)
     if confusion_plot:
         print(confusion_plot)
-    return 0
+    return 0 if bool(acceptance.get("passed", True)) else 2
 
 
 if __name__ == "__main__":

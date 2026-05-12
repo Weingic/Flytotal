@@ -19,9 +19,18 @@ This directory is the lightweight index for v5.2 defense evidence. Large generat
 ```powershell
 python tools/fusion_simulator.py --compare --input captures --output-dir outputs
 python tools/multirotor_classifier_验证.py --input captures --output-dir outputs
+python tools/multirotor_classifier_验证.py --input datasets/drone_recognition/sample_tracks.csv --output-dir outputs/drone_recognition --min-accuracy 0.80 --min-recall 0.80
 python tools/gimbal_prediction_simulator.py --lead-times 0,0.12,0.18 --output-dir outputs
 python tools/co_sensing_simulator.py --scenario boundary_crossing
 ```
+
+## Target Verdict Levels
+
+- `UNKNOWN_TARGET`: no reliable target judgment yet.
+- `MOTION_ALERT`: far-range LD2451 motion cue only; do not claim drone recognition.
+- `PROBABLE_MULTIROTOR`: confirmed near radar track plus multirotor-like motion score.
+- `VISUALLY_CONFIRMED_DRONE`: visual lock is strong and backed by a radar cue.
+- `CONFIRMED_COOPERATIVE_DRONE`: RID matched and whitelist gate allowed.
 
 ## Policy
 

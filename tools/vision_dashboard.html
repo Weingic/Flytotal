@@ -1321,6 +1321,7 @@
         <div class="status-row"><div class="label">RID 白名单</div><div class="value" id="nodeRidWhitelistValue">0</div></div>
         <div class="status-row"><div class="label">RID 最近更新</div><div class="value" id="nodeRidUpdateValue">--</div></div>
         <div class="status-row"><div class="label">风险</div><div class="value" id="nodeRiskValue">0.0 / NONE</div></div>
+        <div class="status-row"><div class="label">目标判决</div><div class="value" id="nodeTargetVerdictValue">UNKNOWN</div></div>
         <div class="status-row"><div class="label">视觉贡献</div><div class="value" id="nodeVisionContribValue"><span class="pill offline">NONE</span></div></div>
         <div class="status-row"><div class="label">多源融合</div><div class="value" id="nodeFusionValue">NONE / NONE</div></div>
         <div class="status-row"><div class="label">多旋翼筛选</div><div class="value" id="nodeMultirotorValue">UNKNOWN / 0.0</div></div>
@@ -1497,6 +1498,7 @@
           <div class="fact"><span class="label">事件编号</span><div class="value" id="eventDetailIdValue">NONE</div></div>
           <div class="fact"><span class="label">触发时间</span><div class="value" id="eventDetailTimeValue">--</div></div>
           <div class="fact"><span class="label">风险等级</span><div class="value" id="eventDetailRiskValue">NONE</div></div>
+          <div class="fact"><span class="label">目标判决</span><div class="value" id="eventDetailTargetVerdictValue">UNKNOWN</div></div>
           <div class="fact"><span class="label">节点编号</span><div class="value" id="eventDetailNodeValue">NONE</div></div>
           <div class="fact"><span class="label">坐标</span><div class="value" id="eventDetailPositionValue">0.0, 0.0</div></div>
           <div class="fact"><span class="label">RID 状态</span><div class="value" id="eventDetailRidValue">UNKNOWN</div></div>
@@ -2159,6 +2161,25 @@
       if (value === "MID") return semanticPill(value, "warn");
       if (value === "LOW") return semanticPill(value, "ok");
       return semanticPill(value, "normal");
+    }
+
+    function targetVerdictPill(verdict) {
+      const value = String(verdict || "UNKNOWN_TARGET").toUpperCase();
+      const labels = {
+        CONFIRMED_COOPERATIVE_DRONE: "COOP_DRONE",
+        VISUALLY_CONFIRMED_DRONE: "VISUAL_DRONE",
+        PROBABLE_MULTIROTOR: "PROBABLE_MULTI",
+        MOTION_ALERT: "MOTION_ALERT",
+        UNKNOWN_TARGET: "UNKNOWN",
+      };
+      const label = labels[value] || value;
+      if (value === "CONFIRMED_COOPERATIVE_DRONE" || value === "VISUALLY_CONFIRMED_DRONE") {
+        return semanticPill(label, "ok");
+      }
+      if (value === "PROBABLE_MULTIROTOR" || value === "MOTION_ALERT") {
+        return semanticPill(label, "warn");
+      }
+      return semanticPill(label, "normal");
     }
 
     function triggerPill(active) {
@@ -2977,6 +2998,7 @@
         document.getElementById("nodeRidWhitelistValue").innerHTML = semanticPill("UNKNOWN", "normal");
         document.getElementById("nodeRidUpdateValue").textContent = "--";
         document.getElementById("nodeRiskValue").innerHTML = riskLevelPill("NONE");
+        document.getElementById("nodeTargetVerdictValue").innerHTML = targetVerdictPill("UNKNOWN_TARGET");
         document.getElementById("nodeVisionContribValue").innerHTML = visionStatePill("NONE");
         document.getElementById("nodeFusionValue").innerHTML = `${fusionLevelPill("NONE")} <span style="font-size:13px;color:var(--muted);margin-left:6px;">NONE · NO_VISUAL</span>`;
         document.getElementById("nodeMultirotorValue").innerHTML = `${semanticPill("UNKNOWN", "normal")} <span style="font-size:13px;color:var(--muted);margin-left:6px;">score 0.0</span>`;
@@ -3025,6 +3047,7 @@
       const riskScore = status.risk_score != null ? ` ${Number(status.risk_score).toFixed(1)}` : "";
       document.getElementById("nodeRiskValue").innerHTML =
         `${riskLevelPill(status.risk_level || "NONE")}<span style="font-size:13px;color:var(--muted);margin-left:6px;">${riskScore}</span>`;
+      document.getElementById("nodeTargetVerdictValue").innerHTML = targetVerdictPill(status.target_verdict || "UNKNOWN_TARGET");
       const vc = status.vision_contribution || {};
       const vcState = String(vc.vision_state || status.vision_state || "NONE");
       const vcDelta = vc.score_delta != null ? ` (${Number(vc.score_delta) >= 0 ? "+" : ""}${Number(vc.score_delta).toFixed(1)})` : "";
@@ -3703,6 +3726,7 @@
       document.getElementById("eventDetailIdValue").textContent = "NONE";
       document.getElementById("eventDetailTimeValue").textContent = "--";
       document.getElementById("eventDetailRiskValue").textContent = "NONE";
+      document.getElementById("eventDetailTargetVerdictValue").innerHTML = targetVerdictPill("UNKNOWN_TARGET");
       document.getElementById("eventDetailNodeValue").textContent = "NONE";
       document.getElementById("eventDetailPositionValue").textContent = "0.0, 0.0";
       document.getElementById("eventDetailRidValue").textContent = "UNKNOWN";
@@ -3772,6 +3796,7 @@
         ? Number(eventObject.update_time)
         : eventRecordTime(eventRecord);
       const riskLevel = String(eventObject.risk_level || eventRecord.risk_level || eventRecord.event_level || "NONE");
+      const targetVerdict = String(eventObject.target_verdict || eventRecord.target_verdict || "UNKNOWN_TARGET");
       const nodeId = String(eventObject.node_id || eventRecord.node_id || eventRecord.source_node || "NONE");
       const x = Number(eventObject.x ?? eventRecord.x_mm ?? 0);
       const y = Number(eventObject.y ?? eventRecord.y_mm ?? 0);
@@ -3803,6 +3828,7 @@
       document.getElementById("eventDetailIdValue").textContent = eventId;
       document.getElementById("eventDetailTimeValue").textContent = formatTime(eventTime);
       document.getElementById("eventDetailRiskValue").innerHTML = riskLevelPill(riskLevel);
+      document.getElementById("eventDetailTargetVerdictValue").innerHTML = targetVerdictPill(targetVerdict);
       document.getElementById("eventDetailNodeValue").textContent = nodeId;
       document.getElementById("eventDetailPositionValue").textContent = `${x.toFixed(1)}, ${y.toFixed(1)}`;
       document.getElementById("eventDetailRidValue").textContent = rid;

@@ -185,6 +185,7 @@ struct SystemData {
     uint8_t source_vote_count;
     bool is_multirotor_like;
     float multirotor_score;
+    char target_verdict[40];
 };
 
 struct UnifiedOutputSnapshot {
@@ -262,6 +263,7 @@ struct UnifiedOutputSnapshot {
     float fusion_confidence;
     bool is_multirotor_like;
     float multirotor_score;
+    char target_verdict[40];
 };
 
 struct EventObject {
@@ -292,6 +294,7 @@ struct EventObject {
     float fusion_confidence;
     bool is_multirotor_like;
     float multirotor_score;
+    char target_verdict[40];
     unsigned long start_time_ms;
     unsigned long close_time_ms;
     float last_x_mm;

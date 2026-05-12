@@ -283,6 +283,7 @@ def build_node_brief_payload(
         "fusion_enabled": safe_int(status_payload.get("fusion_enabled", 0)),
         "fusion_confidence": safe_float(status_payload.get("fusion_confidence", 0.0), 0.0),
         "fusion_reason": str(status_payload.get("fusion_reason", "NONE") or "NONE"),
+        "target_verdict": str(status_payload.get("target_verdict", "UNKNOWN_TARGET") or "UNKNOWN_TARGET"),
         "vision_quality": str(status_payload.get("vision_quality", "NO_VISUAL") or "NO_VISUAL"),
         "vision_confidence": safe_float(status_payload.get("vision_confidence", 0.0), 0.0),
         "bbox_stability_score": safe_float(status_payload.get("bbox_stability_score", 0.0), 0.0),
@@ -464,6 +465,7 @@ def build_event_object_v1(
     fusion_enabled = safe_int(event_record.get("fusion_enabled", 0), 0)
     fusion_confidence = round(safe_float(event_record.get("fusion_confidence", 0.0), 0.0), 2)
     fusion_reason = str(event_record.get("fusion_reason", "NONE") or "NONE").strip() or "NONE"
+    target_verdict = str(event_record.get("target_verdict", "UNKNOWN_TARGET") or "UNKNOWN_TARGET").strip() or "UNKNOWN_TARGET"
     is_multirotor_like = safe_int(event_record.get("is_multirotor_like", 0), 0)
     multirotor_score = round(safe_float(event_record.get("multirotor_score", 0.0), 0.0), 2)
     far_motion_trigger = safe_int(event_record.get("far_motion_trigger", 0), 0)
@@ -529,6 +531,7 @@ def build_event_object_v1(
         "fusion_enabled": fusion_enabled,
         "fusion_confidence": fusion_confidence,
         "fusion_reason": fusion_reason,
+        "target_verdict": target_verdict,
         "is_multirotor_like": is_multirotor_like,
         "multirotor_score": multirotor_score,
         "far_motion_trigger": far_motion_trigger,
@@ -1943,6 +1946,7 @@ def build_mock_bundle() -> dict[str, object]:
             "fusion_enabled": 0,
             "fusion_confidence": 0.72,
             "fusion_reason": "LD2451_RID",
+            "target_verdict": "PROBABLE_MULTIROTOR",
             "vision_quality": "VISION_CONFIRM",
             "vision_confidence": 0.82,
             "bbox_stability_score": 0.74,

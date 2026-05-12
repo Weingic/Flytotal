@@ -159,7 +159,16 @@ def normalize_fields(prefix: str, raw_fields: dict[str, str]) -> dict[str, Any]:
         "far_motion_trigger": "far_motion_trigger",
         "ld2451_last_update_ms": "ld2451_last_update_ms",
         "fusion_level": "fusion_level",
+        "fusion_stage": "fusion_stage",
+        "fusion_enabled": "fusion_enabled",
+        "fusion_confidence": "fusion_confidence",
         "fusion_reason": "fusion_reason",
+        "vision_confidence": "vision_confidence",
+        "bbox_stability_score": "bbox_stability_score",
+        "tracker_state": "tracker_state",
+        "is_multirotor_like": "is_multirotor_like",
+        "multirotor_score": "multirotor_score",
+        "target_verdict": "target_verdict",
         "uplink_state": "uplink_state",
         "last_event_id": "last_event_id",
         "last_reason": "last_reason",
@@ -295,7 +304,16 @@ def build_initial_status(
         "far_motion_trigger": 0,
         "ld2451_last_update_ms": 0,
         "fusion_level": "NONE",
+        "fusion_stage": "NONE",
+        "fusion_enabled": 0,
+        "fusion_confidence": 0.0,
         "fusion_reason": "NONE",
+        "vision_confidence": 0.0,
+        "bbox_stability_score": 0.0,
+        "tracker_state": "IDLE",
+        "is_multirotor_like": 0,
+        "multirotor_score": 0.0,
+        "target_verdict": "UNKNOWN_TARGET",
         "uplink_state": "UNKNOWN",
         "last_event_id": "NONE",
         "last_reason": "NONE",
@@ -412,6 +430,16 @@ def evaluate_status_consistency(state: dict[str, Any]) -> None:
     rid_whitelist_hit = int(state.get("rid_whitelist_hit") or 0)
     if rid_status == "MATCHED" and (rid_whitelist_hit != 1 or wl_status != "WL_ALLOWED"):
         warnings.append("rid_status=MATCHED but whitelist gate not allowed")
+
+    target_verdict = str(state.get("target_verdict", "UNKNOWN_TARGET")).upper()
+    far_motion_trigger = int(state.get("far_motion_trigger") or 0)
+    is_multirotor_like = int(state.get("is_multirotor_like") or 0)
+    if target_verdict == "CONFIRMED_COOPERATIVE_DRONE" and wl_status != "WL_ALLOWED":
+        warnings.append("target_verdict=CONFIRMED_COOPERATIVE_DRONE but wl_status is not allowed")
+    if target_verdict == "MOTION_ALERT" and far_motion_trigger != 1:
+        warnings.append("target_verdict=MOTION_ALERT but far_motion_trigger=0")
+    if target_verdict == "PROBABLE_MULTIROTOR" and is_multirotor_like != 1:
+        warnings.append("target_verdict=PROBABLE_MULTIROTOR but multirotor gate is not active")
 
     now_ms = int(time.time() * 1000)
     state["consistency_status"] = "WARN" if warnings else "OK"
@@ -567,7 +595,13 @@ def build_event_record(prefix: str, raw_fields: dict[str, str]) -> dict[str, Any
     vision_quality = raw_fields.get("vision_quality", "NO_VISUAL").strip() or "NO_VISUAL"
     environment_mode = raw_fields.get("environment_mode", "CLEAR").strip() or "CLEAR"
     fusion_level = raw_fields.get("fusion_level", "NONE").strip() or "NONE"
+    fusion_stage = raw_fields.get("fusion_stage", "NONE").strip() or "NONE"
+    fusion_enabled = coerce_value(raw_fields.get("fusion_enabled", "0"))
+    fusion_confidence = coerce_value(raw_fields.get("fusion_confidence", "0"))
     fusion_reason = raw_fields.get("fusion_reason", "NONE").strip() or "NONE"
+    target_verdict = raw_fields.get("target_verdict", "UNKNOWN_TARGET").strip() or "UNKNOWN_TARGET"
+    is_multirotor_like = coerce_value(raw_fields.get("is_multirotor_like", "0"))
+    multirotor_score = coerce_value(raw_fields.get("multirotor_score", "0"))
     far_motion_trigger = coerce_value(raw_fields.get("far_motion_trigger", "0"))
     ld2451_range_m = coerce_value(raw_fields.get("ld2451_range_m", "0"))
     ld2451_speed_mps = coerce_value(raw_fields.get("ld2451_speed_mps", "0"))
@@ -628,7 +662,13 @@ def build_event_record(prefix: str, raw_fields: dict[str, str]) -> dict[str, Any
         "vision_quality": vision_quality,
         "environment_mode": environment_mode,
         "fusion_level": fusion_level,
+        "fusion_stage": fusion_stage,
+        "fusion_enabled": fusion_enabled,
+        "fusion_confidence": fusion_confidence,
         "fusion_reason": fusion_reason,
+        "target_verdict": target_verdict,
+        "is_multirotor_like": is_multirotor_like,
+        "multirotor_score": multirotor_score,
         "far_motion_trigger": far_motion_trigger,
         "ld2451_range_m": ld2451_range_m,
         "ld2451_speed_mps": ld2451_speed_mps,

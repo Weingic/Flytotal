@@ -283,6 +283,7 @@ struct LastEventSnapshot {
     float fusion_confidence;
     bool is_multirotor_like;
     float multirotor_score;
+    char target_verdict[40];
 };
 
 struct SummaryStats {
@@ -2106,12 +2107,53 @@ void deriveVisionQuality(const SystemData &snapshot, char *destination, size_t d
     }
 }
 
+void deriveTargetVerdict(const SystemData &snapshot, char *destination, size_t destination_size) {
+    const bool cooperativeIdentity =
+        snapshot.rid_status == RID_MATCHED &&
+        snapshot.wl_status == WL_ALLOWED &&
+        snapshot.rid_whitelist_hit;
+    if (cooperativeIdentity) {
+        copyEventId(destination, destination_size, "CONFIRMED_COOPERATIVE_DRONE");
+        return;
+    }
+
+    const bool radarCue = snapshot.radar_track.is_active || snapshot.far_motion_trigger;
+    const bool strongVision =
+        snapshot.vision_locked &&
+        snapshot.vision_confidence >= 0.70f &&
+        snapshot.bbox_stability_score >= 0.60f &&
+        radarCue;
+    if (strongVision) {
+        copyEventId(destination, destination_size, "VISUALLY_CONFIRMED_DRONE");
+        return;
+    }
+
+    const bool probableMultirotor =
+        snapshot.radar_track.is_active &&
+        snapshot.radar_track.is_confirmed &&
+        snapshot.is_multirotor_like &&
+        snapshot.multirotor_score >= 65.0f;
+    if (probableMultirotor) {
+        copyEventId(destination, destination_size, "PROBABLE_MULTIROTOR");
+        return;
+    }
+
+    if (snapshot.far_motion_trigger) {
+        copyEventId(destination, destination_size, "MOTION_ALERT");
+        return;
+    }
+
+    copyEventId(destination, destination_size, "UNKNOWN_TARGET");
+}
+
 void deriveFusionFields(SystemData &data, unsigned long now) {
     Fusion::updateFusionFields(data, now);
+    deriveTargetVerdict(data, data.target_verdict, sizeof(data.target_verdict));
 }
 
 void refreshFusionRuntimeLocked(unsigned long now) {
     Fusion::updateRuntimeFusionFields(globalData, now);
+    deriveTargetVerdict(globalData, globalData.target_verdict, sizeof(globalData.target_verdict));
 }
 
 NodeRuntimeCache *findNodeRuntimeCacheLocked(const char *node_id) {
@@ -2416,6 +2458,7 @@ void resetRuntimeEventStatus(const char *close_reason = nullptr) {
         currentEventObject.fusion_confidence = 0.0f;
         currentEventObject.is_multirotor_like = false;
         currentEventObject.multirotor_score = 0.0f;
+        copyEventId(currentEventObject.target_verdict, sizeof(currentEventObject.target_verdict), "UNKNOWN_TARGET");
         currentEventObject.start_time_ms = 0;
         currentEventObject.close_time_ms = 0;
         currentEventObject.last_x_mm = 0.0f;
@@ -2467,6 +2510,7 @@ void syncRuntimeEventStatus(const SystemData &snapshot, const EventContext &cont
         currentEventObject.fusion_confidence = snapshot.fusion_confidence;
         currentEventObject.is_multirotor_like = snapshot.is_multirotor_like;
         currentEventObject.multirotor_score = snapshot.multirotor_score;
+        copyEventId(currentEventObject.target_verdict, sizeof(currentEventObject.target_verdict), normalizeOptionalField(snapshot.target_verdict, "UNKNOWN_TARGET"));
         currentEventObject.start_time_ms = context.opened_ms;
         currentEventObject.last_x_mm = snapshot.radar_track.x_mm;
         currentEventObject.last_y_mm = snapshot.radar_track.y_mm;
@@ -2506,6 +2550,7 @@ void syncRuntimeEventStatus(const SystemData &snapshot, const EventContext &cont
             currentEventObject.fusion_confidence = 0.0f;
             currentEventObject.is_multirotor_like = false;
             currentEventObject.multirotor_score = 0.0f;
+            copyEventId(currentEventObject.target_verdict, sizeof(currentEventObject.target_verdict), "UNKNOWN_TARGET");
         }
         currentEventObject.risk_score = snapshot.risk_score;
         currentEventObject.risk_level = deriveRiskLevel(snapshot);
@@ -2523,6 +2568,7 @@ void syncRuntimeEventStatus(const SystemData &snapshot, const EventContext &cont
         currentEventObject.fusion_confidence = snapshot.fusion_confidence;
         currentEventObject.is_multirotor_like = snapshot.is_multirotor_like;
         currentEventObject.multirotor_score = snapshot.multirotor_score;
+        copyEventId(currentEventObject.target_verdict, sizeof(currentEventObject.target_verdict), normalizeOptionalField(snapshot.target_verdict, "UNKNOWN_TARGET"));
         currentEventObject.last_x_mm = snapshot.radar_track.x_mm;
         currentEventObject.last_y_mm = snapshot.radar_track.y_mm;
         currentEventObject.last_vx_mm_s = snapshot.radar_track.vx_mm_s;
@@ -2650,6 +2696,7 @@ UnifiedOutputSnapshot buildUnifiedOutputSnapshot(const SystemData &snapshot, con
     unified.fusion_confidence = snapshot.fusion_confidence;
     unified.is_multirotor_like = snapshot.is_multirotor_like;
     unified.multirotor_score = snapshot.multirotor_score;
+    copyEventId(unified.target_verdict, sizeof(unified.target_verdict), normalizeOptionalField(snapshot.target_verdict, "UNKNOWN_TARGET"));
     return unified;
 }
 
@@ -2777,6 +2824,8 @@ void printNormalizedStateFields(const UnifiedOutputSnapshot &snapshot) {
     Serial.print(snapshot.is_multirotor_like ? 1 : 0);
     Serial.print(",multirotor_score=");
     Serial.print(snapshot.multirotor_score, 1);
+    Serial.print(",target_verdict=");
+    Serial.print(snapshot.target_verdict[0] != '\0' ? snapshot.target_verdict : "UNKNOWN_TARGET");
     Serial.print(",audio_state=");
     Serial.print(audioStateName(snapshot.audio_state));
     Serial.print(",uplink_state=");
@@ -2992,6 +3041,7 @@ void resetLastEventSnapshot() {
     lastEventSnapshot.fusion_confidence = 0.0f;
     lastEventSnapshot.is_multirotor_like = false;
     lastEventSnapshot.multirotor_score = 0.0f;
+    lastEventSnapshot.target_verdict[0] = '\0';
     portEXIT_CRITICAL(&dataMutex);
 }
 
@@ -3112,6 +3162,7 @@ void cacheLastEventSnapshot(
     lastEventSnapshot.fusion_confidence = unified.fusion_confidence;
     lastEventSnapshot.is_multirotor_like = unified.is_multirotor_like;
     lastEventSnapshot.multirotor_score = unified.multirotor_score;
+    copyEventId(lastEventSnapshot.target_verdict, sizeof(lastEventSnapshot.target_verdict), normalizeOptionalField(unified.target_verdict, "UNKNOWN_TARGET"));
     portEXIT_CRITICAL(&dataMutex);
 }
 
@@ -3181,6 +3232,8 @@ void emitLastEventSnapshot() {
     Serial.print(snapshot.is_multirotor_like ? 1 : 0);
     Serial.print(",multirotor_score=");
     Serial.print(snapshot.multirotor_score, 1);
+    Serial.print(",target_verdict=");
+    Serial.print(snapshot.target_verdict[0] != '\0' ? snapshot.target_verdict : "UNKNOWN_TARGET");
     Serial.print(",far_motion_trigger=");
     Serial.print(snapshot.far_motion_trigger ? 1 : 0);
     Serial.print(",ld2451_range_m=");
@@ -4786,7 +4839,9 @@ void emitFusionStatus() {
     Serial.print(",is_multirotor_like=");
     Serial.print(snapshot.is_multirotor_like ? 1 : 0);
     Serial.print(",multirotor_score=");
-    Serial.println(snapshot.multirotor_score, 1);
+    Serial.print(snapshot.multirotor_score, 1);
+    Serial.print(",target_verdict=");
+    Serial.println(snapshot.target_verdict[0] != '\0' ? snapshot.target_verdict : "UNKNOWN_TARGET");
 }
 
 void emitFusionDebug() {
@@ -5463,6 +5518,7 @@ void handleHostCommand(const String &line) {
         globalData.fusion_confidence = 0.0f;
         globalData.is_multirotor_like = false;
         globalData.multirotor_score = 0.0f;
+        copyEventId(globalData.target_verdict, sizeof(globalData.target_verdict), "UNKNOWN_TARGET");
         refreshManualSimulationSnapshotLocked(millis());
         portEXIT_CRITICAL(&dataMutex);
         clearSimTrack();
@@ -6297,6 +6353,7 @@ void TrackingTask(void *pvParameters) {
         flowSnapshot.fusion_confidence = globalData.fusion_confidence;
         flowSnapshot.is_multirotor_like = globalData.is_multirotor_like;
         flowSnapshot.multirotor_score = globalData.multirotor_score;
+        copyEventId(flowSnapshot.target_verdict, sizeof(flowSnapshot.target_verdict), globalData.target_verdict);
         portEXIT_CRITICAL(&dataMutex);
 
         flowSnapshot.is_locked = track_snapshot.is_confirmed && (track_snapshot.y_mm > RadarConfig::LockDistanceThresholdMm);
@@ -6680,6 +6737,7 @@ void setup() {
     copyEventId(globalData.fusion_level, sizeof(globalData.fusion_level), "NONE");
     copyEventId(globalData.fusion_reason, sizeof(globalData.fusion_reason), "NONE");
     copyEventId(globalData.fusion_stage, sizeof(globalData.fusion_stage), "NONE");
+    copyEventId(globalData.target_verdict, sizeof(globalData.target_verdict), "UNKNOWN_TARGET");
     globalData.fusion_enabled = FusionConfig::Enabled;
     globalData.timestamp_ms = millis();
     syncActiveNodeRuntimeCacheLocked();
