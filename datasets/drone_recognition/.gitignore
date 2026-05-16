@@ -1,6 +1,8 @@
 raw/
 videos/
 images/
+real_tracks*.csv
+field_tracks*.csv
 *.mp4
 *.avi
 *.mov
