@@ -38,7 +38,8 @@ person,bird,car,ebike,tree,clutter
 From the project root:
 
 ```powershell
-python tools/multirotor_classifier_验证.py --input datasets/drone_recognition/sample_tracks.csv --output-dir outputs/drone_recognition --min-accuracy 0.80 --min-recall 0.80
+$clf = Get-ChildItem tools -Filter "multirotor_classifier_*.py" | Select-Object -First 1
+python $clf.FullName --input datasets/drone_recognition/sample_tracks.csv --output-dir outputs/drone_recognition --min-accuracy 0.80 --min-recall 0.80
 ```
 
 Expected local outputs:
@@ -49,3 +50,39 @@ Expected local outputs:
 - `outputs/drone_recognition/multirotor_confusion_matrix.png`
 
 When you replace `sample_tracks.csv` with real collected data, keep the same columns and labels. If the real-data score fails, report the failure as a dataset finding instead of hiding it; that is stronger evidence than a polished but fake result.
+
+## Collect Real Track Data
+
+Keep NodeA bridge, NodeB, the vision bridge, and the Dashboard running. Then
+record one labeled session at a time.
+
+Drone example:
+
+```powershell
+python tools/collect_drone_dataset.py --label drone --duration-s 60 --interval-ms 200 --active-only --output datasets/drone_recognition/real_tracks.csv
+```
+
+Person example:
+
+```powershell
+python tools/collect_drone_dataset.py --label person --duration-s 60 --interval-ms 200 --active-only --output datasets/drone_recognition/real_tracks.csv
+```
+
+Car example:
+
+```powershell
+python tools/collect_drone_dataset.py --label car --duration-s 60 --interval-ms 200 --active-only --output datasets/drone_recognition/real_tracks.csv
+```
+
+Clutter example:
+
+```powershell
+python tools/collect_drone_dataset.py --label clutter --duration-s 60 --interval-ms 200 --output datasets/drone_recognition/real_tracks.csv
+```
+
+After collecting several sessions, run:
+
+```powershell
+$clf = Get-ChildItem tools -Filter "multirotor_classifier_*.py" | Select-Object -First 1
+python $clf.FullName --input datasets/drone_recognition/real_tracks.csv --output-dir outputs/drone_recognition_real --min-accuracy 0.80 --min-recall 0.80
+```
