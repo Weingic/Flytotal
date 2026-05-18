@@ -22,6 +22,7 @@ portMUX_TYPE dataMutex = portMUX_INITIALIZER_UNLOCKED;
 uint32_t nodeBReconnectCount = 0;
 unsigned long nodeBLastReconnectMs = 0;
 bool nodeBNeedsReconnect = false;
+bool nodeBReconnectLockedOut = false;
 
 GimbalPredictor myGimbal(GimbalConfig::PredictorKp, GimbalConfig::PredictorKd);
 GimbalController myGimbalController(myGimbal);
@@ -323,7 +324,10 @@ SerialLineBuffer ld2451CommandBuffer = {};
 HardwareSerial ld2451Serial(0);
 Ld2451Parser ld2451Parser;
 Ld2451Frame pendingLd2451Frame = {};
+Ld2451Frame lastAcceptedLd2451Frame = {};
 uint8_t ld2451StableFrameCount = 0;
+uint32_t ld2451SuspectFrameCount = 0;
+unsigned long ld2451LastAcceptedMs = 0;
 float runtimeKp = GimbalConfig::PredictorKp;
 float runtimeKd = GimbalConfig::PredictorKd;
 SimTrackInput simTrack = {false, 0.0f, 0.0f, 0};
@@ -2027,6 +2031,13 @@ bool boolFromToken(const String &token) {
     return value == "1" || value == "TRUE" || value == "YES" || value == "APPROACH";
 }
 
+float clampMultirotorScore(float score) {
+    if (!isfinite(score)) {
+        return 0.0f;
+    }
+    return constrain(score, 0.0f, 100.0f);
+}
+
 RuntimeInputControl getInputControlSnapshot() {
     RuntimeInputControl snapshot = {};
     portENTER_CRITICAL(&dataMutex);
@@ -2107,7 +2118,7 @@ void deriveVisionQuality(const SystemData &snapshot, char *destination, size_t d
     }
 }
 
-void deriveTargetVerdict(const SystemData &snapshot, char *destination, size_t destination_size) {
+void deriveTargetVerdictFromSnapshot(const SystemData &snapshot, char *destination, size_t destination_size) {
     const bool cooperativeIdentity =
         snapshot.rid_status == RID_MATCHED &&
         snapshot.wl_status == WL_ALLOWED &&
@@ -2132,7 +2143,7 @@ void deriveTargetVerdict(const SystemData &snapshot, char *destination, size_t d
         snapshot.radar_track.is_active &&
         snapshot.radar_track.is_confirmed &&
         snapshot.is_multirotor_like &&
-        snapshot.multirotor_score >= 65.0f;
+        clampMultirotorScore(snapshot.multirotor_score) >= 65.0f;
     if (probableMultirotor) {
         copyEventId(destination, destination_size, "PROBABLE_MULTIROTOR");
         return;
@@ -2148,12 +2159,12 @@ void deriveTargetVerdict(const SystemData &snapshot, char *destination, size_t d
 
 void deriveFusionFields(SystemData &data, unsigned long now) {
     Fusion::updateFusionFields(data, now);
-    deriveTargetVerdict(data, data.target_verdict, sizeof(data.target_verdict));
+    deriveTargetVerdictFromSnapshot(data, data.target_verdict, sizeof(data.target_verdict));
 }
 
 void refreshFusionRuntimeLocked(unsigned long now) {
     Fusion::updateRuntimeFusionFields(globalData, now);
-    deriveTargetVerdict(globalData, globalData.target_verdict, sizeof(globalData.target_verdict));
+    deriveTargetVerdictFromSnapshot(globalData, globalData.target_verdict, sizeof(globalData.target_verdict));
 }
 
 NodeRuntimeCache *findNodeRuntimeCacheLocked(const char *node_id) {
@@ -2265,6 +2276,19 @@ void syncActiveNodeRuntimeCacheLocked() {
     copyEventId(risk_context.event_id, sizeof(risk_context.event_id), normalizeOptionalField(currentEventObject.event_id));
     copyEventId(risk_context.prev_node_id, sizeof(risk_context.prev_node_id), normalizeOptionalField(currentEventObject.prev_node_id));
     copyEventId(risk_context.continuity_hint, sizeof(risk_context.continuity_hint), normalizeOptionalField(currentEventObject.continuity_hint, "SINGLE_NODE"));
+}
+
+SystemData getDerivedSystemSnapshot(unsigned long now) {
+    SystemData snapshot = {};
+    portENTER_CRITICAL(&dataMutex);
+    globalData.timestamp_ms = now;
+    copyEventId(globalData.node_id, sizeof(globalData.node_id), NodeConfig::NodeId);
+    globalData.trigger_flags = computeTriggerFlags(globalData);
+    refreshFusionRuntimeLocked(now);
+    syncActiveNodeRuntimeCacheLocked();
+    snapshot = globalData;
+    portEXIT_CRITICAL(&dataMutex);
+    return snapshot;
 }
 
 NodeRuntimeCache getActiveNodeRuntimeCacheSnapshot() {
@@ -2509,7 +2533,7 @@ void syncRuntimeEventStatus(const SystemData &snapshot, const EventContext &cont
         copyEventId(currentEventObject.fusion_stage, sizeof(currentEventObject.fusion_stage), normalizeOptionalField(snapshot.fusion_stage));
         currentEventObject.fusion_confidence = snapshot.fusion_confidence;
         currentEventObject.is_multirotor_like = snapshot.is_multirotor_like;
-        currentEventObject.multirotor_score = snapshot.multirotor_score;
+        currentEventObject.multirotor_score = clampMultirotorScore(snapshot.multirotor_score);
         copyEventId(currentEventObject.target_verdict, sizeof(currentEventObject.target_verdict), normalizeOptionalField(snapshot.target_verdict, "UNKNOWN_TARGET"));
         currentEventObject.start_time_ms = context.opened_ms;
         currentEventObject.last_x_mm = snapshot.radar_track.x_mm;
@@ -2567,7 +2591,7 @@ void syncRuntimeEventStatus(const SystemData &snapshot, const EventContext &cont
         copyEventId(currentEventObject.fusion_stage, sizeof(currentEventObject.fusion_stage), normalizeOptionalField(snapshot.fusion_stage));
         currentEventObject.fusion_confidence = snapshot.fusion_confidence;
         currentEventObject.is_multirotor_like = snapshot.is_multirotor_like;
-        currentEventObject.multirotor_score = snapshot.multirotor_score;
+        currentEventObject.multirotor_score = clampMultirotorScore(snapshot.multirotor_score);
         copyEventId(currentEventObject.target_verdict, sizeof(currentEventObject.target_verdict), normalizeOptionalField(snapshot.target_verdict, "UNKNOWN_TARGET"));
         currentEventObject.last_x_mm = snapshot.radar_track.x_mm;
         currentEventObject.last_y_mm = snapshot.radar_track.y_mm;
@@ -2695,7 +2719,7 @@ UnifiedOutputSnapshot buildUnifiedOutputSnapshot(const SystemData &snapshot, con
     unified.fusion_enabled = snapshot.fusion_enabled;
     unified.fusion_confidence = snapshot.fusion_confidence;
     unified.is_multirotor_like = snapshot.is_multirotor_like;
-    unified.multirotor_score = snapshot.multirotor_score;
+    unified.multirotor_score = clampMultirotorScore(snapshot.multirotor_score);
     copyEventId(unified.target_verdict, sizeof(unified.target_verdict), normalizeOptionalField(snapshot.target_verdict, "UNKNOWN_TARGET"));
     return unified;
 }
@@ -2979,11 +3003,7 @@ void printHandoverStatusFields(const HandoverStatus &status) {
 void emitHandoverStatus() {
     HandoverStatus handoverSnapshot = getHandoverStatusSnapshot();
     RuntimeEventStatus eventSnapshot = getRuntimeEventStatusSnapshot();
-    SystemData systemSnapshot = {};
-
-    portENTER_CRITICAL(&dataMutex);
-    systemSnapshot = globalData;
-    portEXIT_CRITICAL(&dataMutex);
+    SystemData systemSnapshot = getDerivedSystemSnapshot(millis());
     UnifiedOutputSnapshot unified = buildUnifiedOutputSnapshot(systemSnapshot, eventSnapshot);
 
     Serial.print("HANDOVER,STATUS,node=");
@@ -3099,70 +3119,68 @@ void cacheLastEventSnapshot(
     RuntimeEventStatus eventStatusSnapshot = getRuntimeEventStatusSnapshot();
     UnifiedOutputSnapshot unified = buildUnifiedOutputSnapshot(snapshot, eventStatusSnapshot);
     portENTER_CRITICAL(&dataMutex);
-    if (shouldPreserveLastEventSnapshot(reason, event_context, close_reason)) {
-        portEXIT_CRITICAL(&dataMutex);
-        return;
+    if (!shouldPreserveLastEventSnapshot(reason, event_context, close_reason)) {
+        lastEventSnapshot.valid = true;
+        lastEventSnapshot.ts = now;
+        lastEventSnapshot.main_state = unified.main_state;
+        lastEventSnapshot.risk_level = unified.risk_level;
+        lastEventSnapshot.track_id = snapshot.radar_track.track_id;
+        lastEventSnapshot.track_active = snapshot.radar_track.is_active;
+        lastEventSnapshot.track_confirmed = snapshot.radar_track.is_confirmed;
+        lastEventSnapshot.hunter_state = snapshot.hunter_state;
+        lastEventSnapshot.gimbal_state = snapshot.gimbal_state;
+        lastEventSnapshot.rid_status = snapshot.rid_status;
+        lastEventSnapshot.rid_whitelist_hit = snapshot.rid_whitelist_hit;
+        lastEventSnapshot.wl_status = snapshot.wl_status;
+        lastEventSnapshot.risk_score = snapshot.risk_score;
+        lastEventSnapshot.trigger_flags = unified.trigger_flags;
+        lastEventSnapshot.x_mm = snapshot.radar_track.x_mm;
+        lastEventSnapshot.y_mm = snapshot.radar_track.y_mm;
+        lastEventSnapshot.vx_mm_s = snapshot.radar_track.vx_mm_s;
+        lastEventSnapshot.vy_mm_s = snapshot.radar_track.vy_mm_s;
+        if (hasEventContext(event_context)) {
+            copyEventId(lastEventSnapshot.event_id, sizeof(lastEventSnapshot.event_id), event_context.event_id);
+        } else {
+            lastEventSnapshot.event_id[0] = '\0';
+        }
+        copyEventId(lastEventSnapshot.reason, sizeof(lastEventSnapshot.reason), reason);
+        if (close_reason != nullptr && close_reason[0] != '\0') {
+            copyEventId(lastEventSnapshot.close_reason, sizeof(lastEventSnapshot.close_reason), close_reason);
+        } else if (strcmp(reason, "TRACK_LOST") == 0) {
+            copyEventId(lastEventSnapshot.close_reason, sizeof(lastEventSnapshot.close_reason), "TRACK_LOST");
+        } else {
+            lastEventSnapshot.close_reason[0] = '\0';
+        }
+        copyEventId(
+            lastEventSnapshot.event_level,
+            sizeof(lastEventSnapshot.event_level),
+            eventLevelForSnapshot(snapshot, reason)
+        );
+        copyEventId(
+            lastEventSnapshot.event_status,
+            sizeof(lastEventSnapshot.event_status),
+            eventStatusForSnapshot(snapshot, reason)
+        );
+        copyEventId(lastEventSnapshot.source_node, sizeof(lastEventSnapshot.source_node), NodeConfig::NodeId);
+        if (handover_target != nullptr && handover_target[0] != '\0') {
+            copyEventId(lastEventSnapshot.handover_from, sizeof(lastEventSnapshot.handover_from), NodeConfig::NodeId);
+            copyEventId(lastEventSnapshot.handover_to, sizeof(lastEventSnapshot.handover_to), handover_target);
+        } else {
+            lastEventSnapshot.handover_from[0] = '\0';
+            lastEventSnapshot.handover_to[0] = '\0';
+        }
+        copyEventId(lastEventSnapshot.fusion_level, sizeof(lastEventSnapshot.fusion_level), normalizeOptionalField(unified.fusion_level));
+        copyEventId(lastEventSnapshot.fusion_reason, sizeof(lastEventSnapshot.fusion_reason), normalizeOptionalField(unified.fusion_reason));
+        copyEventId(lastEventSnapshot.vision_quality, sizeof(lastEventSnapshot.vision_quality), normalizeOptionalField(unified.vision_quality, "NO_VISUAL"));
+        lastEventSnapshot.far_motion_trigger = unified.far_motion_trigger;
+        lastEventSnapshot.ld2451_range_m = unified.ld2451_range_m;
+        lastEventSnapshot.ld2451_speed_mps = unified.ld2451_speed_mps;
+        copyEventId(lastEventSnapshot.fusion_stage, sizeof(lastEventSnapshot.fusion_stage), normalizeOptionalField(unified.fusion_stage));
+        lastEventSnapshot.fusion_confidence = unified.fusion_confidence;
+        lastEventSnapshot.is_multirotor_like = unified.is_multirotor_like;
+        lastEventSnapshot.multirotor_score = unified.multirotor_score;
+        copyEventId(lastEventSnapshot.target_verdict, sizeof(lastEventSnapshot.target_verdict), normalizeOptionalField(unified.target_verdict, "UNKNOWN_TARGET"));
     }
-    lastEventSnapshot.valid = true;
-    lastEventSnapshot.ts = now;
-    lastEventSnapshot.main_state = unified.main_state;
-    lastEventSnapshot.risk_level = unified.risk_level;
-    lastEventSnapshot.track_id = snapshot.radar_track.track_id;
-    lastEventSnapshot.track_active = snapshot.radar_track.is_active;
-    lastEventSnapshot.track_confirmed = snapshot.radar_track.is_confirmed;
-    lastEventSnapshot.hunter_state = snapshot.hunter_state;
-    lastEventSnapshot.gimbal_state = snapshot.gimbal_state;
-    lastEventSnapshot.rid_status = snapshot.rid_status;
-    lastEventSnapshot.rid_whitelist_hit = snapshot.rid_whitelist_hit;
-    lastEventSnapshot.wl_status = snapshot.wl_status;
-    lastEventSnapshot.risk_score = snapshot.risk_score;
-    lastEventSnapshot.trigger_flags = unified.trigger_flags;
-    lastEventSnapshot.x_mm = snapshot.radar_track.x_mm;
-    lastEventSnapshot.y_mm = snapshot.radar_track.y_mm;
-    lastEventSnapshot.vx_mm_s = snapshot.radar_track.vx_mm_s;
-    lastEventSnapshot.vy_mm_s = snapshot.radar_track.vy_mm_s;
-    if (hasEventContext(event_context)) {
-        copyEventId(lastEventSnapshot.event_id, sizeof(lastEventSnapshot.event_id), event_context.event_id);
-    } else {
-        lastEventSnapshot.event_id[0] = '\0';
-    }
-    copyEventId(lastEventSnapshot.reason, sizeof(lastEventSnapshot.reason), reason);
-    if (close_reason != nullptr && close_reason[0] != '\0') {
-        copyEventId(lastEventSnapshot.close_reason, sizeof(lastEventSnapshot.close_reason), close_reason);
-    } else if (strcmp(reason, "TRACK_LOST") == 0) {
-        copyEventId(lastEventSnapshot.close_reason, sizeof(lastEventSnapshot.close_reason), "TRACK_LOST");
-    } else {
-        lastEventSnapshot.close_reason[0] = '\0';
-    }
-    copyEventId(
-        lastEventSnapshot.event_level,
-        sizeof(lastEventSnapshot.event_level),
-        eventLevelForSnapshot(snapshot, reason)
-    );
-    copyEventId(
-        lastEventSnapshot.event_status,
-        sizeof(lastEventSnapshot.event_status),
-        eventStatusForSnapshot(snapshot, reason)
-    );
-    copyEventId(lastEventSnapshot.source_node, sizeof(lastEventSnapshot.source_node), NodeConfig::NodeId);
-    if (handover_target != nullptr && handover_target[0] != '\0') {
-        copyEventId(lastEventSnapshot.handover_from, sizeof(lastEventSnapshot.handover_from), NodeConfig::NodeId);
-        copyEventId(lastEventSnapshot.handover_to, sizeof(lastEventSnapshot.handover_to), handover_target);
-    } else {
-        lastEventSnapshot.handover_from[0] = '\0';
-        lastEventSnapshot.handover_to[0] = '\0';
-    }
-    copyEventId(lastEventSnapshot.fusion_level, sizeof(lastEventSnapshot.fusion_level), normalizeOptionalField(unified.fusion_level));
-    copyEventId(lastEventSnapshot.fusion_reason, sizeof(lastEventSnapshot.fusion_reason), normalizeOptionalField(unified.fusion_reason));
-    copyEventId(lastEventSnapshot.vision_quality, sizeof(lastEventSnapshot.vision_quality), normalizeOptionalField(unified.vision_quality, "NO_VISUAL"));
-    lastEventSnapshot.far_motion_trigger = unified.far_motion_trigger;
-    lastEventSnapshot.ld2451_range_m = unified.ld2451_range_m;
-    lastEventSnapshot.ld2451_speed_mps = unified.ld2451_speed_mps;
-    copyEventId(lastEventSnapshot.fusion_stage, sizeof(lastEventSnapshot.fusion_stage), normalizeOptionalField(unified.fusion_stage));
-    lastEventSnapshot.fusion_confidence = unified.fusion_confidence;
-    lastEventSnapshot.is_multirotor_like = unified.is_multirotor_like;
-    lastEventSnapshot.multirotor_score = unified.multirotor_score;
-    copyEventId(lastEventSnapshot.target_verdict, sizeof(lastEventSnapshot.target_verdict), normalizeOptionalField(unified.target_verdict, "UNKNOWN_TARGET"));
     portEXIT_CRITICAL(&dataMutex);
 }
 
@@ -3292,12 +3310,11 @@ void emitEventStatus() {
     EventObject currentEventSnapshot = getCurrentEventObjectSnapshot();
     NodeRuntimeCache nodeCacheSnapshot = getActiveNodeRuntimeCacheSnapshot();
     LastEventSnapshot lastSnapshot = {};
-    SystemData systemSnapshot = {};
     unsigned long now = millis();
+    SystemData systemSnapshot = getDerivedSystemSnapshot(now);
 
     portENTER_CRITICAL(&dataMutex);
     lastSnapshot = lastEventSnapshot;
-    systemSnapshot = globalData;
     portEXIT_CRITICAL(&dataMutex);
     UnifiedOutputSnapshot unified = buildUnifiedOutputSnapshot(systemSnapshot, eventSnapshot);
 
@@ -3482,10 +3499,9 @@ void emitEventStatus() {
 }
 
 void emitRiskStatus() {
-    SystemData systemSnapshot = {};
     RuntimeEventStatus eventSnapshot = {};
+    SystemData systemSnapshot = getDerivedSystemSnapshot(millis());
     portENTER_CRITICAL(&dataMutex);
-    systemSnapshot = globalData;
     eventSnapshot = runtimeEventStatus;
     portEXIT_CRITICAL(&dataMutex);
 
@@ -3595,13 +3611,10 @@ void emitEventLifecycleLog(
 }
 
 void emitVisionStatus() {
-    SystemData snapshot = {};
     EventObject currentEventSnapshot = {};
     EventLifecycleState lifecycleSnapshot = getEventLifecycleStateSnapshot();
     unsigned long now = millis();
-    portENTER_CRITICAL(&dataMutex);
-    snapshot = globalData;
-    portEXIT_CRITICAL(&dataMutex);
+    SystemData snapshot = getDerivedSystemSnapshot(now);
     currentEventSnapshot = getCurrentEventObjectSnapshot();
 
     Serial.print("VISION,STATUS,node=");
@@ -3641,13 +3654,10 @@ void emitVisionStatus() {
 }
 
 void emitAudioStatus() {
-    SystemData snapshot = {};
     EventLifecycleState lifecycleSnapshot = getEventLifecycleStateSnapshot();
     EventObject currentEventSnapshot = getCurrentEventObjectSnapshot();
     unsigned long now = millis();
-    portENTER_CRITICAL(&dataMutex);
-    snapshot = globalData;
-    portEXIT_CRITICAL(&dataMutex);
+    SystemData snapshot = getDerivedSystemSnapshot(now);
 
     Serial.print("AUDIO,STATUS,node=");
     Serial.print(NodeConfig::NodeId);
@@ -3747,12 +3757,11 @@ void emitConfigStatus() {
 }
 
 void emitRidStatus() {
-    SystemData snapshot = {};
     RidIdentityPacket packet = {};
     unsigned long now = millis();
+    SystemData snapshot = getDerivedSystemSnapshot(now);
 
     portENTER_CRITICAL(&dataMutex);
-    snapshot = globalData;
     packet = ridIdentity;
     portEXIT_CRITICAL(&dataMutex);
 
@@ -3810,10 +3819,7 @@ void emitRidStatus() {
 }
 
 void emitWhitelistStatus() {
-    SystemData snapshot = {};
-    portENTER_CRITICAL(&dataMutex);
-    snapshot = globalData;
-    portEXIT_CRITICAL(&dataMutex);
+    SystemData snapshot = getDerivedSystemSnapshot(millis());
 
     Serial.print("WL,STATUS,node=");
     Serial.print(NodeConfig::NodeId);
@@ -4087,10 +4093,9 @@ void printHostCommandHelp() {
 }
 
 void emitBriefStatus() {
-    SystemData snapshot = {};
     RuntimeEventStatus eventStatus = {};
+    SystemData snapshot = getDerivedSystemSnapshot(millis());
     portENTER_CRITICAL(&dataMutex);
-    snapshot = globalData;
     eventStatus = runtimeEventStatus;
     portEXIT_CRITICAL(&dataMutex);
     UnifiedOutputSnapshot unified = buildUnifiedOutputSnapshot(snapshot, eventStatus);
@@ -4129,11 +4134,10 @@ void emitBriefStatus() {
 }
 
 void emitStatusSnapshot() {
-    SystemData snapshot = {};
     RuntimeEventStatus eventStatus = {};
     HandoverStatus handoverSnapshot = {};
+    SystemData snapshot = getDerivedSystemSnapshot(millis());
     portENTER_CRITICAL(&dataMutex);
-    snapshot = globalData;
     eventStatus = runtimeEventStatus;
     handoverSnapshot = handoverStatus;
     portEXIT_CRITICAL(&dataMutex);
@@ -4189,13 +4193,12 @@ void emitStatusSnapshot() {
 }
 
 void emitSelfTestSnapshot() {
-    SystemData snapshot = {};
     SimTrackInput simSnapshot = {};
     RuntimeEventStatus eventStatus = {};
     HandoverStatus handoverSnapshot = {};
+    SystemData snapshot = getDerivedSystemSnapshot(millis());
 
     portENTER_CRITICAL(&dataMutex);
-    snapshot = globalData;
     simSnapshot = simTrack;
     eventStatus = runtimeEventStatus;
     handoverSnapshot = handoverStatus;
@@ -4412,6 +4415,59 @@ void applyTrackMeasurement(float px, float py, unsigned long now) {
 }
 
 void clearNodeBRidFieldsLocked(unsigned long now);
+void beginNodeBSerialLink();
+
+void resetNodeBReconnectStateLocked() {
+    nodeBNeedsReconnect = false;
+    nodeBReconnectLockedOut = false;
+    nodeBReconnectCount = 0;
+    nodeBLastReconnectMs = 0;
+}
+
+void emitNodeBLinkStatus() {
+    uint32_t count = 0;
+    unsigned long lastMs = 0;
+    bool needsReconnect = false;
+    bool lockedOut = false;
+    bool online = false;
+    char status[24] = {};
+
+    portENTER_CRITICAL(&dataMutex);
+    count = nodeBReconnectCount;
+    lastMs = nodeBLastReconnectMs;
+    needsReconnect = nodeBNeedsReconnect;
+    lockedOut = nodeBReconnectLockedOut;
+    online = globalData.nodeb_online;
+    copyEventId(status, sizeof(status), globalData.nodeb_status);
+    portEXIT_CRITICAL(&dataMutex);
+
+    Serial.print("NODEB,LINK,count=");
+    Serial.print(count);
+    Serial.print(",max=");
+    Serial.print(NodeBConfig::MaxReconnectAttempts);
+    Serial.print(",needs_reconnect=");
+    Serial.print(needsReconnect ? 1 : 0);
+    Serial.print(",locked_out=");
+    Serial.print(lockedOut ? 1 : 0);
+    Serial.print(",last_ms=");
+    Serial.print(lastMs);
+    Serial.print(",online=");
+    Serial.print(online ? 1 : 0);
+    Serial.print(",status=");
+    Serial.println(status[0] != '\0' ? status : "UNKNOWN");
+}
+
+void recoverNodeBSerialLink(unsigned long now) {
+    (void)now;
+    portENTER_CRITICAL(&dataMutex);
+    resetNodeBReconnectStateLocked();
+    portEXIT_CRITICAL(&dataMutex);
+
+    Serial2.end();
+    vTaskDelay(pdMS_TO_TICKS(20));
+    beginNodeBSerialLink();
+    Serial.println("NODEB,RECOVERED,locked_out=0,count=0");
+}
 
 void setNodeBStatusFromPayload(const String &payload, unsigned long now) {
     String node = "B1";
@@ -4435,15 +4491,13 @@ void setNodeBStatusFromPayload(const String &payload, unsigned long now) {
         copyStringField(globalData.nodeb_source, sizeof(globalData.nodeb_source), source, "NONE");
         globalData.nodeb_rssi = rssi.toInt();
         globalData.nodeb_last_update_ms = now;
-        nodeBNeedsReconnect = false;
-        nodeBReconnectCount = 0;
-        nodeBLastReconnectMs = 0;
+        resetNodeBReconnectStateLocked();
     } else {
         copyEventId(globalData.nodeb_node_id, sizeof(globalData.nodeb_node_id), "NONE");
         copyEventId(globalData.nodeb_source, sizeof(globalData.nodeb_source), "NONE");
         globalData.nodeb_rssi = 0;
         globalData.nodeb_last_update_ms = 0;
-        nodeBNeedsReconnect = true;
+        nodeBNeedsReconnect = !nodeBReconnectLockedOut;
         clearNodeBRidFieldsLocked(now);
     }
     refreshFusionRuntimeLocked(now);
@@ -4496,7 +4550,7 @@ void markNodeBOfflineIfStale(unsigned long now) {
         copyEventId(globalData.nodeb_source, sizeof(globalData.nodeb_source), "NONE");
         globalData.nodeb_rssi = 0;
         globalData.nodeb_last_update_ms = 0;
-        nodeBNeedsReconnect = true;
+        nodeBNeedsReconnect = !nodeBReconnectLockedOut;
         clearNodeBRidFieldsLocked(now);
         refreshFusionRuntimeLocked(now);
         syncActiveNodeRuntimeCacheLocked();
@@ -4561,14 +4615,20 @@ void setLd2451Measurement(float range_m, float speed_mps, bool approach, bool va
 
 void clearLd2451Measurement(unsigned long now) {
     pendingLd2451Frame = {};
+    lastAcceptedLd2451Frame = {};
     ld2451StableFrameCount = 0;
+    ld2451SuspectFrameCount = 0;
+    ld2451LastAcceptedMs = 0;
     setLd2451Measurement(0.0f, 0.0f, false, false, now);
 }
 
 void clearHardwareInputStateForAcceptance(unsigned long now) {
     myTrackManager.clear(now);
     pendingLd2451Frame = {};
+    lastAcceptedLd2451Frame = {};
     ld2451StableFrameCount = 0;
+    ld2451SuspectFrameCount = 0;
+    ld2451LastAcceptedMs = 0;
 
     portENTER_CRITICAL(&dataMutex);
     globalData.radar_track = {};
@@ -4581,9 +4641,7 @@ void clearHardwareInputStateForAcceptance(unsigned long now) {
     copyEventId(globalData.nodeb_source, sizeof(globalData.nodeb_source), "NONE");
     globalData.nodeb_rssi = 0;
     globalData.nodeb_last_update_ms = 0;
-    nodeBNeedsReconnect = false;
-    nodeBReconnectCount = 0;
-    nodeBLastReconnectMs = 0;
+    resetNodeBReconnectStateLocked();
     globalData.ld2451_valid = false;
     globalData.ld2451_range_m = 0.0f;
     globalData.ld2451_speed_mps = 0.0f;
@@ -4603,9 +4661,7 @@ void setRealInputsEnabled(bool enabled, unsigned long now) {
     inputControl.nodeb_uart_enabled = enabled;
     inputControl.ld2451_uart_enabled = enabled;
     if (!enabled) {
-        nodeBNeedsReconnect = false;
-        nodeBReconnectCount = 0;
-        nodeBLastReconnectMs = 0;
+        resetNodeBReconnectStateLocked();
     }
     portEXIT_CRITICAL(&dataMutex);
 
@@ -4626,9 +4682,40 @@ bool ld2451FramesSimilar(const Ld2451Frame &a, const Ld2451Frame &b) {
            a.selected.approach == b.selected.approach;
 }
 
+bool ld2451FramePlausibleFromAccepted(
+    const Ld2451Frame &candidate,
+    const Ld2451Frame &accepted,
+    unsigned long accepted_ms,
+    unsigned long now
+) {
+    if (!candidate.valid || !candidate.selected.valid) {
+        return false;
+    }
+    if (!accepted.valid || !accepted.selected.valid || accepted_ms == 0) {
+        return true;
+    }
+    if ((now - accepted_ms) > Ld2451Config::PlausibilityWindowMs) {
+        return true;
+    }
+
+    const int rangeJump = abs(static_cast<int>(candidate.selected.range_m) - static_cast<int>(accepted.selected.range_m));
+    const int speedJump = abs(static_cast<int>(candidate.selected.speed_kmh) - static_cast<int>(accepted.selected.speed_kmh));
+    const int angleJump = abs(static_cast<int>(candidate.selected.angle_deg) - static_cast<int>(accepted.selected.angle_deg));
+    return rangeJump <= Ld2451Config::MaxRangeJumpM &&
+           speedJump <= Ld2451Config::MaxSpeedJumpKmh &&
+           angleJump <= Ld2451Config::MaxAngleJumpDeg;
+}
+
 void acceptLd2451BinaryFrame(const Ld2451Frame &frame, unsigned long now) {
     if (!frame.valid || frame.target_count == 0 || !frame.selected.valid) {
         clearLd2451Measurement(now);
+        return;
+    }
+
+    if (!ld2451FramePlausibleFromAccepted(frame, lastAcceptedLd2451Frame, ld2451LastAcceptedMs, now)) {
+        pendingLd2451Frame = {};
+        ld2451StableFrameCount = 0;
+        ld2451SuspectFrameCount++;
         return;
     }
 
@@ -4650,6 +4737,8 @@ void acceptLd2451BinaryFrame(const Ld2451Frame &frame, unsigned long now) {
             true,
             now
         );
+        lastAcceptedLd2451Frame = frame;
+        ld2451LastAcceptedMs = now;
     }
 }
 
@@ -4724,6 +4813,52 @@ bool runLd2451ParserSelfTestCase(
     return pass;
 }
 
+bool parseLd2451SelfTestFrame(const uint8_t *bytes, size_t length, Ld2451Frame &frame) {
+    Ld2451Parser parser;
+    bool parsed = false;
+    for (size_t index = 0; index < length; ++index) {
+        if (parser.feed(bytes[index])) {
+            parsed = true;
+        }
+    }
+    frame = parser.frame();
+    return parsed && frame.valid;
+}
+
+bool runLd2451PlausibilitySelfTestCase(
+    const char *name,
+    const uint8_t *acceptedBytes,
+    size_t acceptedLength,
+    const uint8_t *candidateBytes,
+    size_t candidateLength,
+    bool expectParsed,
+    bool expectPlausible
+) {
+    Ld2451Frame accepted = {};
+    Ld2451Frame candidate = {};
+    const bool acceptedParsed = parseLd2451SelfTestFrame(acceptedBytes, acceptedLength, accepted);
+    const bool candidateParsed = parseLd2451SelfTestFrame(candidateBytes, candidateLength, candidate);
+    const bool plausible = candidateParsed &&
+                           ld2451FramePlausibleFromAccepted(candidate, accepted, 1000, 1500);
+    const bool pass = acceptedParsed &&
+                      candidateParsed == expectParsed &&
+                      (!expectParsed || plausible == expectPlausible);
+
+    Serial.print("LD2451,SELFTEST,case=");
+    Serial.print(name);
+    Serial.print(",result=");
+    Serial.print(pass ? "PASS" : "FAIL");
+    Serial.print(",parsed=");
+    Serial.print(candidateParsed ? 1 : 0);
+    Serial.print(",plausible=");
+    Serial.print(plausible ? 1 : 0);
+    Serial.print(",range_m=");
+    Serial.print(candidate.selected.valid ? candidate.selected.range_m : 0);
+    Serial.print(",crc_supported=0,integrity=STRUCTURAL_NO_CRC");
+    Serial.println();
+    return pass;
+}
+
 void emitLd2451SelfTest() {
     constexpr uint8_t normalFrame[] = {
         0xF4, 0xF3, 0xF2, 0xF1, 0x07, 0x00,
@@ -4750,6 +4885,16 @@ void emitLd2451SelfTest() {
         0x01, 0x01, 0x8A, 40, 0x7F, 60, 0x15,
         0xF8, 0xF7, 0xF6, 0xF5
     };
+    constexpr uint8_t bitFlipInvalidFieldFrame[] = {
+        0xF4, 0xF3, 0xF2, 0xF1, 0x07, 0x00,
+        0x01, 0x01, 0x8A, 40, 0x40, 60, 0x15,
+        0xF8, 0xF7, 0xF6, 0xF5
+    };
+    constexpr uint8_t bitFlipPlausibleShapeButJumpFrame[] = {
+        0xF4, 0xF3, 0xF2, 0xF1, 0x07, 0x00,
+        0x01, 0x01, 0x8A, 104, 0x00, 60, 0x15,
+        0xF8, 0xF7, 0xF6, 0xF5
+    };
 
     bool pass = true;
     pass &= runLd2451ParserSelfTestCase("normal", normalFrame, sizeof(normalFrame), true, 1, 40);
@@ -4757,8 +4902,19 @@ void emitLd2451SelfTest() {
     pass &= runLd2451ParserSelfTestCase("bad_tail", badTailFrame, sizeof(badTailFrame), false, 0);
     pass &= runLd2451ParserSelfTestCase("bad_length", badLengthFrame, sizeof(badLengthFrame), false, 0);
     pass &= runLd2451ParserSelfTestCase("invalid_field", invalidFieldFrame, sizeof(invalidFieldFrame), false, 0);
+    pass &= runLd2451ParserSelfTestCase("bit_flip_invalid_field", bitFlipInvalidFieldFrame, sizeof(bitFlipInvalidFieldFrame), false, 0);
+    pass &= runLd2451PlausibilitySelfTestCase(
+        "bit_flip_valid_shape_suspect",
+        normalFrame,
+        sizeof(normalFrame),
+        bitFlipPlausibleShapeButJumpFrame,
+        sizeof(bitFlipPlausibleShapeButJumpFrame),
+        true,
+        false
+    );
     Serial.print("LD2451,SELFTEST,summary=");
-    Serial.println(pass ? "PASS" : "FAIL");
+    Serial.print(pass ? "PASS" : "FAIL");
+    Serial.println(",crc_supported=0,integrity=STRUCTURAL_NO_CRC");
 }
 
 bool parseVisionConfidencePayload(const String &payload, float &confidence, float &stability, String &tracker_state) {
@@ -4796,11 +4952,7 @@ void setVisionConfidenceMeasurement(float confidence, float stability, const Str
 }
 
 void emitFusionStatus() {
-    SystemData snapshot = {};
-    portENTER_CRITICAL(&dataMutex);
-    refreshFusionRuntimeLocked(millis());
-    snapshot = globalData;
-    portEXIT_CRITICAL(&dataMutex);
+    SystemData snapshot = getDerivedSystemSnapshot(millis());
 
     Serial.print("FUSION,STATUS,node=");
     Serial.print(NodeConfig::NodeId);
@@ -4845,11 +4997,7 @@ void emitFusionStatus() {
 }
 
 void emitFusionDebug() {
-    SystemData snapshot = {};
-    portENTER_CRITICAL(&dataMutex);
-    refreshFusionRuntimeLocked(millis());
-    snapshot = globalData;
-    portEXIT_CRITICAL(&dataMutex);
+    SystemData snapshot = getDerivedSystemSnapshot(millis());
     Fusion::printDebug(snapshot, Serial);
     const Ld2451ParserStats &stats = ld2451Parser.stats();
     Serial.print("LD2451,PARSER,ok=");
@@ -4865,7 +5013,11 @@ void emitFusionDebug() {
     Serial.print(",invalid_field=");
     Serial.print(stats.invalid_field);
     Serial.print(",stable_frames=");
-    Serial.println(ld2451StableFrameCount);
+    Serial.print(ld2451StableFrameCount);
+    Serial.print(",suspect_frames=");
+    Serial.print(ld2451SuspectFrameCount);
+    Serial.print(",crc_supported=0,integrity=STRUCTURAL_NO_CRC");
+    Serial.println();
 }
 
 void handleHostCommand(const String &line) {
@@ -4927,6 +5079,16 @@ void handleHostCommand(const String &line) {
         nodeBType.trim();
         nodeBType.toUpperCase();
 
+        if (nodeBType == "LINK") {
+            emitNodeBLinkStatus();
+            return;
+        }
+
+        if (nodeBType == "RECOVER") {
+            recoverNodeBSerialLink(now);
+            return;
+        }
+
         if (nodeBType == "RID") {
             if (!acceptNodeBRidPayload(rawValue, now)) {
                 Serial.println("Invalid NODEB,RID command. Use NODEB,RID,node=B1,source=BLE,rssi=-62,status=SEEN,id=TEST-RID-001.");
@@ -4948,7 +5110,7 @@ void handleHostCommand(const String &line) {
             return;
         }
 
-        Serial.println("Invalid NODEB command. Use NODEB,RID,..., NODEB,HEARTBEAT,..., NODEB,STATUS,..., or NODEB,OFFLINE.");
+        Serial.println("Invalid NODEB command. Use NODEB,LINK, NODEB,RECOVER, NODEB,RID,..., NODEB,HEARTBEAT,..., NODEB,STATUS,..., or NODEB,OFFLINE.");
     } else if (command == "LD2451") {
         if (value == "STATUS" || value.length() == 0) {
             emitFusionStatus();
@@ -4972,7 +5134,9 @@ void handleHostCommand(const String &line) {
             return;
         }
         pendingLd2451Frame = {};
+        lastAcceptedLd2451Frame = {};
         ld2451StableFrameCount = 0;
+        ld2451LastAcceptedMs = 0;
         setLd2451Measurement(range_m, speed_mps, approach, valid, millis());
         Serial.println("LD2451 far trigger updated.");
     } else if (command == "ENV") {
@@ -5500,9 +5664,7 @@ void handleHostCommand(const String &line) {
         copyEventId(globalData.nodeb_source, sizeof(globalData.nodeb_source), "NONE");
         globalData.nodeb_rssi = 0;
         globalData.nodeb_last_update_ms = 0;
-        nodeBNeedsReconnect = false;
-        nodeBReconnectCount = 0;
-        nodeBLastReconnectMs = 0;
+        resetNodeBReconnectStateLocked();
         globalData.ld2451_valid = false;
         globalData.ld2451_range_m = 0.0f;
         globalData.ld2451_speed_mps = 0.0f;
@@ -5526,7 +5688,10 @@ void handleHostCommand(const String &line) {
         clearRidIdentityPacket(0);
         ld2451Parser.resetStats();
         pendingLd2451Frame = {};
+        lastAcceptedLd2451Frame = {};
         ld2451StableFrameCount = 0;
+        ld2451SuspectFrameCount = 0;
+        ld2451LastAcceptedMs = 0;
         resetSerialLineBuffer(commandBuffer);
         resetSerialLineBuffer(nodeBCommandBuffer);
         resetSerialLineBuffer(ld2451CommandBuffer);
@@ -5898,31 +6063,69 @@ void beginNodeBSerialLink() {
     );
 }
 
-unsigned long nodeBReconnectIntervalMs() {
-    return nodeBReconnectCount < NodeBConfig::FastReconnectAttempts
+unsigned long nodeBReconnectIntervalMs(uint32_t reconnect_count) {
+    return reconnect_count < NodeBConfig::FastReconnectAttempts
                ? NodeBConfig::ReconnectIntervalMs
                : NodeBConfig::SlowReconnectIntervalMs;
 }
 
 void restartNodeBSerialIfDue(unsigned long now) {
-    const unsigned long intervalMs = nodeBReconnectIntervalMs();
-    if (nodeBLastReconnectMs != 0 && (now - nodeBLastReconnectMs) < intervalMs) {
+    uint32_t reconnectCount = 0;
+    unsigned long lastReconnectMs = 0;
+    bool lockedOut = false;
+    portENTER_CRITICAL(&dataMutex);
+    reconnectCount = nodeBReconnectCount;
+    lastReconnectMs = nodeBLastReconnectMs;
+    lockedOut = nodeBReconnectLockedOut;
+    if (!lockedOut && reconnectCount >= NodeBConfig::MaxReconnectAttempts) {
+        nodeBReconnectLockedOut = true;
+        nodeBNeedsReconnect = false;
+        lockedOut = true;
+    }
+    portEXIT_CRITICAL(&dataMutex);
+
+    if (lockedOut) {
         return;
     }
-    nodeBLastReconnectMs = now;
-    nodeBReconnectCount++;
+
+    const unsigned long intervalMs = nodeBReconnectIntervalMs(reconnectCount);
+    if (lastReconnectMs != 0 && (now - lastReconnectMs) < intervalMs) {
+        return;
+    }
+
     Serial2.end();
     vTaskDelay(pdMS_TO_TICKS(20));
     beginNodeBSerialLink();
+
+    uint32_t countAfterRestart = 0;
+    bool reachedLimit = false;
+    portENTER_CRITICAL(&dataMutex);
+    nodeBLastReconnectMs = now;
+    if (nodeBReconnectCount < NodeBConfig::MaxReconnectAttempts) {
+        nodeBReconnectCount++;
+    }
+    countAfterRestart = nodeBReconnectCount;
+    if (nodeBReconnectCount >= NodeBConfig::MaxReconnectAttempts) {
+        nodeBReconnectLockedOut = true;
+        nodeBNeedsReconnect = false;
+        reachedLimit = true;
+    }
+    portEXIT_CRITICAL(&dataMutex);
+
     if (debugOutput.enabled || debugOutput.quiet_mode_enabled) {
         Serial.print("NODEB,UART_RESTART,count=");
-        Serial.print(nodeBReconnectCount);
+        Serial.print(countAfterRestart);
         Serial.print(",interval_ms=");
         Serial.print(intervalMs);
         Serial.print(",rx=");
         Serial.print(AppSerialConfig::NodeBRxPin);
         Serial.print(",tx=");
-        Serial.println(AppSerialConfig::NodeBTxPin);
+        Serial.print(AppSerialConfig::NodeBTxPin);
+        Serial.print(",locked_out=");
+        Serial.println(reachedLimit ? 1 : 0);
+    }
+    if (reachedLimit) {
+        Serial.println("NODEB,UART_LOCKOUT,reason=max_reconnect_attempts");
     }
 }
 
@@ -5930,7 +6133,7 @@ bool shouldRestartNodeBSerial(unsigned long now) {
     (void)now;
     bool needsReconnect = false;
     portENTER_CRITICAL(&dataMutex);
-    needsReconnect = nodeBNeedsReconnect;
+    needsReconnect = nodeBNeedsReconnect && !nodeBReconnectLockedOut;
     portEXIT_CRITICAL(&dataMutex);
     return needsReconnect;
 }
@@ -6352,7 +6555,7 @@ void TrackingTask(void *pvParameters) {
         copyEventId(flowSnapshot.fusion_stage, sizeof(flowSnapshot.fusion_stage), globalData.fusion_stage);
         flowSnapshot.fusion_confidence = globalData.fusion_confidence;
         flowSnapshot.is_multirotor_like = globalData.is_multirotor_like;
-        flowSnapshot.multirotor_score = globalData.multirotor_score;
+        flowSnapshot.multirotor_score = clampMultirotorScore(globalData.multirotor_score);
         copyEventId(flowSnapshot.target_verdict, sizeof(flowSnapshot.target_verdict), globalData.target_verdict);
         portEXIT_CRITICAL(&dataMutex);
 
@@ -6499,10 +6702,7 @@ void CloudTask(void *pvParameters) {
         unsigned long now = millis();
         bool uplinkFrameSent = false;
 
-        SystemData snapshot = {};
-        portENTER_CRITICAL(&dataMutex);
-        snapshot = globalData;
-        portEXIT_CRITICAL(&dataMutex);
+        SystemData snapshot = getDerivedSystemSnapshot(now);
 
         if (!uplinkOutput.enabled) {
             setUplinkState(UPLINK_IDLE, now);
@@ -6612,9 +6812,7 @@ void CloudTask(void *pvParameters) {
             cacheLastEventSnapshot(snapshot, now, "EVENT_CLOSED", closingEventContext, nullptr, "RISK_DOWNGRADE");
         }
         updateSummaryLastEventId(eventContext);
-        portENTER_CRITICAL(&dataMutex);
-        snapshot = globalData;
-        portEXIT_CRITICAL(&dataMutex);
+        snapshot = getDerivedSystemSnapshot(now);
 
         HandoverRequest pendingHandover = {};
         if (consumeHandoverRequest(pendingHandover)) {

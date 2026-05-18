@@ -95,6 +95,7 @@ constexpr unsigned long StaleTimeoutMs = 3000;
 constexpr unsigned long ReconnectIntervalMs = 3000;
 constexpr uint8_t FastReconnectAttempts = 5;
 constexpr unsigned long SlowReconnectIntervalMs = 15000;
+constexpr uint8_t MaxReconnectAttempts = 12;
 }
 
 namespace WatchdogConfig {
@@ -109,6 +110,10 @@ constexpr unsigned int BufferSize = 256;
 
 namespace Ld2451Config {
 constexpr uint8_t RequiredStableFrames = 2;
+constexpr uint16_t MaxRangeJumpM = 15;
+constexpr uint16_t MaxSpeedJumpKmh = 30;
+constexpr uint8_t MaxAngleJumpDeg = 20;
+constexpr unsigned long PlausibilityWindowMs = 1000;
 }
 
 namespace TrackConfig {

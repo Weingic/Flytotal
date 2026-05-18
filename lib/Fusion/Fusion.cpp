@@ -20,6 +20,19 @@ void copyField(char *destination, size_t destination_size, const char *value) {
     destination[destination_size - 1] = '\0';
 }
 
+float clampScore(float value) {
+    if (!isfinite(value)) {
+        return 0.0f;
+    }
+    if (value < 0.0f) {
+        return 0.0f;
+    }
+    if (value > 100.0f) {
+        return 100.0f;
+    }
+    return value;
+}
+
 bool isNodeBOnline(const SystemData &snapshot, unsigned long now) {
     return snapshot.nodeb_last_update_ms > 0 &&
            (now - snapshot.nodeb_last_update_ms) <= NodeBConfig::StaleTimeoutMs &&
@@ -282,7 +295,7 @@ void evaluateFusionFields(SystemData &data, unsigned long now, bool updateRuntim
     }
     data.fusion_confidence = confidence;
     data.is_multirotor_like = data.radar_track.is_multirotor_like;
-    data.multirotor_score = data.radar_track.multirotor_score;
+    data.multirotor_score = clampScore(data.radar_track.multirotor_score);
 }
 
 }  // namespace
