@@ -28,3 +28,6 @@ outputs/
 
 # Local model assets can be large and environment-specific.
 models/
+
+# Local WiFi and cloud credentials.
+include/secrets.h

@@ -40,7 +40,7 @@ constexpr float CenterPanDeg = 90.0f;
 constexpr float CenterTiltDeg = 90.0f;
 constexpr float MinPanDeg = 10.0f;
 constexpr float MaxPanDeg = 170.0f;
-constexpr float ScanningAmplitudeDeg = 15.0f;
+constexpr float ScanningAmplitudeDeg = 8.0f;
 constexpr float ScanningPeriodDivisor = 900.0f;
 constexpr long MinTiltMapInputMm = 0;
 constexpr long MaxTiltMapInputMm = 6000;
@@ -117,9 +117,9 @@ constexpr unsigned long PlausibilityWindowMs = 1000;
 }
 
 namespace TrackConfig {
-constexpr uint16_t ConfirmFrames = 5;
-constexpr unsigned long LostTimeoutMs = 250;
-constexpr unsigned long RebuildGapMs = 400;
+constexpr uint16_t ConfirmFrames = 3;
+constexpr unsigned long LostTimeoutMs = 800;
+constexpr unsigned long RebuildGapMs = 1200;
 }
 
 namespace HunterConfig {
@@ -184,6 +184,13 @@ constexpr bool IgnoreBackgroundAudio = false;
 namespace CloudConfig {
 constexpr unsigned long HeartbeatMs = 1000;
 constexpr unsigned long EventReportMs = 250;
+constexpr bool AiEnabledByDefault = false;
+constexpr const char *ArkEndpoint = "https://ark.cn-beijing.volces.com/api/v3/chat/completions";
+constexpr const char *ArkModel = "doubao-1-5-pro-32k-250115";
+constexpr uint8_t AiQueueLength = 3;
+constexpr unsigned long AiMinRequestIntervalMs = 10000;
+constexpr unsigned long WifiReconnectIntervalMs = 5000;
+constexpr uint32_t AiTaskStackSize = 24576;
 }
 
 namespace EventConfig {

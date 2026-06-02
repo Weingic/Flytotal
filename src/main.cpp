@@ -1,13 +1,16 @@
 #include <Arduino.h>
 #include <ESP32Servo.h>
+#include <WiFi.h>
 #include <esp_task_wdt.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 #include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "AppConfig.h"
+#include "CloudClient.h"
 #include "Fusion.h"
 #include "GimbalController.h"
 #include "GimbalPredictor.h"
@@ -16,6 +19,22 @@
 #include "RadarParser.h"
 #include "SharedData.h"
 #include "TrackManager.h"
+
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+
+#ifndef FLYTOTAL_WIFI_SSID
+#define FLYTOTAL_WIFI_SSID ""
+#endif
+
+#ifndef FLYTOTAL_WIFI_PASSWORD
+#define FLYTOTAL_WIFI_PASSWORD ""
+#endif
+
+#ifndef FLYTOTAL_ARK_API_KEY
+#define FLYTOTAL_ARK_API_KEY ""
+#endif
 
 SystemData globalData = {};
 portMUX_TYPE dataMutex = portMUX_INITIALIZER_UNLOCKED;
@@ -207,6 +226,21 @@ struct UplinkOutputControl {
     bool enabled;
 };
 
+struct AiCloudControl {
+    bool enabled;
+    bool wifi_started;
+    bool request_in_flight;
+    unsigned long last_enqueue_ms;
+    unsigned long last_wifi_retry_ms;
+    char last_event_id[32];
+};
+
+struct AiCloudQueueItem {
+    bool force;
+    char source[16];
+    CloudSensingEvent event;
+};
+
 struct RuntimeInputControl {
     bool real_radar_enabled;
     bool nodeb_uart_enabled;
@@ -345,6 +379,7 @@ DebugOutputControl debugOutput = {
     false
 };
 UplinkOutputControl uplinkOutput = {AppSerialConfig::UplinkOutputEnabledByDefault};
+AiCloudControl aiCloud = {CloudConfig::AiEnabledByDefault, false, false, 0, 0, {0}};
 RuntimeInputControl inputControl = {true, true, true};
 SafetyControl safetyControl = {false};
 ServoDiagnosticControl servoDiagnostic = {false, 0, 0};
@@ -387,6 +422,7 @@ LastEventSnapshot lastEventSnapshot = {
 RuntimeEventStatus runtimeEventStatus = {false, 0, 0, {0}};
 EventLifecycleState eventLifecycleState = {false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0}, {0}};
 EventObject currentEventObject = {};
+QueueHandle_t aiCloudQueue = nullptr;
 constexpr size_t NodeRuntimeCacheSlots = 4;
 NodeRuntimeCache nodeRuntimeCaches[NodeRuntimeCacheSlots] = {};
 SummaryStats summaryStats = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0f, 0, 0.0f, 0.0f, {0}};
@@ -2038,6 +2074,242 @@ float clampMultirotorScore(float score) {
     return constrain(score, 0.0f, 100.0f);
 }
 
+bool hasWifiCredentials() {
+    return strlen(FLYTOTAL_WIFI_SSID) > 0;
+}
+
+bool hasArkCredentials() {
+    return strlen(FLYTOTAL_ARK_API_KEY) > 0;
+}
+
+const char *wifiStatusName(wl_status_t status) {
+    switch (status) {
+        case WL_CONNECTED:
+            return "CONNECTED";
+        case WL_NO_SSID_AVAIL:
+            return "NO_SSID";
+        case WL_CONNECT_FAILED:
+            return "CONNECT_FAILED";
+        case WL_CONNECTION_LOST:
+            return "CONNECTION_LOST";
+        case WL_DISCONNECTED:
+            return "DISCONNECTED";
+        case WL_IDLE_STATUS:
+            return "IDLE";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+void setCloudError(const char *error, unsigned long now) {
+    portENTER_CRITICAL(&dataMutex);
+    globalData.cloud_online = false;
+    globalData.cloud_last_update_ms = now;
+    copyEventId(globalData.cloud_error, sizeof(globalData.cloud_error), normalizeOptionalField(error, "cloud_error"));
+    if (globalData.cloud_threat_level[0] == '\0') {
+        copyEventId(globalData.cloud_threat_level, sizeof(globalData.cloud_threat_level), "NONE");
+    }
+    if (globalData.cloud_alert_text[0] == '\0') {
+        copyEventId(globalData.cloud_alert_text, sizeof(globalData.cloud_alert_text), "NONE");
+    }
+    if (globalData.cloud_action[0] == '\0') {
+        copyEventId(globalData.cloud_action, sizeof(globalData.cloud_action), "NONE");
+    }
+    if (globalData.cloud_command_type[0] == '\0') {
+        copyEventId(globalData.cloud_command_type, sizeof(globalData.cloud_command_type), "NONE");
+    }
+    portEXIT_CRITICAL(&dataMutex);
+}
+
+void setCloudResult(const CloudAssessmentResult &result, unsigned long now) {
+    portENTER_CRITICAL(&dataMutex);
+    globalData.cloud_online = result.ok;
+    globalData.cloud_last_update_ms = now;
+    copyEventId(globalData.cloud_threat_level, sizeof(globalData.cloud_threat_level), normalizeOptionalField(result.threat_level, "NONE"));
+    copyEventId(globalData.cloud_alert_text, sizeof(globalData.cloud_alert_text), normalizeOptionalField(result.alert_text, "NONE"));
+    copyEventId(globalData.cloud_action, sizeof(globalData.cloud_action), normalizeOptionalField(result.action, "NONE"));
+    copyEventId(globalData.cloud_command_type, sizeof(globalData.cloud_command_type), normalizeOptionalField(result.command_type, "NONE"));
+    copyEventId(globalData.cloud_error, sizeof(globalData.cloud_error), normalizeOptionalField(result.error, "NONE"));
+    portEXIT_CRITICAL(&dataMutex);
+}
+
+void buildCloudEventFromSnapshot(
+    const SystemData &snapshot,
+    const EventContext &context,
+    CloudSensingEvent &event
+) {
+    event = {};
+    const char *eventId = hasEventContext(context) ? context.event_id : normalizeOptionalField(snapshot.event_id, "A1-CLOUD-MANUAL");
+    copyEventId(event.event_id, sizeof(event.event_id), eventId);
+    copyEventId(event.target_verdict, sizeof(event.target_verdict), normalizeOptionalField(snapshot.target_verdict, "UNKNOWN_TARGET"));
+    copyEventId(event.risk_level, sizeof(event.risk_level), riskLevelName(snapshot));
+    copyEventId(event.fusion_stage, sizeof(event.fusion_stage), normalizeOptionalField(snapshot.fusion_stage));
+    event.ld2450_x_mm = snapshot.radar_track.x_mm;
+    event.ld2450_y_mm = snapshot.radar_track.y_mm;
+    event.ld2450_vx_mm_s = snapshot.radar_track.vx_mm_s;
+    event.ld2450_vy_mm_s = snapshot.radar_track.vy_mm_s;
+    event.ld2451_range_m = snapshot.ld2451_range_m;
+    event.ld2451_speed_mps = snapshot.ld2451_speed_mps;
+    event.vision_confidence = snapshot.vision_confidence;
+    if (strcmp(snapshot.target_verdict, "VISUALLY_CONFIRMED_DRONE") == 0) {
+        copyEventId(event.vision_label, sizeof(event.vision_label), "drone");
+    } else if (snapshot.vision_locked) {
+        copyEventId(event.vision_label, sizeof(event.vision_label), "target");
+    } else {
+        copyEventId(event.vision_label, sizeof(event.vision_label), "none");
+    }
+    copyEventId(event.rid_id, sizeof(event.rid_id), normalizeOptionalField(snapshot.rid_id));
+    copyEventId(event.wl_status, sizeof(event.wl_status), whitelistStatusName(snapshot.wl_status));
+    event.multirotor_score = clampMultirotorScore(snapshot.multirotor_score);
+    event.is_multirotor_like = snapshot.is_multirotor_like;
+}
+
+bool queueAiCloudAssessment(const CloudSensingEvent &event, bool force, const char *source, unsigned long now) {
+    if (aiCloudQueue == nullptr) {
+        setCloudError("queue_not_ready", now);
+        return false;
+    }
+
+    bool shouldQueue = true;
+    portENTER_CRITICAL(&dataMutex);
+    if (!force && !aiCloud.enabled) {
+        shouldQueue = false;
+    }
+    if (shouldQueue && !force) {
+        const bool sameEvent =
+            event.event_id[0] != '\0' &&
+            strcmp(aiCloud.last_event_id, event.event_id) == 0;
+        const bool tooSoon =
+            aiCloud.last_enqueue_ms > 0 &&
+            (now - aiCloud.last_enqueue_ms) < CloudConfig::AiMinRequestIntervalMs;
+        if (sameEvent || tooSoon) {
+            shouldQueue = false;
+        }
+    }
+    if (shouldQueue && !force) {
+        aiCloud.last_enqueue_ms = now;
+        copyEventId(aiCloud.last_event_id, sizeof(aiCloud.last_event_id), event.event_id);
+    }
+    portEXIT_CRITICAL(&dataMutex);
+
+    if (!shouldQueue) {
+        return false;
+    }
+
+    AiCloudQueueItem item = {};
+    item.force = force;
+    copyEventId(item.source, sizeof(item.source), normalizeOptionalField(source, force ? "MANUAL" : "EVENT"));
+    item.event = event;
+    if (xQueueSend(aiCloudQueue, &item, 0) != pdTRUE) {
+        setCloudError("queue_full", now);
+        return false;
+    }
+    return true;
+}
+
+void setAiCloudEnabled(bool enabled) {
+    portENTER_CRITICAL(&dataMutex);
+    aiCloud.enabled = enabled;
+    if (!enabled) {
+        aiCloud.last_event_id[0] = '\0';
+        aiCloud.last_enqueue_ms = 0;
+    }
+    portEXIT_CRITICAL(&dataMutex);
+}
+
+void emitCloudStatus() {
+    SystemData snapshot = {};
+    AiCloudControl control = {};
+    portENTER_CRITICAL(&dataMutex);
+    snapshot = globalData;
+    control = aiCloud;
+    portEXIT_CRITICAL(&dataMutex);
+
+    Serial.print("CLOUD,STATUS,enabled=");
+    Serial.print(control.enabled ? 1 : 0);
+    Serial.print(",configured=");
+    Serial.print(hasWifiCredentials() && hasArkCredentials() ? 1 : 0);
+    Serial.print(",wifi=");
+    Serial.print(wifiStatusName(WiFi.status()));
+    Serial.print(",request_in_flight=");
+    Serial.print(control.request_in_flight ? 1 : 0);
+    Serial.print(",cloud_online=");
+    Serial.print(snapshot.cloud_online ? 1 : 0);
+    Serial.print(",threat_level=");
+    Serial.print(snapshot.cloud_threat_level[0] != '\0' ? snapshot.cloud_threat_level : "NONE");
+    Serial.print(",alert_text=");
+    Serial.print(snapshot.cloud_alert_text[0] != '\0' ? snapshot.cloud_alert_text : "NONE");
+    Serial.print(",action=");
+    Serial.print(snapshot.cloud_action[0] != '\0' ? snapshot.cloud_action : "NONE");
+    Serial.print(",command_type=");
+    Serial.print(snapshot.cloud_command_type[0] != '\0' ? snapshot.cloud_command_type : "NONE");
+    Serial.print(",last_update_ms=");
+    Serial.print(snapshot.cloud_last_update_ms);
+    Serial.print(",error=");
+    Serial.println(snapshot.cloud_error[0] != '\0' ? snapshot.cloud_error : "NONE");
+}
+
+void queueCloudTest(unsigned long now) {
+    if (!hasWifiCredentials() || !hasArkCredentials()) {
+        setCloudError("missing_credentials", now);
+        Serial.println("CLOUD,ERROR,reason=missing_credentials");
+        return;
+    }
+
+    CloudSensingEvent event = {};
+    CloudClient::buildTestEvent(event);
+    if (queueAiCloudAssessment(event, true, "TEST", now)) {
+        Serial.println("CLOUD,QUEUED,source=TEST");
+    } else {
+        Serial.println("CLOUD,ERROR,reason=queue_failed");
+    }
+}
+
+void beginAiCloudWifiIfNeeded(unsigned long now) {
+    if (!hasWifiCredentials()) {
+        return;
+    }
+
+    bool shouldBegin = false;
+    portENTER_CRITICAL(&dataMutex);
+    if (!aiCloud.wifi_started) {
+        aiCloud.wifi_started = true;
+        aiCloud.last_wifi_retry_ms = now;
+        shouldBegin = true;
+    }
+    portEXIT_CRITICAL(&dataMutex);
+
+    if (shouldBegin) {
+        WiFi.mode(WIFI_STA);
+        WiFi.persistent(false);
+        WiFi.setAutoReconnect(true);
+        WiFi.begin(FLYTOTAL_WIFI_SSID, FLYTOTAL_WIFI_PASSWORD);
+    }
+}
+
+void maintainAiCloudWifi(unsigned long now) {
+    if (!hasWifiCredentials()) {
+        return;
+    }
+    beginAiCloudWifiIfNeeded(now);
+    if (WiFi.status() == WL_CONNECTED) {
+        return;
+    }
+
+    bool retry = false;
+    portENTER_CRITICAL(&dataMutex);
+    if (aiCloud.last_wifi_retry_ms == 0 ||
+        (now - aiCloud.last_wifi_retry_ms) >= CloudConfig::WifiReconnectIntervalMs) {
+        aiCloud.last_wifi_retry_ms = now;
+        retry = true;
+    }
+    portEXIT_CRITICAL(&dataMutex);
+
+    if (retry) {
+        WiFi.begin(FLYTOTAL_WIFI_SSID, FLYTOTAL_WIFI_PASSWORD);
+    }
+}
+
 RuntimeInputControl getInputControlSnapshot() {
     RuntimeInputControl snapshot = {};
     portENTER_CRITICAL(&dataMutex);
@@ -2721,6 +2993,13 @@ UnifiedOutputSnapshot buildUnifiedOutputSnapshot(const SystemData &snapshot, con
     unified.is_multirotor_like = snapshot.is_multirotor_like;
     unified.multirotor_score = clampMultirotorScore(snapshot.multirotor_score);
     copyEventId(unified.target_verdict, sizeof(unified.target_verdict), normalizeOptionalField(snapshot.target_verdict, "UNKNOWN_TARGET"));
+    copyEventId(unified.cloud_alert_text, sizeof(unified.cloud_alert_text), normalizeOptionalField(snapshot.cloud_alert_text));
+    copyEventId(unified.cloud_threat_level, sizeof(unified.cloud_threat_level), normalizeOptionalField(snapshot.cloud_threat_level));
+    copyEventId(unified.cloud_action, sizeof(unified.cloud_action), normalizeOptionalField(snapshot.cloud_action));
+    copyEventId(unified.cloud_command_type, sizeof(unified.cloud_command_type), normalizeOptionalField(snapshot.cloud_command_type));
+    copyEventId(unified.cloud_error, sizeof(unified.cloud_error), normalizeOptionalField(snapshot.cloud_error));
+    unified.cloud_last_update_ms = snapshot.cloud_last_update_ms;
+    unified.cloud_online = snapshot.cloud_online;
     return unified;
 }
 
@@ -2850,6 +3129,20 @@ void printNormalizedStateFields(const UnifiedOutputSnapshot &snapshot) {
     Serial.print(snapshot.multirotor_score, 1);
     Serial.print(",target_verdict=");
     Serial.print(snapshot.target_verdict[0] != '\0' ? snapshot.target_verdict : "UNKNOWN_TARGET");
+    Serial.print(",cloud_online=");
+    Serial.print(snapshot.cloud_online ? 1 : 0);
+    Serial.print(",cloud_threat_level=");
+    Serial.print(snapshot.cloud_threat_level[0] != '\0' ? snapshot.cloud_threat_level : "NONE");
+    Serial.print(",cloud_alert_text=");
+    Serial.print(snapshot.cloud_alert_text[0] != '\0' ? snapshot.cloud_alert_text : "NONE");
+    Serial.print(",cloud_action=");
+    Serial.print(snapshot.cloud_action[0] != '\0' ? snapshot.cloud_action : "NONE");
+    Serial.print(",cloud_command_type=");
+    Serial.print(snapshot.cloud_command_type[0] != '\0' ? snapshot.cloud_command_type : "NONE");
+    Serial.print(",cloud_last_update_ms=");
+    Serial.print(snapshot.cloud_last_update_ms);
+    Serial.print(",cloud_error=");
+    Serial.print(snapshot.cloud_error[0] != '\0' ? snapshot.cloud_error : "NONE");
     Serial.print(",audio_state=");
     Serial.print(audioStateName(snapshot.audio_state));
     Serial.print(",uplink_state=");
@@ -3740,6 +4033,12 @@ void emitConfigStatus() {
     Serial.print(CloudConfig::HeartbeatMs);
     Serial.print(",event_report_ms=");
     Serial.print(CloudConfig::EventReportMs);
+    Serial.print(",ai_cloud_enabled_default=");
+    Serial.print(CloudConfig::AiEnabledByDefault ? 1 : 0);
+    Serial.print(",ai_cloud_queue_len=");
+    Serial.print(CloudConfig::AiQueueLength);
+    Serial.print(",ai_cloud_min_interval_ms=");
+    Serial.print(CloudConfig::AiMinRequestIntervalMs);
     Serial.print(",nodeb_serial_enabled=");
     Serial.print(AppSerialConfig::NodeBSerialEnabled ? 1 : 0);
     Serial.print(",nodeb_baud=");
@@ -4056,6 +4355,7 @@ void printHostCommandHelp() {
     Serial.println("    SUMMARY | SUMMARY,RESET");
     Serial.println("    SELFTEST");
     Serial.println("    FUSION,STATUS | FUSION,DEBUG | FUSION,ENABLE,1 | FUSION,ENABLE,0");
+    Serial.println("    CLOUD,STATUS | CLOUD,TEST | CLOUD,ENABLE,1 | CLOUD,ENABLE,0");
     Serial.println("    REALINPUT,STATUS | REALINPUT,OFF | REALINPUT,ON");
     Serial.println("    MONITOR,CLEAN | MONITOR,VERBOSE");
     Serial.println("  [Simulation]");
@@ -5188,6 +5488,35 @@ void handleHostCommand(const String &line) {
         } else {
             Serial.println("Invalid FUSION command. Use FUSION,STATUS, FUSION,DEBUG, FUSION,ENABLE,1, or FUSION,ENABLE,0.");
         }
+    } else if (command == "CLOUD") {
+        if (value == "STATUS" || value.length() == 0) {
+            emitCloudStatus();
+        } else if (value == "TEST") {
+            queueCloudTest(millis());
+        } else if (value.startsWith("ENABLE")) {
+            String enableToken = rawValue;
+            int enableComma = enableToken.indexOf(',');
+            if (enableComma >= 0) {
+                enableToken = enableToken.substring(enableComma + 1);
+            } else {
+                enableToken = value.substring(String("ENABLE").length());
+            }
+            enableToken.trim();
+            if (enableToken.startsWith("=")) {
+                enableToken = enableToken.substring(1);
+                enableToken.trim();
+            }
+            if (enableToken.length() == 0) {
+                Serial.println("Invalid CLOUD,ENABLE command. Use CLOUD,ENABLE,1 or CLOUD,ENABLE,0.");
+                return;
+            }
+            const bool enabled = boolFromToken(enableToken);
+            setAiCloudEnabled(enabled);
+            Serial.print("CLOUD automatic event upload ");
+            Serial.println(enabled ? "enabled." : "disabled.");
+        } else {
+            Serial.println("Invalid CLOUD command. Use CLOUD,STATUS, CLOUD,TEST, CLOUD,ENABLE,1, or CLOUD,ENABLE,0.");
+        }
     } else if (command == "RID") {
         if (value.length() == 0 || value == "STATUS") {
             emitRidStatus();
@@ -5681,6 +6010,13 @@ void handleHostCommand(const String &line) {
         globalData.is_multirotor_like = false;
         globalData.multirotor_score = 0.0f;
         copyEventId(globalData.target_verdict, sizeof(globalData.target_verdict), "UNKNOWN_TARGET");
+        copyEventId(globalData.cloud_alert_text, sizeof(globalData.cloud_alert_text), "NONE");
+        copyEventId(globalData.cloud_threat_level, sizeof(globalData.cloud_threat_level), "NONE");
+        copyEventId(globalData.cloud_action, sizeof(globalData.cloud_action), "NONE");
+        copyEventId(globalData.cloud_command_type, sizeof(globalData.cloud_command_type), "NONE");
+        copyEventId(globalData.cloud_error, sizeof(globalData.cloud_error), "NONE");
+        globalData.cloud_last_update_ms = 0;
+        globalData.cloud_online = false;
         refreshManualSimulationSnapshotLocked(millis());
         portEXIT_CRITICAL(&dataMutex);
         clearSimTrack();
@@ -5712,6 +6048,7 @@ void handleHostCommand(const String &line) {
         debugOutput.quiet_mode_enabled = AppSerialConfig::QuietModeEnabledByDefault;
         debugOutput.telemetry_initialized = false;
         uplinkOutput.enabled = AppSerialConfig::UplinkOutputEnabledByDefault;
+        setAiCloudEnabled(CloudConfig::AiEnabledByDefault);
         myGimbal.setTunings(runtimeKp, runtimeKd);
         Serial.println("Simulation state reset.");
     } else if (command == "STATUS") {
@@ -6793,6 +7130,9 @@ void CloudTask(void *pvParameters) {
             setUplinkState(UPLINK_SENDING, now);
             stageOutputSnapshot(snapshot, UPLINK_SENDING, now);
             emitCloudEvent(snapshot, now, "EVENT_OPENED", eventContext);
+            CloudSensingEvent aiEvent = {};
+            buildCloudEventFromSnapshot(snapshot, eventContext, aiEvent);
+            queueAiCloudAssessment(aiEvent, false, "EVENT_OPENED", now);
             setUplinkState(UPLINK_OK, now);
             uplinkFrameSent = true;
             bool reopen = lifecycle.last_closed_track_id != 0 &&
@@ -6921,6 +7261,62 @@ void CloudTask(void *pvParameters) {
     }
 }
 
+void AiCloudTask(void *pvParameters) {
+    (void)pvParameters;
+    registerCurrentTaskWatchdog("AI_Cloud_Task");
+    CloudClient client(CloudConfig::ArkEndpoint, CloudConfig::ArkModel, FLYTOTAL_ARK_API_KEY);
+
+    while (1) {
+        feedCurrentTaskWatchdog();
+        unsigned long now = millis();
+        maintainAiCloudWifi(now);
+
+        AiCloudQueueItem item = {};
+        if (aiCloudQueue != nullptr && xQueueReceive(aiCloudQueue, &item, pdMS_TO_TICKS(500)) == pdTRUE) {
+            portENTER_CRITICAL(&dataMutex);
+            aiCloud.request_in_flight = true;
+            portEXIT_CRITICAL(&dataMutex);
+
+            CloudAssessmentResult result = {};
+            if (!hasWifiCredentials() || !hasArkCredentials() || !client.hasCredentials()) {
+                setCloudError("missing_credentials", millis());
+                Serial.println("CLOUD,RESULT,ok=0,error=missing_credentials");
+            } else if (WiFi.status() != WL_CONNECTED) {
+                setCloudError("wifi_not_connected", millis());
+                Serial.print("CLOUD,RESULT,ok=0,error=wifi_not_connected,wifi=");
+                Serial.println(wifiStatusName(WiFi.status()));
+            } else {
+                const bool ok = client.assess(item.event, result);
+                setCloudResult(result, millis());
+                Serial.print("CLOUD,RESULT,ok=");
+                Serial.print(ok ? 1 : 0);
+                Serial.print(",source=");
+                Serial.print(item.source[0] != '\0' ? item.source : "UNKNOWN");
+                Serial.print(",event_id=");
+                Serial.print(item.event.event_id[0] != '\0' ? item.event.event_id : "NONE");
+                Serial.print(",http_status=");
+                Serial.print(result.http_status);
+                Serial.print(",threat_level=");
+                Serial.print(result.threat_level[0] != '\0' ? result.threat_level : "NONE");
+                Serial.print(",alert_text=");
+                Serial.print(result.alert_text[0] != '\0' ? result.alert_text : "NONE");
+                Serial.print(",action=");
+                Serial.print(result.action[0] != '\0' ? result.action : "NONE");
+                Serial.print(",command_type=");
+                Serial.print(result.command_type[0] != '\0' ? result.command_type : "NONE");
+                Serial.print(",error=");
+                Serial.println(result.error[0] != '\0' ? result.error : "NONE");
+            }
+
+            portENTER_CRITICAL(&dataMutex);
+            aiCloud.request_in_flight = false;
+            portEXIT_CRITICAL(&dataMutex);
+        }
+
+        feedCurrentTaskWatchdog();
+    }
+}
+
 void setup() {
     Serial.begin(AppSerialConfig::MonitorBaudRate);
     delay(AppSerialConfig::StartupDelayMs);
@@ -6936,6 +7332,13 @@ void setup() {
     copyEventId(globalData.fusion_reason, sizeof(globalData.fusion_reason), "NONE");
     copyEventId(globalData.fusion_stage, sizeof(globalData.fusion_stage), "NONE");
     copyEventId(globalData.target_verdict, sizeof(globalData.target_verdict), "UNKNOWN_TARGET");
+    copyEventId(globalData.cloud_alert_text, sizeof(globalData.cloud_alert_text), "NONE");
+    copyEventId(globalData.cloud_threat_level, sizeof(globalData.cloud_threat_level), "NONE");
+    copyEventId(globalData.cloud_action, sizeof(globalData.cloud_action), "NONE");
+    copyEventId(globalData.cloud_command_type, sizeof(globalData.cloud_command_type), "NONE");
+    copyEventId(globalData.cloud_error, sizeof(globalData.cloud_error), "NONE");
+    globalData.cloud_last_update_ms = 0;
+    globalData.cloud_online = false;
     globalData.fusion_enabled = FusionConfig::Enabled;
     globalData.timestamp_ms = millis();
     syncActiveNodeRuntimeCacheLocked();
@@ -6955,6 +7358,8 @@ void setup() {
     Serial.println("========================================");
 
     initializeWatchdog();
+    aiCloudQueue = xQueueCreate(CloudConfig::AiQueueLength, sizeof(AiCloudQueueItem));
+    beginAiCloudWifiIfNeeded(millis());
 
     xTaskCreatePinnedToCore(RadarTask, "Radar_Task", 4096, NULL, 1, NULL, 0);
     if (AppSerialConfig::NodeBSerialEnabled) {
@@ -6965,6 +7370,7 @@ void setup() {
     }
     xTaskCreatePinnedToCore(TrackingTask, "Track_Task", 24576, NULL, 2, NULL, 1);
     xTaskCreatePinnedToCore(CloudTask, "Cloud_Task", 12288, NULL, 1, NULL, 1);
+    xTaskCreatePinnedToCore(AiCloudTask, "AI_Cloud_Task", CloudConfig::AiTaskStackSize, NULL, 1, NULL, 0);
 }
 
 void loop() {

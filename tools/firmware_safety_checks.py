@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 MAIN = ROOT / "src" / "main.cpp"
 CONFIG = ROOT / "include" / "AppConfig.h"
 FUSION = ROOT / "lib" / "Fusion" / "Fusion.cpp"
+CLOUD_CLIENT = ROOT / "lib" / "CloudClient" / "CloudClient.cpp"
+GITIGNORE = ROOT / ".gitignore"
 
 
 def fail(message: str) -> None:
@@ -25,6 +27,8 @@ def main() -> int:
     main_cpp = MAIN.read_text(encoding="utf-8")
     config_h = CONFIG.read_text(encoding="utf-8")
     fusion_cpp = FUSION.read_text(encoding="utf-8")
+    cloud_client_cpp = CLOUD_CLIENT.read_text(encoding="utf-8")
+    gitignore = GITIGNORE.read_text(encoding="utf-8")
 
     enters = len(re.findall(r"portENTER_CRITICAL\(&dataMutex\)", main_cpp))
     exits = len(re.findall(r"portEXIT_CRITICAL\(&dataMutex\)", main_cpp))
@@ -47,6 +51,29 @@ def main() -> int:
 
     require(fusion_cpp, "clampScore(data.radar_track.multirotor_score)", "Fusion multirotor score clamp")
     require(main_cpp, "clampMultirotorScore(snapshot.multirotor_score)", "main multirotor score clamp")
+
+    require(gitignore, "include/secrets.h", "local secrets ignore rule")
+    require(cloud_client_cpp, "esp_crt_bundle_attach", "HTTPS cert bundle validation")
+    require(main_cpp, "CLOUD,TEST", "manual cloud test command")
+    require(main_cpp, "CLOUD,ENABLE", "cloud enable command")
+    require(main_cpp, "CLOUD,STATUS", "cloud status command")
+    require(config_h, "AiEnabledByDefault = false", "CLOUD default disabled")
+
+    scanned_files = [
+        MAIN,
+        CONFIG,
+        ROOT / "include" / "SharedData.h",
+        ROOT / "include" / "secrets.example.h",
+        ROOT / "lib" / "CloudClient" / "CloudClient.h",
+        CLOUD_CLIENT,
+        ROOT / "platformio.ini",
+        ROOT / "tools" / "node_a_serial_bridge_NodeA串口桥接.py",
+    ]
+    key_pattern = re.compile(r"ark-[A-Za-z0-9_-]{8,}")
+    for path in scanned_files:
+        text = path.read_text(encoding="utf-8")
+        if key_pattern.search(text):
+            fail(f"possible Ark API key leaked in {path.relative_to(ROOT)}")
 
     print("firmware_safety_checks: PASS")
     return 0

@@ -186,6 +186,13 @@ struct SystemData {
     bool is_multirotor_like;
     float multirotor_score;
     char target_verdict[40];
+    char cloud_alert_text[128];
+    char cloud_threat_level[16];
+    char cloud_action[64];
+    char cloud_command_type[32];
+    char cloud_error[64];
+    unsigned long cloud_last_update_ms;
+    bool cloud_online;
 };
 
 struct UnifiedOutputSnapshot {
@@ -264,6 +271,13 @@ struct UnifiedOutputSnapshot {
     bool is_multirotor_like;
     float multirotor_score;
     char target_verdict[40];
+    char cloud_alert_text[128];
+    char cloud_threat_level[16];
+    char cloud_action[64];
+    char cloud_command_type[32];
+    char cloud_error[64];
+    unsigned long cloud_last_update_ms;
+    bool cloud_online;
 };
 
 struct EventObject {
