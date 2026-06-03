@@ -28,7 +28,9 @@ constexpr const char *kSystemPrompt =
     "判定规则：\n"
     "- 合作目标（RID 白名单通过）→ threat_level=LOW，command.type=NONE\n"
     "- 非合作 + 视觉确认 + 高风险 → threat_level=HIGH/CRITICAL\n"
-    "- 多旋翼评分高 + 非合作 → 建议 TRIGGER_PARACHUTE";
+    "- 多旋翼评分高 + 非合作 → 建议 TRIGGER_PARACHUTE\n"
+    "- 若建议 ADJUST_THRESHOLD, 在 params 给 {\"event_threshold\": 数值}(50-90)\n"
+    "- 若建议 SWITCH_MODE, 在 params 给 {\"mode\":\"ENHANCED|STANDARD|ECONOMY\", \"reason\":\"理由\"}";
 
 struct ResponseBuffer {
     char *data;
@@ -52,6 +54,9 @@ void resetResult(CloudAssessmentResult &result, const char *error = "NONE") {
     copyText(result.action, sizeof(result.action), "保持本地闭环");
     copyText(result.alert_text, sizeof(result.alert_text), "云端评估不可用");
     copyText(result.command_type, sizeof(result.command_type), "NONE");
+    result.command_threshold_value = 0.0f;
+    copyText(result.command_mode, sizeof(result.command_mode), "STANDARD");
+    copyText(result.command_reason, sizeof(result.command_reason), "NONE");
     copyText(result.error, sizeof(result.error), error);
 }
 
@@ -157,6 +162,14 @@ const char *jsonStringValue(const cJSON *object, const char *name) {
     return nullptr;
 }
 
+float jsonNumberValue(const cJSON *object, const char *name, float fallback = 0.0f) {
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, name);
+    if (cJSON_IsNumber(item)) {
+        return static_cast<float>(item->valuedouble);
+    }
+    return fallback;
+}
+
 bool parseAssessmentJson(const char *json, CloudAssessmentResult &result) {
     if (json == nullptr || json[0] == '\0') {
         copyText(result.error, sizeof(result.error), "empty_assessment");
@@ -175,12 +188,19 @@ bool parseAssessmentJson(const char *json, CloudAssessmentResult &result) {
     const char *alertText = jsonStringValue(root, "alert_text");
     const cJSON *command = cJSON_GetObjectItemCaseSensitive(root, "command");
     const char *commandType = cJSON_IsObject(command) ? jsonStringValue(command, "type") : nullptr;
+    const cJSON *params = cJSON_IsObject(command) ? cJSON_GetObjectItemCaseSensitive(command, "params") : nullptr;
+    const bool hasParams = cJSON_IsObject(params);
+    const char *commandMode = hasParams ? jsonStringValue(params, "mode") : nullptr;
+    const char *commandReason = hasParams ? jsonStringValue(params, "reason") : nullptr;
 
     copyText(result.threat_level, sizeof(result.threat_level), threatLevel, "LOW");
     copyText(result.assessment, sizeof(result.assessment), assessment, "云端评估已返回");
     copyText(result.action, sizeof(result.action), action, "保持本地闭环");
     copyText(result.alert_text, sizeof(result.alert_text), alertText, "云端评估完成");
     copyText(result.command_type, sizeof(result.command_type), commandType, "NONE");
+    result.command_threshold_value = hasParams ? jsonNumberValue(params, "event_threshold", 0.0f) : 0.0f;
+    copyText(result.command_mode, sizeof(result.command_mode), commandMode, "STANDARD");
+    copyText(result.command_reason, sizeof(result.command_reason), commandReason, "NONE");
     copyText(result.error, sizeof(result.error), "NONE");
     cJSON_Delete(root);
     return true;

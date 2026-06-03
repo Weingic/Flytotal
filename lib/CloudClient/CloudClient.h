@@ -15,6 +15,8 @@ constexpr size_t AssessmentSize = 96;
 constexpr size_t ActionSize = 64;
 constexpr size_t AlertTextSize = 128;
 constexpr size_t CommandTypeSize = 32;
+constexpr size_t CommandModeSize = 16;
+constexpr size_t CommandReasonSize = 64;
 constexpr size_t ErrorSize = 96;
 constexpr uint32_t HttpTimeoutMs = 5000;
 constexpr size_t ResponseBufferSize = 6144;
@@ -50,6 +52,9 @@ struct CloudAssessmentResult {
     char action[CloudClientLimits::ActionSize];
     char alert_text[CloudClientLimits::AlertTextSize];
     char command_type[CloudClientLimits::CommandTypeSize];
+    float command_threshold_value;
+    char command_mode[CloudClientLimits::CommandModeSize];
+    char command_reason[CloudClientLimits::CommandReasonSize];
     char error[CloudClientLimits::ErrorSize];
 };
 

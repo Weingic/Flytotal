@@ -65,6 +65,7 @@ public:
         WhitelistStatus wl_status,
         VisionState vision_state,
         AudioState audio_state,
+        float event_threshold_override,
         unsigned long now
     );
 };

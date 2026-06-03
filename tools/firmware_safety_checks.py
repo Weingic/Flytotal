@@ -58,6 +58,22 @@ def main() -> int:
     require(main_cpp, "CLOUD,ENABLE", "cloud enable command")
     require(main_cpp, "CLOUD,STATUS", "cloud status command")
     require(config_h, "AiEnabledByDefault = false", "CLOUD default disabled")
+    require(main_cpp, "applyCloudCommand", "cloud downlink command execution")
+    require(main_cpp, "runtime_event_threshold = 0.0f", "runtime event threshold default override disabled")
+    require(main_cpp, "effectiveEventThreshold", "runtime event threshold display/runtime helper")
+    require(main_cpp, "CLOUD,APPLY", "offline cloud command apply test command")
+    require(main_cpp, "CLOUD,RESET", "offline cloud command reset command")
+    require(main_cpp, "DOWNGRADE_REJECTED_THREAT_ACTIVE", "edge veto for unsafe economy downgrade")
+    require(main_cpp, "PARACHUTE_INTENT_LOGGED", "parachute intent logged only")
+    require(main_cpp, "NOT_INTEGRATED", "parachute hardware honesty marker")
+    require(main_cpp, "refreshFusionRuntimeLocked(now)", "cloud switch mode refreshes fusion runtime")
+    require(main_cpp, "syncActiveNodeRuntimeCacheLocked()", "cloud command syncs active runtime cache")
+    require(ROOT.joinpath("lib", "HunterAction", "HunterAction.h").read_text(encoding="utf-8"), "event_threshold_override", "HunterAction runtime threshold parameter")
+    require(ROOT.joinpath("lib", "HunterAction", "HunterAction.cpp").read_text(encoding="utf-8"), "effective_event_threshold", "HunterAction effective event threshold")
+    require(ROOT.joinpath("lib", "CloudClient", "CloudClient.h").read_text(encoding="utf-8"), "command_threshold_value", "cloud threshold command result field")
+    require(ROOT.joinpath("lib", "CloudClient", "CloudClient.h").read_text(encoding="utf-8"), "command_mode", "cloud switch mode command result field")
+    require(ROOT.joinpath("lib", "CloudClient", "CloudClient.cpp").read_text(encoding="utf-8"), "event_threshold", "cloud threshold command params parsing")
+    require(ROOT.joinpath("lib", "CloudClient", "CloudClient.cpp").read_text(encoding="utf-8"), "command_reason", "cloud switch reason parsing")
 
     scanned_files = [
         MAIN,

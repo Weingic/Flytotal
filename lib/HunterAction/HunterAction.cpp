@@ -256,9 +256,12 @@ HunterOutput HunterAction::update(
     WhitelistStatus wl_status,
     VisionState vision_state,
     AudioState audio_state,
+    float event_threshold_override,
     unsigned long now
 ) {
     HunterOutput output = {};
+    const float effective_event_threshold =
+        event_threshold_override > 0.0f ? constrain(event_threshold_override, 50.0f, 90.0f) : HunterConfig::EventThreshold;
     HunterRiskAssessment assessment = computeRiskAssessment(track, rid_status, wl_status, vision_state, audio_state);
     output.risk_score = assessment.score;
     output.risk_reason_flags = assessment.reason_flags;
@@ -282,7 +285,7 @@ HunterOutput HunterAction::update(
         setState(HUNTER_RID_MATCHED, now);
     } else {
         HunterState target_state = HUNTER_TRACKING;
-        if (output.risk_score >= HunterConfig::EventThreshold) {
+        if (output.risk_score >= effective_event_threshold) {
             target_state = HUNTER_EVENT_LOCKED;
         } else if (output.risk_score >= HunterConfig::HighRiskThreshold) {
             target_state = HUNTER_HIGH_RISK;
