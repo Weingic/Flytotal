@@ -1342,6 +1342,21 @@
         <div class="status-row"><div class="label">最近更新时间</div><div class="value" id="nodeTimeValue">--</div></div>
       </div>
 
+      <div class="panel status-card stale" id="cloudThreatCard">
+        <h2 class="status-title">云端大模型威胁评估</h2>
+        <p class="status-subtitle">NodeA 上传多源感知数据到豆包大模型，返回威胁评估与处置指令；边缘端保留安全否决权。</p>
+        <div class="status-row"><div class="label">云端连接</div><div class="value" id="cloudOnlineValue"><span class="pill offline">OFFLINE</span></div></div>
+        <div class="status-row"><div class="label">威胁等级</div><div class="value" id="cloudThreatLevelValue"><span class="pill normal">NONE</span></div></div>
+        <div class="status-row"><div class="label">告警文本</div><div class="value" id="cloudAlertTextValue">NONE</div></div>
+        <div class="status-row"><div class="label">处置建议</div><div class="value" id="cloudActionValue">NONE</div></div>
+        <div class="status-row"><div class="label">下行指令</div><div class="value" id="cloudCommandTypeValue">NONE</div></div>
+        <div class="status-row"><div class="label">指令效果</div><div class="value" id="cloudCommandEffectValue"><span class="pill normal">NONE</span></div></div>
+        <div class="status-row"><div class="label">指令已执行</div><div class="value" id="cloudCommandAppliedValue"><span class="pill normal">NO</span></div></div>
+        <div class="status-row"><div class="label">运行时阈值</div><div class="value" id="cloudThresholdValue">默认</div></div>
+        <div class="status-row"><div class="label">错误信息</div><div class="value" id="cloudErrorValue">NONE</div></div>
+        <div class="status-row"><div class="label">最近更新时间</div><div class="value" id="cloudTimeValue">--</div></div>
+      </div>
+
       <div class="panel status-card" id="parameterCard">
         <h2 class="status-title">参数观察</h2>
         <p class="status-subtitle">先展示当前已经能从 SELFTEST 里稳定读到的参数和值，便于后面真实联调时对照调参。</p>
@@ -2180,6 +2195,30 @@
         return semanticPill(label, "warn");
       }
       return semanticPill(label, "normal");
+    }
+
+    function cloudThreatPill(threatLevel) {
+      const value = String(threatLevel || "NONE").toUpperCase();
+      if (value === "CRITICAL") return semanticPill(value, "danger");
+      if (value === "HIGH") return semanticPill(value, "warn");
+      if (value === "MEDIUM") return semanticPill(value, "warn");
+      if (value === "LOW") return semanticPill(value, "ok");
+      return semanticPill(value, "normal");
+    }
+
+    function cloudCommandEffectPill(effect) {
+      const value = String(effect || "NONE");
+      const upper = value.toUpperCase();
+      if (upper.indexOf("DOWNGRADE_REJECTED") >= 0) {
+        return semanticPill("边缘否决: " + value, "danger");
+      }
+      if (upper.indexOf("ENHANCED") >= 0 || upper.indexOf("THRESHOLD") >= 0 || upper.indexOf("ALERT") >= 0) {
+        return semanticPill(value, "warn");
+      }
+      if (upper === "NONE" || value === "") {
+        return semanticPill("NONE", "normal");
+      }
+      return semanticPill(value, "ok");
     }
 
     function triggerPill(active) {
@@ -3100,6 +3139,46 @@
       document.getElementById("nodeTimeValue").textContent =
         `${formatTime(status.last_update_ms)} / ${Math.round((status.stale_age_ms ?? 0) / 1000)}s`;
       updateOperationCoach();
+    }
+
+    function setCloudThreatStatus(status) {
+      const cloudCard = document.getElementById("cloudThreatCard");
+      if (!cloudCard) return;
+      if (!status || !status.available) {
+        cloudCard.classList.remove("live");
+        cloudCard.classList.add("stale");
+        document.getElementById("cloudOnlineValue").innerHTML = semanticPill("OFFLINE", "offline");
+        document.getElementById("cloudThreatLevelValue").innerHTML = cloudThreatPill("NONE");
+        document.getElementById("cloudAlertTextValue").textContent = "NONE";
+        document.getElementById("cloudActionValue").textContent = "NONE";
+        document.getElementById("cloudCommandTypeValue").textContent = "NONE";
+        document.getElementById("cloudCommandEffectValue").innerHTML = cloudCommandEffectPill("NONE");
+        document.getElementById("cloudCommandAppliedValue").innerHTML = semanticPill("NO", "normal");
+        document.getElementById("cloudThresholdValue").textContent = "默认";
+        document.getElementById("cloudErrorValue").textContent = "NONE";
+        document.getElementById("cloudTimeValue").textContent = "--";
+        return;
+      }
+      const cloudOnline = Number(status.cloud_online ?? 0) === 1;
+      cloudCard.classList.toggle("live", cloudOnline);
+      cloudCard.classList.toggle("stale", !cloudOnline);
+      document.getElementById("cloudOnlineValue").innerHTML =
+        semanticPill(cloudOnline ? "ONLINE" : "OFFLINE", cloudOnline ? "ok" : "offline");
+      document.getElementById("cloudThreatLevelValue").innerHTML =
+        cloudThreatPill(status.cloud_threat_level || "NONE");
+      document.getElementById("cloudAlertTextValue").textContent = status.cloud_alert_text || "NONE";
+      document.getElementById("cloudActionValue").textContent = status.cloud_action || "NONE";
+      document.getElementById("cloudCommandTypeValue").textContent = status.cloud_command_type || "NONE";
+      document.getElementById("cloudCommandEffectValue").innerHTML =
+        cloudCommandEffectPill(status.cloud_command_effect || "NONE");
+      const applied = Number(status.cloud_command_applied ?? 0) === 1;
+      document.getElementById("cloudCommandAppliedValue").innerHTML =
+        semanticPill(applied ? "YES" : "NO", applied ? "ok" : "normal");
+      const threshold = Number(status.runtime_event_threshold ?? 0);
+      document.getElementById("cloudThresholdValue").textContent =
+        threshold > 0 ? `${threshold.toFixed(1)}（大模型覆盖）` : "默认 76.0";
+      document.getElementById("cloudErrorValue").textContent = status.cloud_error || "NONE";
+      document.getElementById("cloudTimeValue").textContent = formatTime(status.cloud_last_update_ms);
     }
 
     function setParameterStatus(status) {
@@ -4690,6 +4769,7 @@
         ]);
         setRuntimeStatus(status);
         setNodeStatus(nodeStatus);
+        setCloudThreatStatus(nodeStatus);
         renderNodeFleet(nodeFleet);
         renderCoSensing(coSensing, nodeFleet);
         setParameterStatus(nodeStatus);
