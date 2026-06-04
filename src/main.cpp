@@ -42,6 +42,7 @@ uint32_t nodeBReconnectCount = 0;
 unsigned long nodeBLastReconnectMs = 0;
 bool nodeBNeedsReconnect = false;
 bool nodeBReconnectLockedOut = false;
+bool nodeBUartLockoutWarned = false;
 
 GimbalPredictor myGimbal(GimbalConfig::PredictorKp, GimbalConfig::PredictorKd);
 GimbalController myGimbalController(myGimbal);
@@ -3412,7 +3413,7 @@ bool shouldEmitVerboseLocalDebug() {
 }
 
 bool shouldEmitFlowDebug() {
-    return debugOutput.enabled || debugOutput.quiet_mode_enabled;
+    return debugOutput.enabled && !debugOutput.quiet_mode_enabled;
 }
 
 void refreshDerivedSystemFields(unsigned long now) {
@@ -4966,6 +4967,7 @@ void beginNodeBSerialLink();
 void resetNodeBReconnectStateLocked() {
     nodeBNeedsReconnect = false;
     nodeBReconnectLockedOut = false;
+    nodeBUartLockoutWarned = false;
     nodeBReconnectCount = 0;
     nodeBLastReconnectMs = 0;
 }
@@ -6669,6 +6671,7 @@ void restartNodeBSerialIfDue(unsigned long now) {
     uint32_t reconnectCount = 0;
     unsigned long lastReconnectMs = 0;
     bool lockedOut = false;
+    bool shouldWarnLockout = false;
     portENTER_CRITICAL(&dataMutex);
     reconnectCount = nodeBReconnectCount;
     lastReconnectMs = nodeBLastReconnectMs;
@@ -6677,10 +6680,17 @@ void restartNodeBSerialIfDue(unsigned long now) {
         nodeBReconnectLockedOut = true;
         nodeBNeedsReconnect = false;
         lockedOut = true;
+        if (!nodeBUartLockoutWarned) {
+            nodeBUartLockoutWarned = true;
+            shouldWarnLockout = true;
+        }
     }
     portEXIT_CRITICAL(&dataMutex);
 
     if (lockedOut) {
+        if (shouldWarnLockout) {
+            Serial.println("NODEB,UART_LOCKOUT,reason=max_reconnect_attempts");
+        }
         return;
     }
 
@@ -6705,10 +6715,14 @@ void restartNodeBSerialIfDue(unsigned long now) {
         nodeBReconnectLockedOut = true;
         nodeBNeedsReconnect = false;
         reachedLimit = true;
+        if (!nodeBUartLockoutWarned) {
+            nodeBUartLockoutWarned = true;
+            shouldWarnLockout = true;
+        }
     }
     portEXIT_CRITICAL(&dataMutex);
 
-    if (debugOutput.enabled || debugOutput.quiet_mode_enabled) {
+    if (debugOutput.enabled) {
         Serial.print("NODEB,UART_RESTART,count=");
         Serial.print(countAfterRestart);
         Serial.print(",interval_ms=");
@@ -6720,7 +6734,7 @@ void restartNodeBSerialIfDue(unsigned long now) {
         Serial.print(",locked_out=");
         Serial.println(reachedLimit ? 1 : 0);
     }
-    if (reachedLimit) {
+    if (shouldWarnLockout || (reachedLimit && debugOutput.enabled)) {
         Serial.println("NODEB,UART_LOCKOUT,reason=max_reconnect_attempts");
     }
 }
@@ -7559,28 +7573,30 @@ void AiCloudTask(void *pvParameters) {
                 const unsigned long completedAt = millis();
                 setCloudResult(result, completedAt);
                 applyCloudCommand(result, completedAt);
-                Serial.print("CLOUD,RESULT,ok=");
-                Serial.print(ok ? 1 : 0);
-                Serial.print(",source=");
-                Serial.print(item.source[0] != '\0' ? item.source : "UNKNOWN");
-                Serial.print(",event_id=");
-                Serial.print(item.event.event_id[0] != '\0' ? item.event.event_id : "NONE");
-                Serial.print(",http_status=");
-                Serial.print(result.http_status);
-                Serial.print(",threat_level=");
-                Serial.print(result.threat_level[0] != '\0' ? result.threat_level : "NONE");
-                Serial.print(",alert_text=");
-                Serial.print(result.alert_text[0] != '\0' ? result.alert_text : "NONE");
-                Serial.print(",action=");
-                Serial.print(result.action[0] != '\0' ? result.action : "NONE");
-                Serial.print(",command_type=");
-                Serial.print(result.command_type[0] != '\0' ? result.command_type : "NONE");
-                Serial.print(",command_mode=");
-                Serial.print(result.command_mode[0] != '\0' ? result.command_mode : "STANDARD");
-                Serial.print(",command_threshold=");
-                Serial.print(result.command_threshold_value, 1);
-                Serial.print(",error=");
-                Serial.println(result.error[0] != '\0' ? result.error : "NONE");
+                if (!ok || debugOutput.enabled) {
+                    Serial.print("CLOUD,RESULT,ok=");
+                    Serial.print(ok ? 1 : 0);
+                    Serial.print(",source=");
+                    Serial.print(item.source[0] != '\0' ? item.source : "UNKNOWN");
+                    Serial.print(",event_id=");
+                    Serial.print(item.event.event_id[0] != '\0' ? item.event.event_id : "NONE");
+                    Serial.print(",http_status=");
+                    Serial.print(result.http_status);
+                    Serial.print(",threat_level=");
+                    Serial.print(result.threat_level[0] != '\0' ? result.threat_level : "NONE");
+                    Serial.print(",alert_text=");
+                    Serial.print(result.alert_text[0] != '\0' ? result.alert_text : "NONE");
+                    Serial.print(",action=");
+                    Serial.print(result.action[0] != '\0' ? result.action : "NONE");
+                    Serial.print(",command_type=");
+                    Serial.print(result.command_type[0] != '\0' ? result.command_type : "NONE");
+                    Serial.print(",command_mode=");
+                    Serial.print(result.command_mode[0] != '\0' ? result.command_mode : "STANDARD");
+                    Serial.print(",command_threshold=");
+                    Serial.print(result.command_threshold_value, 1);
+                    Serial.print(",error=");
+                    Serial.println(result.error[0] != '\0' ? result.error : "NONE");
+                }
             }
 
             portENTER_CRITICAL(&dataMutex);
