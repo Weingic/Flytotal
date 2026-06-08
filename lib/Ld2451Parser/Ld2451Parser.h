@@ -28,6 +28,7 @@ struct Ld2451ParserStats {
     uint32_t bad_tail;
     uint32_t bad_payload;
     uint32_t invalid_field;
+    uint32_t crc_error_count;
 };
 
 class Ld2451Parser {
@@ -63,4 +64,5 @@ private:
     void rejectBadTail();
     void rejectBadPayload();
     void rejectInvalidField();
+    void rejectCrcError();
 };

@@ -9,6 +9,14 @@ constexpr int8_t MinAngleDeg = -90;
 constexpr int8_t MaxAngleDeg = 90;
 constexpr uint16_t MaxSpeedKmh = 250;
 
+uint8_t xorChecksum(const uint8_t *data, uint16_t length) {
+    uint8_t checksum = 0;
+    for (uint16_t index = 0; index < length; ++index) {
+        checksum ^= data[index];
+    }
+    return checksum;
+}
+
 int selectedScore(const Ld2451Target &target) {
     int score = 0;
     score += target.approach ? 10000 : 0;
@@ -66,6 +74,11 @@ void Ld2451Parser::rejectBadPayload() {
 
 void Ld2451Parser::rejectInvalidField() {
     stats_.invalid_field++;
+    stats_.rejected++;
+}
+
+void Ld2451Parser::rejectCrcError() {
+    stats_.crc_error_count++;
     stats_.rejected++;
 }
 
@@ -152,9 +165,15 @@ bool Ld2451Parser::parsePayload() {
         rejectInvalidField();
         return false;
     }
-    const uint16_t expectedLength = 2 + static_cast<uint16_t>(parsed.target_count) * 5;
-    if (payload_length_ != expectedLength) {
+
+    const uint16_t structuralLength = 2 + static_cast<uint16_t>(parsed.target_count) * 5;
+    const bool hasOptionalXor = payload_length_ == static_cast<uint16_t>(structuralLength + 1);
+    if (payload_length_ != structuralLength && !hasOptionalXor) {
         rejectBadLength();
+        return false;
+    }
+    if (hasOptionalXor && xorChecksum(payload_, structuralLength) != payload_[structuralLength]) {
+        rejectCrcError();
         return false;
     }
 

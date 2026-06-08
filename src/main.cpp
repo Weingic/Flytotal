@@ -272,6 +272,13 @@ struct HandoverRequest {
     char target_node[16];
 };
 
+enum HandoverFlowState {
+    HANDOVER_FLOW_SINGLE_NODE,
+    HANDOVER_FLOW_PENDING,
+    HANDOVER_FLOW_ACTIVE,
+    HANDOVER_FLOW_DONE
+};
+
 struct HandoverStatus {
     bool pending;
     unsigned long pending_since_ms;
@@ -280,6 +287,8 @@ struct HandoverStatus {
     char last_result[24];
     char last_target[16];
     char last_event_id[32];
+    HandoverFlowState state;
+    unsigned long state_since_ms;
 };
 
 struct LastEventSnapshot {
@@ -381,11 +390,24 @@ DebugOutputControl debugOutput = {
 };
 UplinkOutputControl uplinkOutput = {AppSerialConfig::UplinkOutputEnabledByDefault};
 AiCloudControl aiCloud = {CloudConfig::AiEnabledByDefault, false, false, 0, 0, {0}};
+uint32_t aiCloudDroppedCount = 0;
+unsigned long lastCloudErrLogMs = 0;
+char lastCloudErrType[32] = {0};
 RuntimeInputControl inputControl = {true, true, true};
 SafetyControl safetyControl = {false};
 ServoDiagnosticControl servoDiagnostic = {false, 0, 0};
 HandoverRequest handoverRequest = {false, 0, {0}};
-HandoverStatus handoverStatus = {false, 0, {0}, 0, {0}, {0}, {0}};
+HandoverStatus handoverStatus = {
+    false,
+    0,
+    {0},
+    0,
+    {0},
+    {0},
+    {0},
+    HANDOVER_FLOW_SINGLE_NODE,
+    0
+};
 LastEventSnapshot lastEventSnapshot = {
     false,
     0,
@@ -432,6 +454,10 @@ constexpr unsigned long SimTrackHoldMs = 1500;
 constexpr unsigned long GimbalDebugIntervalMs = 250;
 constexpr unsigned long DataDebugIntervalMs = 250;
 constexpr unsigned long StateDebugIntervalMs = 250;
+constexpr unsigned long CloudErrorLogMinIntervalMs = 10000;
+constexpr float HandoverPendingBoundaryXmm = -1000.0f;
+constexpr float HandoverActiveBoundaryXmm = 1000.0f;
+constexpr float HandoverDoneBoundaryXmm = 5000.0f;
 constexpr float SafePanMinDeg = 80.0f;
 constexpr float SafePanMaxDeg = 100.0f;
 constexpr float SafeTiltMinDeg = 80.0f;
@@ -2042,6 +2068,8 @@ const char *normalizeOptionalField(const char *value, const char *fallback = "NO
     return (value != nullptr && value[0] != '\0') ? value : fallback;
 }
 
+const char *handoverContinuityHint(HandoverFlowState state);
+
 bool parseKeyValueToken(const String &payload, const char *key, String &out) {
     int start = 0;
     while (start <= payload.length()) {
@@ -2116,6 +2144,28 @@ const char *wifiStatusName(wl_status_t status) {
         default:
             return "UNKNOWN";
     }
+}
+
+bool shouldEmitCloudFailureLog(const char *errorType, unsigned long now) {
+    const char *normalizedType = normalizeOptionalField(errorType, "unknown");
+    bool shouldEmit = false;
+    portENTER_CRITICAL(&dataMutex);
+    const bool errorChanged = strcmp(lastCloudErrType, normalizedType) != 0;
+    const bool intervalElapsed =
+        lastCloudErrLogMs == 0 ||
+        (now - lastCloudErrLogMs) >= CloudErrorLogMinIntervalMs;
+    shouldEmit = debugOutput.enabled || errorChanged || intervalElapsed;
+    if (shouldEmit) {
+        copyEventId(lastCloudErrType, sizeof(lastCloudErrType), normalizedType);
+        lastCloudErrLogMs = now;
+    }
+    portEXIT_CRITICAL(&dataMutex);
+    return shouldEmit;
+}
+
+void resetCloudFailureLogStateLocked() {
+    lastCloudErrLogMs = 0;
+    lastCloudErrType[0] = '\0';
 }
 
 void refreshFusionRuntimeLocked(unsigned long now);
@@ -2428,6 +2478,13 @@ bool queueAiCloudAssessment(const CloudSensingEvent &event, bool force, const ch
     item.event = event;
     if (xQueueSend(aiCloudQueue, &item, 0) != pdTRUE) {
         setCloudError("queue_full", now);
+        uint32_t droppedTotal = 0;
+        portENTER_CRITICAL(&dataMutex);
+        aiCloudDroppedCount++;
+        droppedTotal = aiCloudDroppedCount;
+        portEXIT_CRITICAL(&dataMutex);
+        Serial.print("CLOUD,DROP,reason=queue_full,dropped_total=");
+        Serial.println(droppedTotal);
         return false;
     }
     return true;
@@ -2446,9 +2503,11 @@ void setAiCloudEnabled(bool enabled) {
 void emitCloudStatus() {
     SystemData snapshot = {};
     AiCloudControl control = {};
+    uint32_t droppedTotal = 0;
     portENTER_CRITICAL(&dataMutex);
     snapshot = globalData;
     control = aiCloud;
+    droppedTotal = aiCloudDroppedCount;
     portEXIT_CRITICAL(&dataMutex);
 
     Serial.print("CLOUD,STATUS,enabled=");
@@ -2459,6 +2518,8 @@ void emitCloudStatus() {
     Serial.print(wifiStatusName(WiFi.status()));
     Serial.print(",request_in_flight=");
     Serial.print(control.request_in_flight ? 1 : 0);
+    Serial.print(",dropped_total=");
+    Serial.print(droppedTotal);
     Serial.print(",cloud_online=");
     Serial.print(snapshot.cloud_online ? 1 : 0);
     Serial.print(",threat_level=");
@@ -2734,14 +2795,22 @@ void populateCurrentEventContinuityFieldsLocked() {
         copyEventId(currentEventObject.continuity_hint, sizeof(currentEventObject.continuity_hint), "SINGLE_NODE");
     }
 
-    if (handoverStatus.pending && handoverStatus.pending_target[0] != '\0') {
+    if (handoverStatus.state != HANDOVER_FLOW_SINGLE_NODE) {
+        const char *target =
+            handoverStatus.pending_target[0] != '\0'
+                ? handoverStatus.pending_target
+                : handoverStatus.last_target;
         copyEventId(currentEventObject.handoff_from, sizeof(currentEventObject.handoff_from), NodeConfig::NodeId);
-        copyEventId(currentEventObject.handoff_to, sizeof(currentEventObject.handoff_to), handoverStatus.pending_target);
-        copyEventId(currentEventObject.continuity_hint, sizeof(currentEventObject.continuity_hint), "HANDOFF_PENDING");
+        copyEventId(currentEventObject.handoff_to, sizeof(currentEventObject.handoff_to), normalizeOptionalField(target));
+        copyEventId(
+            currentEventObject.continuity_hint,
+            sizeof(currentEventObject.continuity_hint),
+            handoverContinuityHint(handoverStatus.state)
+        );
     } else if (strcmp(handoverStatus.last_result, "EMITTED") == 0 && handoverStatus.last_target[0] != '\0') {
         copyEventId(currentEventObject.handoff_from, sizeof(currentEventObject.handoff_from), NodeConfig::NodeId);
         copyEventId(currentEventObject.handoff_to, sizeof(currentEventObject.handoff_to), handoverStatus.last_target);
-        copyEventId(currentEventObject.continuity_hint, sizeof(currentEventObject.continuity_hint), "HANDOFF_OUTBOUND");
+        copyEventId(currentEventObject.continuity_hint, sizeof(currentEventObject.continuity_hint), "HANDOVER_DONE");
     }
 }
 
@@ -3416,6 +3485,62 @@ bool shouldEmitFlowDebug() {
     return debugOutput.enabled && !debugOutput.quiet_mode_enabled;
 }
 
+const char *handoverFlowStateName(HandoverFlowState state) {
+    switch (state) {
+        case HANDOVER_FLOW_SINGLE_NODE:
+            return "SINGLE_NODE";
+        case HANDOVER_FLOW_PENDING:
+            return "PENDING";
+        case HANDOVER_FLOW_ACTIVE:
+            return "ACTIVE";
+        case HANDOVER_FLOW_DONE:
+            return "DONE";
+    }
+    return "SINGLE_NODE";
+}
+
+const char *handoverContinuityHint(HandoverFlowState state) {
+    switch (state) {
+        case HANDOVER_FLOW_PENDING:
+            return "HANDOFF_PENDING";
+        case HANDOVER_FLOW_ACTIVE:
+            return "HANDOFF_ACTIVE";
+        case HANDOVER_FLOW_DONE:
+            return "HANDOVER_DONE";
+        case HANDOVER_FLOW_SINGLE_NODE:
+        default:
+            return "SINGLE_NODE";
+    }
+}
+
+HandoverFlowState deriveHandoverFlowState(const SystemData &snapshot) {
+    if (!snapshot.nodeb_online ||
+        !snapshot.radar_track.is_active ||
+        !snapshot.radar_track.is_confirmed) {
+        return HANDOVER_FLOW_SINGLE_NODE;
+    }
+
+    const float x_mm = snapshot.radar_track.x_mm;
+    if (x_mm >= HandoverDoneBoundaryXmm) {
+        return HANDOVER_FLOW_DONE;
+    }
+    if (x_mm >= HandoverActiveBoundaryXmm) {
+        return HANDOVER_FLOW_ACTIVE;
+    }
+    if (x_mm >= HandoverPendingBoundaryXmm) {
+        return HANDOVER_FLOW_PENDING;
+    }
+    return HANDOVER_FLOW_SINGLE_NODE;
+}
+
+void resolveHandoverTargetNode(const SystemData &snapshot, char *target, size_t target_size) {
+    if (snapshot.nodeb_node_id[0] != '\0' && strcmp(snapshot.nodeb_node_id, "NONE") != 0) {
+        copyEventId(target, target_size, snapshot.nodeb_node_id);
+    } else {
+        copyEventId(target, target_size, "B1");
+    }
+}
+
 void refreshDerivedSystemFields(unsigned long now) {
     portENTER_CRITICAL(&dataMutex);
     globalData.timestamp_ms = now;
@@ -3467,6 +3592,8 @@ void resetHandoverStatus() {
     handoverStatus.last_result[0] = '\0';
     handoverStatus.last_target[0] = '\0';
     handoverStatus.last_event_id[0] = '\0';
+    handoverStatus.state = HANDOVER_FLOW_SINGLE_NODE;
+    handoverStatus.state_since_ms = 0;
     syncActiveNodeRuntimeCacheLocked();
     portEXIT_CRITICAL(&dataMutex);
 }
@@ -3488,6 +3615,8 @@ void setHandoverQueued(const char *target_node, unsigned long now) {
     copyEventId(handoverStatus.last_result, sizeof(handoverStatus.last_result), "QUEUED");
     copyEventId(handoverStatus.last_target, sizeof(handoverStatus.last_target), target_node);
     handoverStatus.last_event_id[0] = '\0';
+    handoverStatus.state = HANDOVER_FLOW_PENDING;
+    handoverStatus.state_since_ms = now;
     syncActiveNodeRuntimeCacheLocked();
     portEXIT_CRITICAL(&dataMutex);
 }
@@ -3500,6 +3629,8 @@ void setHandoverCleared(unsigned long now) {
     handoverStatus.last_updated_ms = now;
     copyEventId(handoverStatus.last_result, sizeof(handoverStatus.last_result), "CLEARED");
     handoverStatus.last_event_id[0] = '\0';
+    handoverStatus.state = HANDOVER_FLOW_SINGLE_NODE;
+    handoverStatus.state_since_ms = now;
     syncActiveNodeRuntimeCacheLocked();
     portEXIT_CRITICAL(&dataMutex);
 }
@@ -3512,6 +3643,10 @@ void setHandoverOutcome(const char *target_node, const char *result, unsigned lo
     handoverStatus.last_updated_ms = now;
     copyEventId(handoverStatus.last_result, sizeof(handoverStatus.last_result), result);
     copyEventId(handoverStatus.last_target, sizeof(handoverStatus.last_target), target_node);
+    handoverStatus.state = (strcmp(result, "EMITTED") == 0)
+                               ? HANDOVER_FLOW_DONE
+                               : HANDOVER_FLOW_SINGLE_NODE;
+    handoverStatus.state_since_ms = now;
     if (context != nullptr && hasEventContext(*context)) {
         copyEventId(handoverStatus.last_event_id, sizeof(handoverStatus.last_event_id), context->event_id);
     } else {
@@ -3521,7 +3656,79 @@ void setHandoverOutcome(const char *target_node, const char *result, unsigned lo
     portEXIT_CRITICAL(&dataMutex);
 }
 
+void updateHandoverStateMachine(const SystemData &snapshot, const EventContext &eventContext, unsigned long now) {
+    const HandoverFlowState desiredState = deriveHandoverFlowState(snapshot);
+    char targetNode[16] = {0};
+    resolveHandoverTargetNode(snapshot, targetNode, sizeof(targetNode));
+
+    const char *result = "SINGLE_NODE";
+    if (!snapshot.nodeb_online) {
+        result = "NODEB_OFFLINE";
+    } else if (desiredState == HANDOVER_FLOW_PENDING) {
+        result = "AUTO_PENDING";
+    } else if (desiredState == HANDOVER_FLOW_ACTIVE) {
+        result = "AUTO_ACTIVE";
+    } else if (desiredState == HANDOVER_FLOW_DONE) {
+        result = "AUTO_DONE";
+    }
+
+    portENTER_CRITICAL(&dataMutex);
+    const bool keepManualPending =
+        handoverStatus.pending &&
+        strcmp(handoverStatus.last_result, "QUEUED") == 0 &&
+        desiredState == HANDOVER_FLOW_SINGLE_NODE;
+    const bool keepManualDone =
+        strcmp(handoverStatus.last_result, "EMITTED") == 0 &&
+        handoverStatus.last_target[0] != '\0' &&
+        desiredState == HANDOVER_FLOW_SINGLE_NODE;
+    const bool shouldUpdate = !(keepManualPending || keepManualDone);
+
+    if (shouldUpdate) {
+        const bool stateChanged = handoverStatus.state != desiredState;
+        handoverStatus.state = desiredState;
+        if (stateChanged || handoverStatus.state_since_ms == 0) {
+            handoverStatus.state_since_ms = now;
+        }
+        handoverStatus.last_updated_ms = now;
+        copyEventId(handoverStatus.last_result, sizeof(handoverStatus.last_result), result);
+
+        if (desiredState == HANDOVER_FLOW_PENDING) {
+            handoverStatus.pending = true;
+            if (stateChanged || handoverStatus.pending_since_ms == 0) {
+                handoverStatus.pending_since_ms = now;
+            }
+            copyEventId(handoverStatus.pending_target, sizeof(handoverStatus.pending_target), targetNode);
+            copyEventId(handoverStatus.last_target, sizeof(handoverStatus.last_target), targetNode);
+        } else {
+            handoverStatus.pending = false;
+            handoverStatus.pending_since_ms = 0;
+            handoverStatus.pending_target[0] = '\0';
+            if (desiredState == HANDOVER_FLOW_ACTIVE || desiredState == HANDOVER_FLOW_DONE) {
+                copyEventId(handoverStatus.last_target, sizeof(handoverStatus.last_target), targetNode);
+            } else {
+                handoverStatus.last_target[0] = '\0';
+            }
+        }
+
+        if (hasEventContext(eventContext) &&
+            (desiredState == HANDOVER_FLOW_PENDING ||
+             desiredState == HANDOVER_FLOW_ACTIVE ||
+             desiredState == HANDOVER_FLOW_DONE)) {
+            copyEventId(handoverStatus.last_event_id, sizeof(handoverStatus.last_event_id), eventContext.event_id);
+        } else if (desiredState == HANDOVER_FLOW_SINGLE_NODE) {
+            handoverStatus.last_event_id[0] = '\0';
+        }
+
+        syncActiveNodeRuntimeCacheLocked();
+    }
+    portEXIT_CRITICAL(&dataMutex);
+}
+
 void printHandoverStatusFields(const HandoverStatus &status) {
+    Serial.print(",handover_state=");
+    Serial.print(handoverFlowStateName(status.state));
+    Serial.print(",handover_state_since_ms=");
+    Serial.print(status.state_since_ms);
     Serial.print(",handover_pending=");
     Serial.print(status.pending ? 1 : 0);
     Serial.print(",handover_pending_target=");
@@ -5357,7 +5564,11 @@ bool runLd2451ParserSelfTestCase(
     Serial.print(",bad_payload=");
     Serial.print(parser.stats().bad_payload);
     Serial.print(",invalid_field=");
-    Serial.println(parser.stats().invalid_field);
+    Serial.print(parser.stats().invalid_field);
+    Serial.print(",crc_error_count=");
+    Serial.print(parser.stats().crc_error_count);
+    Serial.print(",crc_supported=0,integrity=STRUCTURAL_NO_CRC,xor_supported=1");
+    Serial.println();
     return pass;
 }
 
@@ -5402,7 +5613,7 @@ bool runLd2451PlausibilitySelfTestCase(
     Serial.print(plausible ? 1 : 0);
     Serial.print(",range_m=");
     Serial.print(candidate.selected.valid ? candidate.selected.range_m : 0);
-    Serial.print(",crc_supported=0,integrity=STRUCTURAL_NO_CRC");
+    Serial.print(",crc_supported=0,integrity=STRUCTURAL_NO_CRC,xor_supported=1");
     Serial.println();
     return pass;
 }
@@ -5443,6 +5654,16 @@ void emitLd2451SelfTest() {
         0x01, 0x01, 0x8A, 104, 0x00, 60, 0x15,
         0xF8, 0xF7, 0xF6, 0xF5
     };
+    constexpr uint8_t xorValidFrame[] = {
+        0xF4, 0xF3, 0xF2, 0xF1, 0x08, 0x00,
+        0x01, 0x01, 0x8A, 40, 0x00, 60, 0x15, 0x8B,
+        0xF8, 0xF7, 0xF6, 0xF5
+    };
+    constexpr uint8_t xorBadFrame[] = {
+        0xF4, 0xF3, 0xF2, 0xF1, 0x08, 0x00,
+        0x01, 0x01, 0x8A, 40, 0x00, 60, 0x15, 0x00,
+        0xF8, 0xF7, 0xF6, 0xF5
+    };
 
     bool pass = true;
     pass &= runLd2451ParserSelfTestCase("normal", normalFrame, sizeof(normalFrame), true, 1, 40);
@@ -5450,6 +5671,8 @@ void emitLd2451SelfTest() {
     pass &= runLd2451ParserSelfTestCase("bad_tail", badTailFrame, sizeof(badTailFrame), false, 0);
     pass &= runLd2451ParserSelfTestCase("bad_length", badLengthFrame, sizeof(badLengthFrame), false, 0);
     pass &= runLd2451ParserSelfTestCase("invalid_field", invalidFieldFrame, sizeof(invalidFieldFrame), false, 0);
+    pass &= runLd2451ParserSelfTestCase("xor_valid", xorValidFrame, sizeof(xorValidFrame), true, 1, 40);
+    pass &= runLd2451ParserSelfTestCase("xor_bad", xorBadFrame, sizeof(xorBadFrame), false, 0);
     pass &= runLd2451ParserSelfTestCase("bit_flip_invalid_field", bitFlipInvalidFieldFrame, sizeof(bitFlipInvalidFieldFrame), false, 0);
     pass &= runLd2451PlausibilitySelfTestCase(
         "bit_flip_valid_shape_suspect",
@@ -5462,7 +5685,7 @@ void emitLd2451SelfTest() {
     );
     Serial.print("LD2451,SELFTEST,summary=");
     Serial.print(pass ? "PASS" : "FAIL");
-    Serial.println(",crc_supported=0,integrity=STRUCTURAL_NO_CRC");
+    Serial.println(",crc_supported=0,integrity=STRUCTURAL_NO_CRC,xor_supported=1");
 }
 
 bool parseVisionConfidencePayload(const String &payload, float &confidence, float &stability, String &tracker_state) {
@@ -5560,11 +5783,13 @@ void emitFusionDebug() {
     Serial.print(stats.bad_payload);
     Serial.print(",invalid_field=");
     Serial.print(stats.invalid_field);
+    Serial.print(",crc_error_count=");
+    Serial.print(stats.crc_error_count);
     Serial.print(",stable_frames=");
     Serial.print(ld2451StableFrameCount);
     Serial.print(",suspect_frames=");
     Serial.print(ld2451SuspectFrameCount);
-    Serial.print(",crc_supported=0,integrity=STRUCTURAL_NO_CRC");
+    Serial.print(",crc_supported=0,integrity=STRUCTURAL_NO_CRC,xor_supported=1");
     Serial.println();
 }
 
@@ -7436,6 +7661,7 @@ void CloudTask(void *pvParameters) {
         }
         updateSummaryLastEventId(eventContext);
         snapshot = getDerivedSystemSnapshot(now);
+        updateHandoverStateMachine(snapshot, eventContext, now);
 
         HandoverRequest pendingHandover = {};
         if (consumeHandoverRequest(pendingHandover)) {
@@ -7562,17 +7788,31 @@ void AiCloudTask(void *pvParameters) {
 
             CloudAssessmentResult result = {};
             if (!hasWifiCredentials() || !hasArkCredentials() || !client.hasCredentials()) {
-                setCloudError("missing_credentials", millis());
-                Serial.println("CLOUD,RESULT,ok=0,error=missing_credentials");
+                const unsigned long failedAt = millis();
+                setCloudError("missing_credentials", failedAt);
+                if (shouldEmitCloudFailureLog("missing_credentials", failedAt)) {
+                    Serial.println("CLOUD,RESULT,ok=0,error=missing_credentials");
+                }
             } else if (WiFi.status() != WL_CONNECTED) {
-                setCloudError("wifi_not_connected", millis());
-                Serial.print("CLOUD,RESULT,ok=0,error=wifi_not_connected,wifi=");
-                Serial.println(wifiStatusName(WiFi.status()));
+                const unsigned long failedAt = millis();
+                setCloudError("wifi_not_connected", failedAt);
+                if (shouldEmitCloudFailureLog("wifi_not_connected", failedAt)) {
+                    Serial.print("CLOUD,RESULT,ok=0,error=wifi_not_connected,wifi=");
+                    Serial.println(wifiStatusName(WiFi.status()));
+                }
             } else {
                 const bool ok = client.assess(item.event, result);
                 const unsigned long completedAt = millis();
                 setCloudResult(result, completedAt);
-                applyCloudCommand(result, completedAt);
+                if (ok) {
+                    portENTER_CRITICAL(&dataMutex);
+                    resetCloudFailureLogStateLocked();
+                    portEXIT_CRITICAL(&dataMutex);
+                    applyCloudCommand(result, completedAt);
+                } else {
+                    Serial.print("CLOUD,DEGRADED,reason=assess_failed,error=");
+                    Serial.println(result.error[0] != '\0' ? result.error : "unknown");
+                }
                 if (!ok || debugOutput.enabled) {
                     Serial.print("CLOUD,RESULT,ok=");
                     Serial.print(ok ? 1 : 0);

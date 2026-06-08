@@ -42,6 +42,13 @@ def main() -> int:
     require(main_cpp, "NODEB,RECOVER", "NodeB manual recover command")
 
     require(main_cpp, "crc_supported=0,integrity=STRUCTURAL_NO_CRC", "LD2451 honest no-CRC reporting")
+    require(main_cpp, "xor_supported=1", "LD2451 optional XOR compatibility reporting")
+    require(main_cpp, "crc_error_count", "LD2451 CRC/XOR error counter output")
+    require(ROOT.joinpath("lib", "Ld2451Parser", "Ld2451Parser.h").read_text(encoding="utf-8"), "crc_error_count", "LD2451 parser CRC/XOR stats field")
+    require(ROOT.joinpath("lib", "Ld2451Parser", "Ld2451Parser.cpp").read_text(encoding="utf-8"), "rejectCrcError", "LD2451 parser CRC/XOR reject path")
+    require(ROOT.joinpath("lib", "Ld2451Parser", "Ld2451Parser.cpp").read_text(encoding="utf-8"), "xorChecksum", "LD2451 parser optional XOR checksum")
+    require(main_cpp, "xor_valid", "LD2451 optional XOR valid selftest")
+    require(main_cpp, "xor_bad", "LD2451 optional XOR reject selftest")
     require(main_cpp, "bit_flip_valid_shape_suspect", "LD2451 bit-flip plausibility selftest")
     require(main_cpp, "ld2451SuspectFrameCount", "LD2451 suspect frame counter")
 
@@ -74,6 +81,15 @@ def main() -> int:
     require(ROOT.joinpath("lib", "CloudClient", "CloudClient.h").read_text(encoding="utf-8"), "command_mode", "cloud switch mode command result field")
     require(ROOT.joinpath("lib", "CloudClient", "CloudClient.cpp").read_text(encoding="utf-8"), "event_threshold", "cloud threshold command params parsing")
     require(ROOT.joinpath("lib", "CloudClient", "CloudClient.cpp").read_text(encoding="utf-8"), "command_reason", "cloud switch reason parsing")
+    require(main_cpp, "CLOUD,DEGRADED", "LLM failure degraded log")
+    require(main_cpp, "shouldEmitCloudFailureLog", "cloud failure log throttle")
+    require(main_cpp, "CLOUD,DROP,reason=queue_full", "cloud queue full drop log")
+    require(ROOT.joinpath("tools", "cloud_demo_replay.py").read_text(encoding="utf-8"), "Flytotal Edge-Cloud-Edge AI Command Loop", "cloud replay evidence diagram tool")
+    require(main_cpp, "HandoverFlowState", "handoff state machine enum")
+    require(main_cpp, "HANDOVER_FLOW_ACTIVE", "handoff active state")
+    require(main_cpp, "HANDOVER_FLOW_DONE", "handoff done state")
+    require(main_cpp, "updateHandoverStateMachine", "handoff state machine updater")
+    require(main_cpp, "handover_state=", "handoff state serial output")
 
     scanned_files = [
         MAIN,
