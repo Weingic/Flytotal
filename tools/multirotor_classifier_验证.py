@@ -9,7 +9,14 @@ from pathlib import Path
 from typing import Any
 
 
-POSITIVE_LABELS = {"multirotor", "drone", "uav", "无人机", "多旋翼", "hover"}
+POSITIVE_LABELS = {"multirotor", "drone", "uav", "hover"}
+FEATURE_COLUMNS = [
+    "speed_mps",
+    "age_s",
+    "variance_mps",
+    "heading_rate_deg_s",
+    "motion_span_m",
+]
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
@@ -49,24 +56,32 @@ def mock_rows() -> list[dict[str, object]]:
     samples = [
         ("multirotor", 8.0, 3.0, 0.4, 20.0),
         ("hover", 0.8, 3.2, 0.2, 10.0),
+        ("drone", 6.5, 2.8, 0.5, 25.0),
+        ("uav", 4.5, 2.6, 0.6, 18.0),
         ("person", 1.2, 4.0, 0.5, 30.0),
+        ("person", 1.5, 3.0, 0.7, 55.0),
         ("ebike", 9.0, 2.5, 1.8, 50.0),
         ("car", 32.0, 2.5, 2.0, 15.0),
         ("bird", 7.0, 2.5, 2.2, 140.0),
+        ("bird", 5.0, 2.0, 1.6, 210.0),
+        ("clutter", 0.1, 4.0, 0.0, 0.0),
+        ("clutter", 0.3, 3.2, 0.1, 15.0),
     ]
-    rows = []
-    for label, speed, age, variance, heading in samples:
+    rows: list[dict[str, object]] = []
+    for index, (label, speed, age, variance, heading) in enumerate(samples):
         is_like, value = score(speed, age, variance, heading)
         rows.append(
             {
-                "track_id": label,
+                "track_id": f"synthetic_{index:02d}_{label}",
                 "label": label,
                 "speed_mps": speed,
                 "age_s": age,
                 "variance_mps": variance,
                 "heading_rate_deg_s": heading,
+                "motion_span_m": max(0.1, speed * age * 0.35),
                 "is_multirotor_like": int(is_like),
                 "multirotor_score": round(value, 1),
+                "sample_count": 5,
             }
         )
     return rows
@@ -102,9 +117,7 @@ def group_rows(rows: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:
     for index, row in enumerate(rows):
         source = row.get("_source_file", "input")
         track_id = row.get("track_id") or row.get("id") or source
-        key = f"{source}:{track_id}"
-        if not track_id:
-            key = f"{source}:track-{index}"
+        key = f"{source}:{track_id}" if track_id else f"{source}:track-{index}"
         groups.setdefault(key, []).append(row)
     return groups
 
@@ -120,8 +133,7 @@ def heading_deg(vx: float, vy: float) -> float:
 
 
 def circular_delta(a: float, b: float) -> float:
-    delta = (a - b + 180.0) % 360.0 - 180.0
-    return abs(delta)
+    return abs((a - b + 180.0) % 360.0 - 180.0)
 
 
 def features_from_group(key: str, rows: list[dict[str, str]], label_column: str) -> dict[str, object]:
@@ -214,23 +226,27 @@ def label_is_positive(label: str) -> bool:
     return str(label or "").strip().lower() in POSITIVE_LABELS
 
 
-def confusion(rows: list[dict[str, object]]) -> dict[str, int]:
+def labels_from_rows(rows: list[dict[str, object]]) -> list[int]:
+    return [1 if label_is_positive(str(row.get("label", "") or "")) else 0 for row in rows]
+
+
+def matrix_from_predictions(actual: list[int], predicted: list[int]) -> dict[str, int]:
     result = {"tp": 0, "fp": 0, "tn": 0, "fn": 0}
-    for row in rows:
-        label = str(row.get("label", "") or "")
-        if not label:
-            continue
-        actual = label_is_positive(label)
-        predicted = int(row.get("is_multirotor_like", 0)) == 1
-        if actual and predicted:
+    for y_true, y_pred in zip(actual, predicted):
+        if y_true == 1 and y_pred == 1:
             result["tp"] += 1
-        elif actual and not predicted:
+        elif y_true == 1 and y_pred == 0:
             result["fn"] += 1
-        elif not actual and predicted:
+        elif y_true == 0 and y_pred == 1:
             result["fp"] += 1
         else:
             result["tn"] += 1
     return result
+
+
+def confusion(rows: list[dict[str, object]]) -> dict[str, int]:
+    labeled = [row for row in rows if str(row.get("label", "") or "").strip()]
+    return matrix_from_predictions(labels_from_rows(labeled), [int(row.get("is_multirotor_like", 0)) for row in labeled])
 
 
 def safe_ratio(numerator: float, denominator: float) -> float:
@@ -277,12 +293,11 @@ def build_acceptance(
     }
 
 
-def write_confusion_plot(rows: list[dict[str, object]], output_path: Path) -> str:
+def write_confusion_plot(matrix: dict[str, int], output_path: Path, title: str) -> str:
     try:
         import matplotlib.pyplot as plt  # type: ignore
     except ImportError:
         return ""
-    matrix = confusion(rows)
     values = [[matrix["tp"], matrix["fn"]], [matrix["fp"], matrix["tn"]]]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.figure(figsize=(5.2, 4.5))
@@ -292,7 +307,7 @@ def write_confusion_plot(rows: list[dict[str, object]], output_path: Path) -> st
     for y, row in enumerate(values):
         for x, value in enumerate(row):
             plt.text(x, y, str(value), ha="center", va="center", fontsize=18, fontweight="bold")
-    plt.title("Multirotor confusion matrix")
+    plt.title(title)
     plt.tight_layout()
     plt.savefig(output_path, dpi=150)
     plt.close()
@@ -310,18 +325,186 @@ def write_feature_plot(rows: list[dict[str, object]], output_path: Path) -> str:
     speeds = [safe_float(row.get("speed_mps", 0.0), 0.0) for row in rows]
     positions = list(range(len(rows)))
     plt.figure(figsize=(max(7.0, len(rows) * 0.7), 4.8))
-    plt.bar(positions, scores, label="score", alpha=0.75)
+    plt.bar(positions, scores, label="rule score", alpha=0.75)
     plt.plot(positions, [min(100.0, speed * 4.0) for speed in speeds], "o-", label="speed x4")
-    plt.axhline(65, color="tab:red", linestyle="--", linewidth=1.2, label="threshold")
+    plt.axhline(65, color="tab:red", linestyle="--", linewidth=1.2, label="rule threshold")
     plt.xticks(positions, labels, rotation=30, ha="right")
     plt.ylabel("score")
-    plt.title("Multirotor feature distribution")
+    plt.title("Multirotor rule feature distribution")
     plt.grid(axis="y", alpha=0.25)
     plt.legend(loc="best")
     plt.tight_layout()
     plt.savefig(output_path, dpi=150)
     plt.close()
     return output_path.as_posix()
+
+
+def feature_matrix(rows: list[dict[str, object]]) -> list[list[float]]:
+    return [[safe_float(row.get(column, 0.0), 0.0) for column in FEATURE_COLUMNS] for row in rows]
+
+
+def choose_cv_folds(labels: list[int], requested: int = 5) -> tuple[int, str]:
+    positives = sum(1 for item in labels if item == 1)
+    negatives = sum(1 for item in labels if item == 0)
+    min_class_count = min(positives, negatives)
+    if min_class_count >= requested:
+        return requested, "5_fold_cv"
+    if min_class_count >= 2:
+        return min(requested, min_class_count), "reduced_cv_due_to_class_count"
+    return 0, "insufficient_class_balance_train_eval_same_data"
+
+
+def train_model(rows: list[dict[str, object]], output_dir: Path, model_path: Path, source: str) -> dict[str, object]:
+    try:
+        import joblib  # type: ignore
+        import matplotlib.pyplot as plt  # type: ignore
+        from sklearn.metrics import auc, roc_curve  # type: ignore
+        from sklearn.model_selection import StratifiedKFold, cross_val_predict  # type: ignore
+        from sklearn.tree import DecisionTreeClassifier, export_text, plot_tree  # type: ignore
+    except ImportError as exc:
+        return {
+            "ok": False,
+            "error": f"missing_training_dependency: {exc}",
+            "hint": "Run `python -m pip install -U -r requirements-vision.txt`.",
+        }
+
+    labeled = [row for row in rows if str(row.get("label", "") or "").strip()]
+    warnings: list[str] = []
+    if len(labeled) < 20:
+        warnings.append("sample_count_below_20_tracks_results_for_reference_only")
+    if source == "mock":
+        warnings.append("synthetic_baseline_only_real_model_needs_real_data")
+    if not labeled:
+        return {"ok": False, "error": "no_labeled_tracks", "warnings": warnings}
+
+    labels = labels_from_rows(labeled)
+    if len(set(labels)) < 2:
+        return {"ok": False, "error": "need_positive_and_negative_labels", "warnings": warnings}
+
+    x_values = feature_matrix(labeled)
+    rule_pred = [int(row.get("is_multirotor_like", 0)) for row in labeled]
+    rule_scores = [safe_float(row.get("multirotor_score", 0.0), 0.0) / 100.0 for row in labeled]
+    rule_matrix = matrix_from_predictions(labels, rule_pred)
+    rule_metrics = metrics_from_confusion(rule_matrix)
+
+    tree = DecisionTreeClassifier(max_depth=4, random_state=42)
+    folds, cv_note = choose_cv_folds(labels, requested=5)
+    if folds >= 2:
+        cv = StratifiedKFold(n_splits=folds, shuffle=True, random_state=42)
+        model_pred = [int(item) for item in cross_val_predict(tree, x_values, labels, cv=cv, method="predict")]
+        model_prob = [float(item[1]) for item in cross_val_predict(tree, x_values, labels, cv=cv, method="predict_proba")]
+    else:
+        tree.fit(x_values, labels)
+        model_pred = [int(item) for item in tree.predict(x_values)]
+        model_prob = [float(item[1]) for item in tree.predict_proba(x_values)]
+        warnings.append(cv_note)
+
+    model_matrix = matrix_from_predictions(labels, model_pred)
+    model_metrics = metrics_from_confusion(model_matrix)
+    tree.fit(x_values, labels)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(
+        {
+            "model": tree,
+            "feature_columns": FEATURE_COLUMNS,
+            "positive_labels": sorted(POSITIVE_LABELS),
+            "source": source,
+        },
+        model_path,
+    )
+
+    tree_plot = output_dir / "multirotor_tree.png"
+    plt.figure(figsize=(14, 8))
+    plot_tree(
+        tree,
+        feature_names=FEATURE_COLUMNS,
+        class_names=["other", "multirotor"],
+        filled=True,
+        rounded=True,
+        fontsize=9,
+    )
+    plt.title("Decision tree for multirotor classification")
+    plt.tight_layout()
+    plt.savefig(tree_plot, dpi=160)
+    plt.close()
+
+    rules_path = output_dir / "multirotor_tree_rules.txt"
+    rules_path.write_text(export_text(tree, feature_names=FEATURE_COLUMNS), encoding="utf-8")
+
+    confusion_plot = write_confusion_plot(model_matrix, output_dir / "multirotor_confusion_real.png", "Decision tree confusion matrix")
+
+    roc_plot = ""
+    if len(set(labels)) >= 2:
+        fpr, tpr, _ = roc_curve(labels, model_prob)
+        model_auc = auc(fpr, tpr)
+        rule_fpr, rule_tpr, _ = roc_curve(labels, rule_scores)
+        rule_auc = auc(rule_fpr, rule_tpr)
+        roc_path = output_dir / "multirotor_roc_real.png"
+        plt.figure(figsize=(6.2, 5.2))
+        plt.plot(fpr, tpr, label=f"tree AUC={model_auc:.2f}")
+        plt.plot(rule_fpr, rule_tpr, label=f"rule AUC={rule_auc:.2f}", linestyle="--")
+        plt.plot([0, 1], [0, 1], color="gray", linewidth=1.0)
+        plt.xlabel("False positive rate")
+        plt.ylabel("True positive rate")
+        plt.title("Multirotor ROC")
+        plt.grid(alpha=0.25)
+        plt.legend(loc="best")
+        plt.tight_layout()
+        plt.savefig(roc_path, dpi=150)
+        plt.close()
+        roc_plot = roc_path.as_posix()
+
+    compare_path = output_dir / "multirotor_rule_vs_model.png"
+    labels_for_plot = ["accuracy", "precision", "recall", "specificity"]
+    rule_values = [rule_metrics.get(item, 0.0) for item in labels_for_plot]
+    model_values = [model_metrics.get(item, 0.0) for item in labels_for_plot]
+    positions = list(range(len(labels_for_plot)))
+    width = 0.36
+    plt.figure(figsize=(7.2, 4.6))
+    plt.bar([item - width / 2 for item in positions], rule_values, width=width, label="rule baseline")
+    plt.bar([item + width / 2 for item in positions], model_values, width=width, label="decision tree")
+    plt.xticks(positions, labels_for_plot)
+    plt.ylim(0.0, 1.05)
+    plt.ylabel("score")
+    plt.title("Rule baseline vs trained model")
+    plt.grid(axis="y", alpha=0.25)
+    plt.legend(loc="best")
+    plt.tight_layout()
+    plt.savefig(compare_path, dpi=150)
+    plt.close()
+
+    feature_importance = {
+        column: round(float(value), 4)
+        for column, value in zip(FEATURE_COLUMNS, getattr(tree, "feature_importances_", []))
+    }
+
+    trained_rows: list[dict[str, object]] = []
+    for row, pred, prob in zip(labeled, model_pred, model_prob):
+        item = dict(row)
+        item["tree_prediction"] = int(pred)
+        item["tree_probability"] = round(float(prob), 4)
+        trained_rows.append(item)
+    write_csv(output_dir / "multirotor_training_predictions.csv", trained_rows)
+
+    return {
+        "ok": True,
+        "source": source,
+        "track_count": len(labeled),
+        "warnings": warnings,
+        "cv": {"requested_folds": 5, "effective_folds": folds, "note": cv_note},
+        "feature_columns": FEATURE_COLUMNS,
+        "feature_importance": feature_importance,
+        "rule_baseline": {"confusion_matrix": rule_matrix, "metrics": rule_metrics},
+        "decision_tree": {"confusion_matrix": model_matrix, "metrics": model_metrics},
+        "model_path": model_path.as_posix(),
+        "tree_plot": tree_plot.as_posix(),
+        "tree_rules": rules_path.as_posix(),
+        "roc_plot": roc_plot,
+        "confusion_plot": confusion_plot,
+        "rule_vs_model_plot": compare_path.as_posix(),
+    }
 
 
 def main() -> int:
@@ -333,6 +516,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=None, help="Legacy JSON output path")
     parser.add_argument("--min-accuracy", type=float, default=0.0, help="Optional labeled-set acceptance threshold")
     parser.add_argument("--min-recall", type=float, default=0.0, help="Optional drone recall acceptance threshold")
+    parser.add_argument("--train", action="store_true", help="Train a sklearn decision tree and compare it with the rule baseline")
+    parser.add_argument("--model-output", type=Path, default=Path("models/multirotor_tree.pkl"), help="Decision tree model output path")
     args = parser.parse_args()
 
     if args.input and not args.mock:
@@ -355,15 +540,29 @@ def main() -> int:
     feature_plot = write_feature_plot(rows, args.output_dir / "multirotor_features.png")
     confusion_path = args.output_dir / "multirotor_confusion_matrix.png"
     if has_labels:
-        confusion_plot = write_confusion_plot(rows, confusion_path)
+        matrix = confusion(rows)
+        confusion_plot = write_confusion_plot(matrix, confusion_path, "Rule baseline confusion matrix")
+        metrics = metrics_from_confusion(matrix)
     else:
         if confusion_path.exists():
             confusion_path.unlink()
+        matrix = {}
+        metrics = {}
         confusion_plot = ""
-    matrix = confusion(rows) if has_labels else {}
-    metrics = metrics_from_confusion(matrix) if has_labels else {}
+
     acceptance = build_acceptance(has_labels, metrics, float(args.min_accuracy), float(args.min_recall))
-    needs_labels = not has_labels or source.endswith("fallback_mock")
+    needs_labels = not has_labels or source.endswith("fallback_mock") or source == "mock"
+    warnings: list[str] = []
+    if needs_labels:
+        warnings.append("current_result_is_synthetic_or_unlabeled_baseline_true_model_needs_real_data")
+    if has_labels and len(rows) < 20:
+        warnings.append("sample_count_below_20_tracks_results_for_reference_only")
+
+    training: dict[str, object] = {}
+    if args.train:
+        training = train_model(rows, args.output_dir, args.model_output, source if source != "mock" else "mock")
+        if not bool(training.get("ok", False)):
+            warnings.append(str(training.get("error", "training_failed")))
 
     payload = {
         "ok": True,
@@ -371,35 +570,49 @@ def main() -> int:
         "row_count": len(rows),
         "has_labels": has_labels,
         "needs_labels": needs_labels,
+        "warnings": warnings,
         "label_column": args.label_column,
+        "feature_columns": FEATURE_COLUMNS,
         "rows": rows,
         "confusion_matrix": matrix,
         "metrics": metrics,
         "acceptance": acceptance,
         "feature_plot": feature_plot,
         "confusion_plot": confusion_plot,
-        "note": "needs_real_labels_for_roc" if needs_labels else "labels_available_confusion_matrix_generated",
+        "training": training,
+        "note": "synthetic_baseline_only_true_model_needs_real_data" if needs_labels else "labels_available_confusion_matrix_generated",
     }
     json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
     if needs_labels:
         needs_path = args.output_dir / "multirotor_needs_labels.json"
         needs_path.write_text(
             json.dumps(
                 {
                     "ok": True,
-                    "message": "历史 captures 缺少可靠 label 时只输出特征分布，不伪造 ROC。",
-                    "expected_fields": "timestamp_ms,x_mm,y_mm,vx_mm_s,vy_mm_s,label",
+                    "message": "Current data is synthetic or lacks reliable labels. Collect real tracks before claiming real-world performance.",
+                    "expected_fields": "timestamp_ms,track_id,x_mm,y_mm,vx_mm_s,vy_mm_s,label",
                 },
                 ensure_ascii=False,
                 indent=2,
             ),
             encoding="utf-8",
         )
+
+    for warning in warnings:
+        print(f"WARNING,{warning}")
     print(json_path.as_posix())
     if feature_plot:
         print(feature_plot)
     if confusion_plot:
         print(confusion_plot)
+    if training.get("ok"):
+        print(training.get("tree_plot", ""))
+        print(training.get("roc_plot", ""))
+        print(training.get("rule_vs_model_plot", ""))
+        print(training.get("model_path", ""))
+    if args.train and not bool(training.get("ok", False)):
+        return 1
     return 0 if bool(acceptance.get("passed", True)) else 2
 
 

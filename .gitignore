@@ -27,7 +27,8 @@ captures/v5_2/
 outputs/
 
 # Local model assets can be large and environment-specific.
-models/
+models/*
+!models/MODEL_MANIFEST.example.json
 
 # Local WiFi and cloud credentials.
 include/secrets.h

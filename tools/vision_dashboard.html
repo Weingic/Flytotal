@@ -3010,7 +3010,7 @@
         `${requestedTracker} -> ${activeTracker} / fallback=${fallbackApplied ? "ON" : "OFF"}`;
       document.getElementById("runtimeTrackerAvailableValue").textContent = availableTrackers;
       document.getElementById("runtimeVisionConfirmValue").textContent =
-        `CSRT ${formatFixed(status.vision_confidence, 2)} / stable ${formatFixed(status.bbox_stability_score, 2)} / ${status.tracker_state || "UNKNOWN"} / ${status.detector_state || "NONE"}`;
+        `CSRT ${formatFixed(status.vision_confidence, 2)} / stable ${formatFixed(status.bbox_stability_score, 2)} / ${status.tracker_state || "UNKNOWN"} / ${status.detector_state || "NONE"} / ${status.detector_model_label || "none"} / ${status.detector_class_strategy || "none"}`;
       document.getElementById("runtimeFrameValue").textContent = String(status.frame_index ?? 0);
       document.getElementById("runtimeBboxValue").textContent =
         `${status.bbox_x ?? 0}, ${status.bbox_y ?? 0}, ${status.bbox_w ?? 0}, ${status.bbox_h ?? 0}`;

@@ -1901,6 +1901,8 @@ def build_mock_bundle() -> dict[str, object]:
             "bbox_stability_score": 0.74,
             "tracker_state": "TRACKING",
             "detector_state": "FALLBACK_FLOW",
+            "detector_model_label": "coco-yolov8n",
+            "detector_class_strategy": "4:airplane,14:bird",
             "yolo_detections": [
                 {
                     "bbox_x": 274,

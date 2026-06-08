@@ -1,0 +1,34 @@
+{
+  "models": [
+    {
+      "name": "coco-yolov8n",
+      "path": "models/yolov8n.onnx",
+      "source": "Ultralytics YOLOv8n COCO pretrained weights",
+      "purpose": "通用目标检测 + CSRT 跟踪辅助，不声明无人机专用识别",
+      "export_command": "python tools/export_yolo_models.py --preset coco",
+      "input_size": 640,
+      "classes": {
+        "4": "airplane",
+        "14": "bird"
+      },
+      "sha256": "<fill-after-export>"
+    },
+    {
+      "name": "drone-yolov8n",
+      "path": "models/yolov8n_drone.onnx",
+      "source": "本地训练或第三方授权无人机数据集训练权重",
+      "purpose": "无人机专用视觉确认模型",
+      "export_command": "python tools/export_yolo_models.py --weights models/best_drone.pt --output models/yolov8n_drone.onnx --model-label drone",
+      "input_size": 640,
+      "classes": {
+        "0": "drone"
+      },
+      "sha256": "<fill-after-export>"
+    }
+  ],
+  "notes": [
+    "ONNX/PT/PKL 大文件不进 Git。",
+    "真实模型 hash 在本地导出后填写。",
+    "COCO 通用模型没有 drone 类，只能作为通用目标检测和跟踪辅助。"
+  ]
+}

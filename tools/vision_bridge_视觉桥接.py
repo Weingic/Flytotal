@@ -53,6 +53,8 @@ class VisionSnapshot:
     bbox_stability_score: float = 0.0
     tracker_state: str = "LOST"
     detector_state: str = "DISABLED"
+    detector_model_label: str = "none"
+    detector_class_strategy: str = "none"
     yolo_detections: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -377,6 +379,42 @@ def print_snapshot(snapshot: VisionSnapshot) -> None:
     )
 
 
+def parse_yolo_class_ids(raw: str) -> list[int]:
+    values: list[int] = []
+    for token in str(raw or "").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            value = int(token)
+        except ValueError:
+            continue
+        if value >= 0 and value not in values:
+            values.append(value)
+    return values or [4, 14]
+
+
+def parse_yolo_class_names(raw: str) -> dict[int, str]:
+    names: dict[int, str] = {4: "airplane", 14: "bird"}
+    for token in str(raw or "").split(","):
+        token = token.strip()
+        if not token or ":" not in token:
+            continue
+        left, right = token.split(":", 1)
+        try:
+            class_id = int(left.strip())
+        except ValueError:
+            continue
+        name = right.strip()
+        if name:
+            names[class_id] = name
+    return names
+
+
+def format_class_strategy(class_ids: list[int], class_names: dict[int, str]) -> str:
+    return ",".join(f"{class_id}:{class_names.get(class_id, f'class_{class_id}')}" for class_id in class_ids)
+
+
 class SidecarDetector:
     """Non-blocking detector path for red confirmation boxes.
 
@@ -384,11 +422,26 @@ class SidecarDetector:
     only writes visual evidence boxes for dashboard/demo use.
     """
 
-    def __init__(self, cv: Any, enabled: bool, model_path: Path, every_n_frames: int) -> None:
+    def __init__(
+        self,
+        cv: Any,
+        enabled: bool,
+        model_path: Path,
+        every_n_frames: int,
+        class_ids: list[int],
+        class_names: dict[int, str],
+        model_label: str,
+        score_threshold: float,
+    ) -> None:
         self.cv = cv
         self.enabled = bool(enabled)
         self.model_path = model_path
         self.every_n_frames = max(1, int(every_n_frames))
+        self.class_ids = list(class_ids) or [4, 14]
+        self.class_names = dict(class_names)
+        self.model_label = model_label or self.model_path.stem or "none"
+        self.score_threshold = max(0.01, min(0.99, float(score_threshold)))
+        self.class_strategy = format_class_strategy(self.class_ids, self.class_names)
         self.state = "DISABLED"
         self._session: Any | None = None
         self._input_name = ""
@@ -427,6 +480,9 @@ class SidecarDetector:
     def latest(self) -> tuple[str, list[dict[str, Any]]]:
         with self._lock:
             return self.state, [dict(item) for item in self._latest]
+
+    def metadata(self) -> tuple[str, str]:
+        return self.model_label, self.class_strategy
 
     def _set_latest(self, state: str, detections: list[dict[str, Any]]) -> None:
         with self._lock:
@@ -487,12 +543,18 @@ class SidecarDetector:
 
             boxes: list[list[int]] = []
             scores: list[float] = []
-            class_id = 4
+            classes: list[int] = []
             for row in predictions:
-                if row.shape[0] <= class_id + 4:
-                    continue
-                score = float(row[4 + class_id])
-                if score < 0.25:
+                best_class = -1
+                best_score = 0.0
+                for class_id in self.class_ids:
+                    if row.shape[0] <= class_id + 4:
+                        continue
+                    score = float(row[4 + class_id])
+                    if score > best_score:
+                        best_score = score
+                        best_class = class_id
+                if best_class < 0 or best_score < self.score_threshold:
                     continue
                 cx, cy, bw, bh = [float(value) for value in row[:4]]
                 x = int((cx - bw / 2.0) * width / input_size)
@@ -506,13 +568,15 @@ class SidecarDetector:
                 if w <= 0 or h <= 0:
                     continue
                 boxes.append([x, y, w, h])
-                scores.append(score)
+                scores.append(best_score)
+                classes.append(best_class)
 
-            keep = self.cv.dnn.NMSBoxes(boxes, scores, 0.25, 0.45) if boxes else []
+            keep = self.cv.dnn.NMSBoxes(boxes, scores, self.score_threshold, 0.45) if boxes else []
             detections: list[dict[str, Any]] = []
             for index in list(keep)[:5]:
                 item_index = int(index[0] if isinstance(index, (list, tuple)) else index)
                 x, y, w, h = boxes[item_index]
+                class_id = classes[item_index]
                 detections.append(
                     {
                         "bbox_x": x,
@@ -521,7 +585,7 @@ class SidecarDetector:
                         "bbox_h": h,
                         "score": round(float(scores[item_index]), 3),
                         "class_id": class_id,
-                        "class_name": "airplane",
+                        "class_name": self.class_names.get(class_id, f"class_{class_id}"),
                     }
                 )
             self._set_latest("READY_ONNX", detections)
@@ -899,6 +963,8 @@ def build_status_payload(
         "bbox_stability_score": round(float(snapshot.bbox_stability_score), 3),
         "tracker_state": snapshot.tracker_state,
         "detector_state": snapshot.detector_state,
+        "detector_model_label": snapshot.detector_model_label,
+        "detector_class_strategy": snapshot.detector_class_strategy,
         "yolo_detections": snapshot.yolo_detections,
         "last_capture_reason": "",
         "last_capture_file": "",
@@ -1200,6 +1266,10 @@ def main() -> int:
     parser.add_argument("--yolo-enabled", action="store_true", help="Enable YOLOv8n ONNX sidecar metadata path when model/runtime are available")
     parser.add_argument("--yolo-model", type=Path, default=Path("models/yolov8n.onnx"), help="Local ignored YOLOv8n ONNX model path")
     parser.add_argument("--yolo-every-n-frames", type=int, default=10, help="Run sidecar detector every N frames")
+    parser.add_argument("--yolo-class-ids", default="4,14", help="Comma-separated YOLO class ids to accept, for example `4,14` for COCO airplane/bird or `0` for a drone model")
+    parser.add_argument("--yolo-class-names", default="4:airplane,14:bird", help="Comma-separated class mapping, for example `4:airplane,14:bird` or `0:drone`")
+    parser.add_argument("--yolo-model-label", default="", help="Dashboard label for the active YOLO model")
+    parser.add_argument("--yolo-score-threshold", type=float, default=0.25, help="Minimum class score for YOLO sidecar detections")
     parser.add_argument("--status-write-interval", type=float, default=0.25, help="Minimum seconds between two status JSON writes while state stays unchanged")
     parser.add_argument("--session-file", type=Path, default=Path("captures/latest_test_session.json"), help="JSON file written by track_injector with the current test session")
     parser.add_argument("--session-log-dir", type=Path, default=Path("captures/session_logs"), help="Directory used to store per-session JSONL timeline logs")
@@ -1304,6 +1374,10 @@ def main() -> int:
         enabled=bool(args.yolo_enabled),
         model_path=args.yolo_model,
         every_n_frames=args.yolo_every_n_frames,
+        class_ids=parse_yolo_class_ids(args.yolo_class_ids),
+        class_names=parse_yolo_class_names(args.yolo_class_names),
+        model_label=args.yolo_model_label or args.yolo_model.stem,
+        score_threshold=args.yolo_score_threshold,
     )
     pending_policy_captures: list[dict[str, object]] = []
 
@@ -1340,7 +1414,9 @@ def main() -> int:
     )
     print(
         "Sidecar detector: "
-        f"enabled={int(bool(args.yolo_enabled))}, state={sidecar_detector.state}, every_n={max(1, int(args.yolo_every_n_frames))}"
+        f"enabled={int(bool(args.yolo_enabled))}, state={sidecar_detector.state}, "
+        f"model={sidecar_detector.model_label}, classes={sidecar_detector.class_strategy}, "
+        f"threshold={sidecar_detector.score_threshold:.2f}, every_n={max(1, int(args.yolo_every_n_frames))}"
     )
     source_width = 0
     source_height = 0
@@ -1400,6 +1476,7 @@ def main() -> int:
                 frame_height=int(frame.shape[0]),
             )
             snapshot.detector_state, snapshot.yolo_detections = sidecar_detector.latest()
+            snapshot.detector_model_label, snapshot.detector_class_strategy = sidecar_detector.metadata()
             runtime_event_id, runtime_event_id_source = resolve_runtime_event_id(
                 args.event_id,
                 args.active_event_file,
@@ -1755,6 +1832,7 @@ def main() -> int:
                     frame_height=int(frame.shape[0]),
                 )
                 snapshot.detector_state, snapshot.yolo_detections = sidecar_detector.latest()
+                snapshot.detector_model_label, snapshot.detector_class_strategy = sidecar_detector.metadata()
                 print_snapshot(snapshot)
                 tracker, current_bbox = select_target_roi(cv, frame, active_tracker_name)
                 if tracker is not None and current_bbox is not None:
