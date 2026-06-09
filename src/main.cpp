@@ -2191,6 +2191,12 @@ void setCloudError(const char *error, unsigned long now) {
     if (globalData.cloud_command_effect[0] == '\0') {
         copyEventId(globalData.cloud_command_effect, sizeof(globalData.cloud_command_effect), "NONE");
     }
+    if (globalData.cloud_command_source_event_id[0] == '\0') {
+        copyEventId(globalData.cloud_command_source_event_id, sizeof(globalData.cloud_command_source_event_id), "NONE");
+    }
+    if (globalData.cloud_command_reason[0] == '\0') {
+        copyEventId(globalData.cloud_command_reason, sizeof(globalData.cloud_command_reason), "NONE");
+    }
     portEXIT_CRITICAL(&dataMutex);
 }
 
@@ -2209,6 +2215,16 @@ void setCloudResult(const CloudAssessmentResult &result, unsigned long now) {
 void setCloudCommandEffectLocked(bool applied, const char *effect) {
     globalData.cloud_command_applied = applied;
     copyEventId(globalData.cloud_command_effect, sizeof(globalData.cloud_command_effect), normalizeOptionalField(effect));
+}
+
+void setCloudCommandAuditLocked(const char *source_event_id, const char *reason, unsigned long now) {
+    const char *resolvedEventId = normalizeOptionalField(source_event_id);
+    if (strcmp(resolvedEventId, "NONE") == 0 && runtimeEventStatus.active && runtimeEventStatus.event_id[0] != '\0') {
+        resolvedEventId = runtimeEventStatus.event_id;
+    }
+    copyEventId(globalData.cloud_command_source_event_id, sizeof(globalData.cloud_command_source_event_id), resolvedEventId);
+    copyEventId(globalData.cloud_command_reason, sizeof(globalData.cloud_command_reason), normalizeOptionalField(reason));
+    globalData.cloud_command_applied_ms = now;
 }
 
 void printCloudCommandResult(
@@ -2237,7 +2253,7 @@ void printCloudCommandResult(
     Serial.println();
 }
 
-void applyCloudCommand(const CloudAssessmentResult &result, unsigned long now) {
+void applyCloudCommand(const CloudAssessmentResult &result, unsigned long now, const char *source_event_id = nullptr) {
     String commandType = result.command_type;
     commandType.trim();
     commandType.toUpperCase();
@@ -2250,9 +2266,10 @@ void applyCloudCommand(const CloudAssessmentResult &result, unsigned long now) {
 
     if (commandType == "NONE") {
         portENTER_CRITICAL(&dataMutex);
-        setCloudCommandEffectLocked(false, "NONE");
+        setCloudCommandEffectLocked(false, "NO_ACTION_NEEDED");
+        setCloudCommandAuditLocked(source_event_id, result.command_reason, now);
         portEXIT_CRITICAL(&dataMutex);
-        printCloudCommandResult(commandTypeBuffer, "NONE");
+        printCloudCommandResult(commandTypeBuffer, "NO_ACTION_NEEDED");
         return;
     }
 
@@ -2261,6 +2278,7 @@ void applyCloudCommand(const CloudAssessmentResult &result, unsigned long now) {
         if (threshold <= 0.0f) {
             portENTER_CRITICAL(&dataMutex);
             setCloudCommandEffectLocked(false, "THRESHOLD_PARAM_MISSING");
+            setCloudCommandAuditLocked(source_event_id, result.command_reason, now);
             portEXIT_CRITICAL(&dataMutex);
             printCloudCommandResult(commandTypeBuffer, "THRESHOLD_PARAM_MISSING");
             return;
@@ -2271,6 +2289,7 @@ void applyCloudCommand(const CloudAssessmentResult &result, unsigned long now) {
         portENTER_CRITICAL(&dataMutex);
         globalData.runtime_event_threshold = threshold;
         setCloudCommandEffectLocked(true, effect);
+        setCloudCommandAuditLocked(source_event_id, result.command_reason, now);
         syncActiveNodeRuntimeCacheLocked();
         portEXIT_CRITICAL(&dataMutex);
         printCloudCommandResult(commandTypeBuffer, effect);
@@ -2294,12 +2313,14 @@ void applyCloudCommand(const CloudAssessmentResult &result, unsigned long now) {
             rejected = true;
             copyEventId(effect, sizeof(effect), "DOWNGRADE_REJECTED_THREAT_ACTIVE");
             setCloudCommandEffectLocked(true, effect);
+            setCloudCommandAuditLocked(source_event_id, result.command_reason, now);
         } else {
             globalData.fusion_enabled = targetEnabled;
             refreshFusionRuntimeLocked(now);
             syncActiveNodeRuntimeCacheLocked();
             copyEventId(effect, sizeof(effect), targetEnabled ? "FUSION_MODE_ENHANCED" : "FUSION_MODE_ECONOMY");
             setCloudCommandEffectLocked(true, effect);
+            setCloudCommandAuditLocked(source_event_id, result.command_reason, now);
         }
         portEXIT_CRITICAL(&dataMutex);
 
@@ -2316,6 +2337,7 @@ void applyCloudCommand(const CloudAssessmentResult &result, unsigned long now) {
             copyEventId(globalData.cloud_alert_text, sizeof(globalData.cloud_alert_text), result.alert_text);
         }
         setCloudCommandEffectLocked(true, "ALERT_GENERATED");
+        setCloudCommandAuditLocked(source_event_id, result.command_reason, now);
         syncActiveNodeRuntimeCacheLocked();
         portEXIT_CRITICAL(&dataMutex);
         printCloudCommandResult(commandTypeBuffer, "ALERT_GENERATED");
@@ -2325,6 +2347,7 @@ void applyCloudCommand(const CloudAssessmentResult &result, unsigned long now) {
     if (commandType == "TRIGGER_PARACHUTE") {
         portENTER_CRITICAL(&dataMutex);
         setCloudCommandEffectLocked(true, "PARACHUTE_INTENT_LOGGED");
+        setCloudCommandAuditLocked(source_event_id, result.command_reason, now);
         portEXIT_CRITICAL(&dataMutex);
         printCloudCommandResult(commandTypeBuffer, "PARACHUTE_INTENT_LOGGED", nullptr, nullptr, "status=NOT_INTEGRATED");
         return;
@@ -2332,6 +2355,7 @@ void applyCloudCommand(const CloudAssessmentResult &result, unsigned long now) {
 
     portENTER_CRITICAL(&dataMutex);
     setCloudCommandEffectLocked(false, "UNKNOWN_COMMAND");
+    setCloudCommandAuditLocked(source_event_id, result.command_reason, now);
     portEXIT_CRITICAL(&dataMutex);
     printCloudCommandResult(commandTypeBuffer, "UNKNOWN_COMMAND");
 }
@@ -2341,10 +2365,36 @@ void resetCloudCommandRuntime(unsigned long now) {
     globalData.runtime_event_threshold = 0.0f;
     globalData.cloud_command_applied = false;
     copyEventId(globalData.cloud_command_effect, sizeof(globalData.cloud_command_effect), "NONE");
+    copyEventId(globalData.cloud_command_source_event_id, sizeof(globalData.cloud_command_source_event_id), "NONE");
+    copyEventId(globalData.cloud_command_reason, sizeof(globalData.cloud_command_reason), "NONE");
+    globalData.cloud_command_applied_ms = 0;
     globalData.cloud_last_update_ms = now;
     syncActiveNodeRuntimeCacheLocked();
     portEXIT_CRITICAL(&dataMutex);
     Serial.println("CLOUD,RESET,runtime_event_threshold=0,cloud_command_effect=NONE");
+}
+
+bool restoreRuntimeEventThresholdIfNeeded(
+    const char *effect,
+    const char *reason,
+    unsigned long now,
+    const char *source_event_id = nullptr
+) {
+    bool didRestore = false;
+    portENTER_CRITICAL(&dataMutex);
+    if (globalData.runtime_event_threshold > 0.0f) {
+        globalData.runtime_event_threshold = 0.0f;
+        setCloudCommandEffectLocked(true, effect);
+        setCloudCommandAuditLocked(source_event_id, reason, now);
+        syncActiveNodeRuntimeCacheLocked();
+        didRestore = true;
+    }
+    portEXIT_CRITICAL(&dataMutex);
+
+    if (didRestore) {
+        printCloudCommandResult("ADJUST_THRESHOLD", effect, nullptr, reason);
+    }
+    return didRestore;
 }
 
 bool parseManualCloudApply(const String &rawValue, CloudAssessmentResult &result) {
@@ -2538,6 +2588,12 @@ void emitCloudStatus() {
     Serial.print(snapshot.cloud_command_applied ? 1 : 0);
     Serial.print(",cloud_command_effect=");
     Serial.print(snapshot.cloud_command_effect[0] != '\0' ? snapshot.cloud_command_effect : "NONE");
+    Serial.print(",cloud_command_source_event_id=");
+    Serial.print(snapshot.cloud_command_source_event_id[0] != '\0' ? snapshot.cloud_command_source_event_id : "NONE");
+    Serial.print(",cloud_command_reason=");
+    Serial.print(snapshot.cloud_command_reason[0] != '\0' ? snapshot.cloud_command_reason : "NONE");
+    Serial.print(",cloud_command_applied_ms=");
+    Serial.print(snapshot.cloud_command_applied_ms);
     Serial.print(",last_update_ms=");
     Serial.print(snapshot.cloud_last_update_ms);
     Serial.print(",error=");
@@ -3306,6 +3362,9 @@ UnifiedOutputSnapshot buildUnifiedOutputSnapshot(const SystemData &snapshot, con
     unified.runtime_event_threshold = clampRuntimeEventThreshold(snapshot.runtime_event_threshold);
     unified.cloud_command_applied = snapshot.cloud_command_applied;
     copyEventId(unified.cloud_command_effect, sizeof(unified.cloud_command_effect), normalizeOptionalField(snapshot.cloud_command_effect));
+    copyEventId(unified.cloud_command_source_event_id, sizeof(unified.cloud_command_source_event_id), normalizeOptionalField(snapshot.cloud_command_source_event_id));
+    copyEventId(unified.cloud_command_reason, sizeof(unified.cloud_command_reason), normalizeOptionalField(snapshot.cloud_command_reason));
+    unified.cloud_command_applied_ms = snapshot.cloud_command_applied_ms;
     return unified;
 }
 
@@ -3457,6 +3516,12 @@ void printNormalizedStateFields(const UnifiedOutputSnapshot &snapshot) {
     Serial.print(snapshot.cloud_command_applied ? 1 : 0);
     Serial.print(",cloud_command_effect=");
     Serial.print(snapshot.cloud_command_effect[0] != '\0' ? snapshot.cloud_command_effect : "NONE");
+    Serial.print(",cloud_command_source_event_id=");
+    Serial.print(snapshot.cloud_command_source_event_id[0] != '\0' ? snapshot.cloud_command_source_event_id : "NONE");
+    Serial.print(",cloud_command_reason=");
+    Serial.print(snapshot.cloud_command_reason[0] != '\0' ? snapshot.cloud_command_reason : "NONE");
+    Serial.print(",cloud_command_applied_ms=");
+    Serial.print(snapshot.cloud_command_applied_ms);
     Serial.print(",audio_state=");
     Serial.print(audioStateName(snapshot.audio_state));
     Serial.print(",uplink_state=");
@@ -6503,6 +6568,9 @@ void handleHostCommand(const String &line) {
         globalData.runtime_event_threshold = 0.0f;
         globalData.cloud_command_applied = false;
         copyEventId(globalData.cloud_command_effect, sizeof(globalData.cloud_command_effect), "NONE");
+        copyEventId(globalData.cloud_command_source_event_id, sizeof(globalData.cloud_command_source_event_id), "NONE");
+        copyEventId(globalData.cloud_command_reason, sizeof(globalData.cloud_command_reason), "NONE");
+        globalData.cloud_command_applied_ms = 0;
         refreshManualSimulationSnapshotLocked(millis());
         portEXIT_CRITICAL(&dataMutex);
         clearSimTrack();
@@ -7615,6 +7683,12 @@ void CloudTask(void *pvParameters) {
             lifecycle.last_closed_ms = now;
             lifecycle.last_cooldown_end_log_ms = 0;
             emitEventLifecycleLog("CLOSE", snapshot, nullptr, eventCloseReason);
+            restoreRuntimeEventThresholdIfNeeded(
+                "THRESHOLD_EVENT_CLOSED_RESTORED",
+                eventCloseReason,
+                now,
+                previousEventId
+            );
         }
 
         bool eventEligible = isEventEligible(snapshot, now);
@@ -7808,8 +7882,21 @@ void AiCloudTask(void *pvParameters) {
                     portENTER_CRITICAL(&dataMutex);
                     resetCloudFailureLogStateLocked();
                     portEXIT_CRITICAL(&dataMutex);
-                    applyCloudCommand(result, completedAt);
+                    applyCloudCommand(result, completedAt, item.event.event_id);
+                    if (strcmp(result.threat_level, "LOW") == 0) {
+                        restoreRuntimeEventThresholdIfNeeded(
+                            "THRESHOLD_AUTO_RESTORED",
+                            "threat_cleared",
+                            completedAt,
+                            item.event.event_id
+                        );
+                    }
                 } else {
+                    portENTER_CRITICAL(&dataMutex);
+                    setCloudCommandEffectLocked(false, "CLOUD_FAILED_LOCAL_FALLBACK");
+                    setCloudCommandAuditLocked(item.event.event_id, result.error, completedAt);
+                    syncActiveNodeRuntimeCacheLocked();
+                    portEXIT_CRITICAL(&dataMutex);
                     Serial.print("CLOUD,DEGRADED,reason=assess_failed,error=");
                     Serial.println(result.error[0] != '\0' ? result.error : "unknown");
                 }
@@ -7873,6 +7960,9 @@ void setup() {
     globalData.runtime_event_threshold = 0.0f;
     globalData.cloud_command_applied = false;
     copyEventId(globalData.cloud_command_effect, sizeof(globalData.cloud_command_effect), "NONE");
+    copyEventId(globalData.cloud_command_source_event_id, sizeof(globalData.cloud_command_source_event_id), "NONE");
+    copyEventId(globalData.cloud_command_reason, sizeof(globalData.cloud_command_reason), "NONE");
+    globalData.cloud_command_applied_ms = 0;
     globalData.fusion_enabled = FusionConfig::Enabled;
     globalData.timestamp_ms = millis();
     syncActiveNodeRuntimeCacheLocked();

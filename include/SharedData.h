@@ -196,6 +196,9 @@ struct SystemData {
     float runtime_event_threshold;
     bool cloud_command_applied;
     char cloud_command_effect[64];
+    char cloud_command_source_event_id[32];
+    char cloud_command_reason[64];
+    unsigned long cloud_command_applied_ms;
 };
 
 struct UnifiedOutputSnapshot {
@@ -284,6 +287,9 @@ struct UnifiedOutputSnapshot {
     float runtime_event_threshold;
     bool cloud_command_applied;
     char cloud_command_effect[64];
+    char cloud_command_source_event_id[32];
+    char cloud_command_reason[64];
+    unsigned long cloud_command_applied_ms;
 };
 
 struct EventObject {
