@@ -300,6 +300,9 @@ def build_node_brief_payload(
         "cloud_error": str(status_payload.get("cloud_error", "NONE") or "NONE"),
         "cloud_last_update_ms": safe_int(status_payload.get("cloud_last_update_ms", 0)),
         "runtime_event_threshold": safe_float(status_payload.get("runtime_event_threshold", 0.0), 0.0),
+        "cloud_command_source_event_id": str(status_payload.get("cloud_command_source_event_id", "NONE") or "NONE"),
+        "cloud_command_reason": str(status_payload.get("cloud_command_reason", "NONE") or "NONE"),
+        "cloud_command_applied_ms": safe_int(status_payload.get("cloud_command_applied_ms", 0)),
         "status_file": status_file.as_posix(),
         "events_file": events_file.as_posix(),
     }

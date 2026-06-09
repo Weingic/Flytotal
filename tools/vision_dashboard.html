@@ -891,6 +891,7 @@
     .pill.ok { background: rgba(29, 122, 90, 0.12); color: var(--ok); border-color: rgba(29, 122, 90, 0.18); }
     .pill.warn { background: rgba(183, 122, 0, 0.15); color: var(--warn); border-color: rgba(183, 122, 0, 0.18); }
     .pill.danger { background: rgba(178, 58, 47, 0.12); color: var(--danger); border-color: rgba(178, 58, 47, 0.18); }
+    .pill.info { background: rgba(42, 112, 216, 0.12); color: #2a70d8; border-color: rgba(42, 112, 216, 0.18); }
     .pill.offline { background: rgba(111, 103, 97, 0.14); color: var(--offline); border-color: rgba(111, 103, 97, 0.16); }
     .pill.searching { background: rgba(183, 150, 0, 0.15); color: #8a6800; border-color: rgba(183, 150, 0, 0.22); }
     .pill.handover { background: rgba(216, 90, 42, 0.14); color: var(--accent); border-color: rgba(216, 90, 42, 0.18); }
@@ -1353,6 +1354,9 @@
         <div class="status-row"><div class="label">指令效果</div><div class="value" id="cloudCommandEffectValue"><span class="pill normal">NONE</span></div></div>
         <div class="status-row"><div class="label">指令已执行</div><div class="value" id="cloudCommandAppliedValue"><span class="pill normal">NO</span></div></div>
         <div class="status-row"><div class="label">运行时阈值</div><div class="value" id="cloudThresholdValue">默认</div></div>
+        <div class="status-row"><div class="label">触发事件</div><div class="value" id="cloudCommandSourceEventValue">NONE</div></div>
+        <div class="status-row"><div class="label">指令理由</div><div class="value" id="cloudCommandReasonValue">NONE</div></div>
+        <div class="status-row"><div class="label">执行时刻</div><div class="value" id="cloudCommandAppliedTimeValue">--</div></div>
         <div class="status-row"><div class="label">错误信息</div><div class="value" id="cloudErrorValue">NONE</div></div>
         <div class="status-row"><div class="label">最近更新时间</div><div class="value" id="cloudTimeValue">--</div></div>
       </div>
@@ -2209,6 +2213,15 @@
     function cloudCommandEffectPill(effect) {
       const value = String(effect || "NONE");
       const upper = value.toUpperCase();
+      if (upper === "NO_ACTION_NEEDED") {
+        return semanticPill("无需处置", "ok");
+      }
+      if (upper === "CLOUD_FAILED_LOCAL_FALLBACK") {
+        return semanticPill("⚠ 云端研判失败·回退本地", "danger");
+      }
+      if (upper === "THRESHOLD_AUTO_RESTORED" || upper === "THRESHOLD_EVENT_CLOSED_RESTORED") {
+        return semanticPill("阈值已自动还原", "info");
+      }
       if (upper.indexOf("DOWNGRADE_REJECTED") >= 0) {
         return semanticPill("边缘否决: " + value, "danger");
       }
@@ -3155,6 +3168,9 @@
         document.getElementById("cloudCommandEffectValue").innerHTML = cloudCommandEffectPill("NONE");
         document.getElementById("cloudCommandAppliedValue").innerHTML = semanticPill("NO", "normal");
         document.getElementById("cloudThresholdValue").textContent = "默认";
+        document.getElementById("cloudCommandSourceEventValue").textContent = "NONE";
+        document.getElementById("cloudCommandReasonValue").textContent = "NONE";
+        document.getElementById("cloudCommandAppliedTimeValue").textContent = "--";
         document.getElementById("cloudErrorValue").textContent = "NONE";
         document.getElementById("cloudTimeValue").textContent = "--";
         return;
@@ -3177,6 +3193,12 @@
       const threshold = Number(status.runtime_event_threshold ?? 0);
       document.getElementById("cloudThresholdValue").textContent =
         threshold > 0 ? `${threshold.toFixed(1)}（大模型覆盖）` : "默认 76.0";
+      document.getElementById("cloudCommandSourceEventValue").textContent =
+        status.cloud_command_source_event_id || "NONE";
+      document.getElementById("cloudCommandReasonValue").textContent =
+        status.cloud_command_reason || "NONE";
+      document.getElementById("cloudCommandAppliedTimeValue").textContent =
+        formatTime(status.cloud_command_applied_ms);
       document.getElementById("cloudErrorValue").textContent = status.cloud_error || "NONE";
       document.getElementById("cloudTimeValue").textContent = formatTime(status.cloud_last_update_ms);
     }

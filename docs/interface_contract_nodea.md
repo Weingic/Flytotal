@@ -412,8 +412,33 @@ vision_web_server_视觉网页服务.py
 
 ---
 
-## 9. 变更历史
+## 9. 云端大模型字段
+
+以下字段由 NodeA 固件在 `STATUS` / `UPLINK,HB` / `UPLINK,EVENT` / `CLOUD,STATUS` 相关状态行输出，
+经 `node_a_serial_bridge` 落盘后，由 `vision_web_server` 透传给 `vision_dashboard`。这些字段用于展示
+“事件触发 -> 豆包研判 -> 下行指令 -> 边缘执行或否决 -> Dashboard 审计”的完整闭环。
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `cloud_online` | `int` 0/1 | 云端大模型最近一次评估是否成功在线。`0` 表示云端失败或离线，系统回退本地判决。 |
+| `cloud_threat_level` | `string` | 豆包返回的威胁等级，常见值为 `LOW` / `MEDIUM` / `HIGH` / `CRITICAL` / `NONE`。 |
+| `cloud_alert_text` | `string` | 豆包返回的现场告警播报文本。 |
+| `cloud_action` | `string` | 豆包返回的处置建议。 |
+| `cloud_command_type` | `string` | 豆包下发的指令类型，常见值为 `NONE` / `ADJUST_THRESHOLD` / `SWITCH_MODE` / `GENERATE_ALERT` / `TRIGGER_PARACHUTE`。 |
+| `cloud_command_effect` | `string` | 边缘节点对下行指令的执行结果，例如 `NO_ACTION_NEEDED`、`CLOUD_FAILED_LOCAL_FALLBACK`、`THRESHOLD_AUTO_RESTORED`、`THRESHOLD_EVENT_CLOSED_RESTORED`、`DOWNGRADE_REJECTED_THREAT_ACTIVE`、`PARACHUTE_INTENT_LOGGED`。 |
+| `cloud_command_applied` | `int` 0/1 | 是否真正执行了云端下行指令。`0` 也可能代表 `NO_ACTION_NEEDED`，即豆包认为无需处置。 |
+| `cloud_command_source_event_id` | `string` | 触发该云端指令的事件 ID；没有事件时为 `NONE`。 |
+| `cloud_command_reason` | `string` | 豆包返回的指令理由，或边缘端记录的默认原因。 |
+| `cloud_command_applied_ms` | `ulong` | 指令执行或记录的固件时间戳，单位 ms。 |
+| `cloud_last_update_ms` | `ulong` | 最近一次云端评估结果写入时间，单位 ms。 |
+| `runtime_event_threshold` | `float` | 运行时事件阈值。`0` 表示使用固件默认阈值；大于 `0` 表示豆包临时覆盖。 |
+| `cloud_error` | `string` | 云端链路错误码，例如 `missing_credentials`、`wifi_not_connected`、`http_status_not_ok`、`assessment_json_parse_failed`。 |
+
+---
+
+## 10. 变更历史
 
 | 日期 | 版本 | 说明 |
 |---|---|---|
 | 2026-04-15 | v1.0 | 初版，整理 vision_bridge / node_a_serial_bridge / vision_web_server / dashboard 所需核心字段契约 |
+| 2026-06-09 | v1.1 | 补充豆包云端大模型状态、下行指令执行结果和审计字段契约 |
