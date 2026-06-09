@@ -25,7 +25,7 @@
 |---|---|---|---|
 | 1 | **多模态融合分阶段** | FAR/MID/NEAR 三阶段 + 距离/速度一致性矩阵 + 浮点置信度 | `outputs/fusion_compare_far_mid_near.png` |
 | 2 | **多旋翼特征抗干扰** | 速度区间 + 悬停容忍 + 轨迹曲率 + 持续时长 4 维筛选 | `outputs/multirotor_features.png` + `multirotor_confusion_matrix.png` |
-| 3 | **ESP32 边缘协同感知** | NodeA + NodeB UART 双节点 + handoff 4 态机 | `outputs/co_sensing_timeline.png` |
+| 3 | **ESP32 边缘协同感知** | NodeA + NodeB UART 双节点身份链上报 + 基于目标距离推导的 handoff 4 态机（SINGLE_NODE/PENDING/ACTIVE/DONE，为多节点接力预留） | `outputs/co_sensing_timeline.png` |
 
 辅助创新：**云台二阶预测**（Lead 0.18s + Kd + 加速度 clamp + 低通滤波），见 `outputs/gimbal_prediction.png`。
 

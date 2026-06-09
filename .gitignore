@@ -27,8 +27,12 @@ captures/v5_2/
 outputs/
 
 # Local model assets can be large and environment-specific.
+*.onnx
+*.pt
+*.pkl
 models/*
 !models/MODEL_MANIFEST.example.json
+models/MODEL_MANIFEST.json
 
 # Local WiFi and cloud credentials.
 include/secrets.h
