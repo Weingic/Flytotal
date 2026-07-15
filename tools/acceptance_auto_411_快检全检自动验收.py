@@ -60,6 +60,7 @@ def run_mode(
     suite: str,
     suite_chain: str,
     base_url: str,
+    run_suite: bool,
     skip_usb: bool,
     report_file: Path,
     timeout_s: float,
@@ -81,6 +82,7 @@ def run_mode(
     suite_chain_value = str(suite_chain or "").strip()
     if suite_chain_value:
         command.extend(["--suite-chain", suite_chain_value])
+    command.append("--run-suite" if run_suite else "--no-run-suite")
     if skip_usb:
         command.append("--skip-usb")
 
@@ -133,6 +135,12 @@ def main() -> int:
         help="Optional comma-separated suite chain, for example rid_identity_chain_v1,risk_event_vision_chain_v1",
     )
     parser.add_argument("--base-url", default="http://127.0.0.1:8765", help="Vision web base URL")
+    parser.add_argument(
+        "--run-suite",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run serial injection suites; disable while node_a_serial_bridge owns the serial port",
+    )
     parser.add_argument("--skip-usb", action="store_true", help="Pass --skip-usb to both quick/full steps")
     parser.add_argument(
         "--stop-on-quick-fail",
@@ -177,6 +185,7 @@ def main() -> int:
         suite=suite_name,
         suite_chain=suite_chain_value,
         base_url=base_url,
+        run_suite=bool(args.run_suite),
         skip_usb=bool(args.skip_usb),
         report_file=quick_report_file,
         timeout_s=float(args.step_timeout_s),
@@ -201,6 +210,7 @@ def main() -> int:
             suite=suite_name,
             suite_chain=suite_chain_value,
             base_url=base_url,
+            run_suite=bool(args.run_suite),
             skip_usb=bool(args.skip_usb),
             report_file=full_report_file,
             timeout_s=float(args.step_timeout_s),
@@ -242,6 +252,8 @@ def main() -> int:
         "suite": suite_name,
         "suite_chain": suite_chain_value,
         "base_url": base_url,
+        "run_suite": bool(args.run_suite),
+        "serial_owner": "acceptance_auto" if bool(args.run_suite) else "node_a_serial_bridge",
         "skip_usb": bool(args.skip_usb),
         "stop_on_quick_fail": bool(args.stop_on_quick_fail),
         "quick_step": quick_step,
@@ -266,6 +278,7 @@ def main() -> int:
     if suite_chain_value:
         print(f"suite_chain={suite_chain_value}")
     print(f"stop_on_quick_fail={int(bool(args.stop_on_quick_fail))}")
+    print(f"run_suite={int(bool(args.run_suite))}")
     print(f"full_closure_vision_lock_hits={full_closure_vision_lock_hits}")
     print(f"full_closure_capture_ready_hits={full_closure_capture_ready_hits}")
     print(f"full_closure_vision_lock_ok={full_closure_vision_lock_ok}")

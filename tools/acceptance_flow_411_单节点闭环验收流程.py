@@ -213,6 +213,12 @@ def main() -> int:
         default=1,
         help="Minimum capture-ready evidence hits required by closure check",
     )
+    parser.add_argument(
+        "--closure-require-national-first-evidence",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Require exact YOLO auto-lock, valid image, hashes, and same-event cloud downlink",
+    )
     parser.add_argument("--run-preflight", action=argparse.BooleanOptionalAction, default=True, help="Run preflight checks before suite/usb/closure steps")
     parser.add_argument("--preflight-fail-fast", action="store_true", help="Stop subsequent steps when preflight returns FAIL")
     parser.add_argument(
@@ -224,7 +230,12 @@ def main() -> int:
     parser.add_argument("--preflight-timeout-s", type=float, default=1.2, help="Timeout passed to preflight network checks")
     parser.add_argument("--preflight-refresh-usb-check", action=argparse.BooleanOptionalAction, default=True, help="When preflight runs, whether to refresh usb readiness report")
     parser.add_argument("--preflight-report-file", type=Path, default=Path("captures/latest_411_preflight_report.json"), help="Preflight report JSON path")
-    parser.add_argument("--run-suite", action="store_true", help="Run track_injector suite step before readiness checks")
+    parser.add_argument(
+        "--run-suite",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Run track_injector suite step; disable while node_a_serial_bridge owns the serial port",
+    )
     parser.add_argument("--port", default="", help="Serial port for track_injector when --run-suite is enabled, e.g. COM4")
     parser.add_argument("--baud", type=int, default=115200, help="Serial baud for track_injector suite step")
     parser.add_argument(
@@ -249,7 +260,7 @@ def main() -> int:
     args = parser.parse_args()
     raw_argv = sys.argv[1:]
 
-    explicit_run_suite = has_flag(raw_argv, "--run-suite")
+    explicit_run_suite = has_flag(raw_argv, "--run-suite") or has_flag(raw_argv, "--no-run-suite")
     explicit_skip_closure = has_flag(raw_argv, "--skip-closure")
     explicit_preflight_fail_fast = has_flag(raw_argv, "--preflight-fail-fast")
     explicit_preflight_fail_fast_scope = has_flag(raw_argv, "--preflight-fail-fast-scope")
@@ -257,6 +268,10 @@ def main() -> int:
     explicit_closure_retries = has_flag(raw_argv, "--closure-api-retries")
     explicit_closure_require_vision_lock = has_flag(raw_argv, "--closure-require-vision-lock") or has_flag(raw_argv, "--no-closure-require-vision-lock")
     explicit_closure_require_capture_ready = has_flag(raw_argv, "--closure-require-capture-ready") or has_flag(raw_argv, "--no-closure-require-capture-ready")
+    explicit_closure_require_national_first = (
+        has_flag(raw_argv, "--closure-require-national-first-evidence")
+        or has_flag(raw_argv, "--no-closure-require-national-first-evidence")
+    )
     mode_defaults_applied: list[str] = []
 
     if args.mode == "quick":
@@ -297,6 +312,9 @@ def main() -> int:
         if not explicit_closure_require_capture_ready:
             args.closure_require_capture_ready = True
             mode_defaults_applied.append("closure_require_capture_ready=true")
+        if not explicit_closure_require_national_first:
+            args.closure_require_national_first_evidence = True
+            mode_defaults_applied.append("closure_require_national_first_evidence=true")
 
     report_file = resolve_path(args.report_file)
     preflight_report_file = resolve_path(args.preflight_report_file)
@@ -462,6 +480,8 @@ def main() -> int:
                 closure_cmd.append("--require-vision-lock")
             if bool(args.closure_require_capture_ready):
                 closure_cmd.append("--require-capture-ready")
+            if bool(args.closure_require_national_first_evidence):
+                closure_cmd.append("--require-national-first-evidence")
             if args.allow_no_export:
                 closure_cmd.append("--allow-no-export")
             steps.append(run_step("single_node_evidence_closure", closure_cmd, args.timeout_s))
@@ -481,6 +501,25 @@ def main() -> int:
     closure_cached_capture_ready_hits = int((closure_counts.get("capture_ready_hits", 0) or 0) if isinstance(closure_counts, dict) else 0)
     closure_cached_vision_lock_ok = bool(closure_checks.get("vision_lock_evidence_ok")) if isinstance(closure_checks, dict) else False
     closure_cached_capture_ready_ok = bool(closure_checks.get("capture_ready_evidence_ok")) if isinstance(closure_checks, dict) else False
+    closure_cached_national_first_ok = bool(closure_checks.get("national_first_evidence_ok")) if isinstance(closure_checks, dict) else False
+    closure_cached_strict_export_hash_ok = bool(closure_checks.get("strict_export_hash_ok")) if isinstance(closure_checks, dict) else False
+    closure_cached_strict_export_vision_hash_ok = bool(closure_checks.get("strict_export_vision_hash_ok")) if isinstance(closure_checks, dict) else False
+    closure_national_first = closure_report.get("national_first_evidence", {}) if isinstance(closure_report, dict) else {}
+    closure_cached_national_first_result = (
+        str(closure_national_first.get("result", "SKIPPED") or "SKIPPED").upper()
+        if isinstance(closure_national_first, dict)
+        else "SKIPPED"
+    )
+    closure_cached_national_first_passed = int(
+        (closure_national_first.get("passed_count", 0) or 0)
+        if isinstance(closure_national_first, dict)
+        else 0
+    )
+    closure_cached_national_first_total = int(
+        (closure_national_first.get("total_count", 15) or 15)
+        if isinstance(closure_national_first, dict)
+        else 15
+    )
     closure_cached_latest_event_id = str(closure_report.get("latest_event_id", "NONE") or "NONE")
     closure_export_count = closure_cached_export_count
     closure_export_detail_ok = closure_cached_export_detail_ok
@@ -488,6 +527,12 @@ def main() -> int:
     closure_capture_ready_hits = closure_cached_capture_ready_hits
     closure_vision_lock_ok = closure_cached_vision_lock_ok
     closure_capture_ready_ok = closure_cached_capture_ready_ok
+    closure_national_first_ok = closure_cached_national_first_ok
+    closure_strict_export_hash_ok = closure_cached_strict_export_hash_ok
+    closure_strict_export_vision_hash_ok = closure_cached_strict_export_vision_hash_ok
+    closure_national_first_result = closure_cached_national_first_result
+    closure_national_first_passed = closure_cached_national_first_passed
+    closure_national_first_total = closure_cached_national_first_total
     closure_latest_event_id = closure_cached_latest_event_id
     if args.skip_closure:
         closure_result = "SKIPPED"
@@ -497,6 +542,12 @@ def main() -> int:
         closure_capture_ready_hits = 0
         closure_vision_lock_ok = False
         closure_capture_ready_ok = False
+        closure_national_first_ok = False
+        closure_strict_export_hash_ok = False
+        closure_strict_export_vision_hash_ok = False
+        closure_national_first_result = "SKIPPED"
+        closure_national_first_passed = 0
+        closure_national_first_total = 15
         closure_latest_event_id = "NONE"
     elif not closure_step_executed:
         closure_result = "SKIPPED_PRECHECK" if not web_health_precheck_ok else "SKIPPED"
@@ -506,6 +557,12 @@ def main() -> int:
         closure_capture_ready_hits = 0
         closure_vision_lock_ok = False
         closure_capture_ready_ok = False
+        closure_national_first_ok = False
+        closure_strict_export_hash_ok = False
+        closure_strict_export_vision_hash_ok = False
+        closure_national_first_result = "SKIPPED"
+        closure_national_first_passed = 0
+        closure_national_first_total = 15
         closure_latest_event_id = "NONE"
     else:
         closure_result = closure_result_raw
@@ -591,6 +648,19 @@ def main() -> int:
         operator_hints.append(
             f"Vision lock evidence is insufficient: run `{recommended_vision_command}` and complete one high-risk lock cycle."
         )
+    national_first_chain_missing = any(
+        item.startswith("national_first_evidence:")
+        or item.startswith("national_first_strict_export_failed:")
+        or item.startswith("national_first_latest_export_event_id_mismatch:")
+        or item.startswith("national_first_export_detail_event_id_mismatch:")
+        or item.startswith("national_first_export_")
+        for item in closure_failure_text
+    )
+    if national_first_chain_missing:
+        operator_hints.append(
+            "National-first evidence is incomplete: create one fresh event containing automatic YOLO lock, "
+            "valid capture, and cloud downlink bound to the same event ID, then rerun full acceptance."
+        )
     if any("node_event_export_detail_not_available" in item for item in closure_failure_text):
         operator_hints.append("Event export detail is unavailable: export current event evidence JSON from dashboard, then retry.")
     if any(str(item.get("name", "")) == "usb_camera_readiness" for item in step_failures):
@@ -626,14 +696,18 @@ def main() -> int:
         suite_option_fragment = f"--suite-chain {suite_chain_value}"
     else:
         suite_option_fragment = f"--suite {suite_names[0]}"
+    suite_run_fragment = "--run-suite" if bool(args.run_suite) else "--no-run-suite"
+    usb_run_fragment = "--skip-usb" if bool(args.skip_usb) else ""
 
     quick_mode_cmd = (
         f"python tools/{Path(__file__).name} "
-        f"--mode quick --port {str(args.port).strip() or 'COM4'} {suite_option_fragment} --base-url {args.base_url}"
+        f"--mode quick --port {str(args.port).strip() or 'COM4'} {suite_option_fragment} "
+        f"{suite_run_fragment} {usb_run_fragment} --base-url {args.base_url}"
     )
     full_mode_cmd = (
         f"python tools/{Path(__file__).name} "
-        f"--mode full --port {str(args.port).strip() or 'COM4'} {suite_option_fragment} --base-url {args.base_url}"
+        f"--mode full --port {str(args.port).strip() or 'COM4'} {suite_option_fragment} "
+        f"{suite_run_fragment} {usb_run_fragment} --base-url {args.base_url}"
     )
     suite_cmd_single = (
         f"python tools/{TRACK_INJECTOR_SCRIPT.name} "
@@ -641,7 +715,10 @@ def main() -> int:
     )
     bridge_script = find_tool_script("node_a_serial_bridge_")
     web_server_script = find_tool_script("vision_web_server_")
-    bridge_cmd_single = f"python tools/{bridge_script.name} --port {str(args.port).strip() or 'COM4'} --baud {max(1, int(args.baud))}"
+    bridge_cmd_single = (
+        f"python tools/{bridge_script.name} --port {str(args.port).strip() or 'COM4'} "
+        f"--baud {max(1, int(args.baud))} --vision-forward-status"
+    )
     usb_check_cmd = f"python tools/{USB_CHECK_SCRIPT.name}"
     web_server_cmd = f"python tools/{web_server_script.name}"
 
@@ -667,6 +744,7 @@ def main() -> int:
         or ("capture_ready_evidence_below_min" in item)
         for item in closure_failure_text
     )
+    needs_national_first = national_first_chain_missing
 
     next_action_summary = ""
     next_action_command = ""
@@ -689,6 +767,12 @@ def main() -> int:
         elif usb_not_pass or usb_step_failed:
             next_action_summary = "USB camera is not ready. Run USB readiness check first."
             next_action_command = usb_check_cmd
+        elif needs_national_first:
+            next_action_summary = (
+                "Current event does not satisfy the 15-point national-first evidence gate. "
+                "Rebuild the live stack and create one fresh same-event vision and cloud cycle."
+            )
+            next_action_command = startup_helper_cmd
         elif needs_vision_lock and recommended_vision_command:
             next_action_summary = "Vision lock evidence is insufficient. Run vision bridge and complete one high-risk lock cycle."
             next_action_command = recommended_vision_command
@@ -729,6 +813,8 @@ def main() -> int:
             "closure_min_vision_lock_hits": max(1, int(args.closure_min_vision_lock_hits)),
             "closure_require_capture_ready": bool(args.closure_require_capture_ready),
             "closure_min_capture_ready_hits": max(1, int(args.closure_min_capture_ready_hits)),
+            "closure_require_national_first_evidence": bool(args.closure_require_national_first_evidence),
+            "serial_owner": "acceptance_flow" if bool(args.run_suite) else "node_a_serial_bridge",
         },
         "steps_total": len(steps),
         "steps_passed": sum(1 for item in steps if bool(item.get("ok"))),
@@ -768,6 +854,12 @@ def main() -> int:
         "closure_capture_ready_hits": closure_capture_ready_hits,
         "closure_vision_lock_ok": closure_vision_lock_ok,
         "closure_capture_ready_ok": closure_capture_ready_ok,
+        "closure_national_first_ok": closure_national_first_ok,
+        "closure_national_first_result": closure_national_first_result,
+        "closure_national_first_passed": closure_national_first_passed,
+        "closure_national_first_total": closure_national_first_total,
+        "closure_strict_export_hash_ok": closure_strict_export_hash_ok,
+        "closure_strict_export_vision_hash_ok": closure_strict_export_vision_hash_ok,
         "closure_cached_latest_event_id": closure_cached_latest_event_id,
         "closure_cached_export_count": closure_cached_export_count,
         "closure_cached_export_detail_ok": closure_cached_export_detail_ok,
@@ -775,6 +867,12 @@ def main() -> int:
         "closure_cached_capture_ready_hits": closure_cached_capture_ready_hits,
         "closure_cached_vision_lock_ok": closure_cached_vision_lock_ok,
         "closure_cached_capture_ready_ok": closure_cached_capture_ready_ok,
+        "closure_cached_national_first_ok": closure_cached_national_first_ok,
+        "closure_cached_national_first_result": closure_cached_national_first_result,
+        "closure_cached_national_first_passed": closure_cached_national_first_passed,
+        "closure_cached_national_first_total": closure_cached_national_first_total,
+        "closure_cached_strict_export_hash_ok": closure_cached_strict_export_hash_ok,
+        "closure_cached_strict_export_vision_hash_ok": closure_cached_strict_export_vision_hash_ok,
         "failure_count": len(failures),
         "warning_count": len(warnings),
         "note_count": len(notes),
@@ -817,6 +915,12 @@ def main() -> int:
     print(f"closure_capture_ready_hits={closure_capture_ready_hits}")
     print(f"closure_vision_lock_ok={closure_vision_lock_ok}")
     print(f"closure_capture_ready_ok={closure_capture_ready_ok}")
+    print(
+        f"closure_national_first={closure_national_first_result} "
+        f"{closure_national_first_passed}/{closure_national_first_total}"
+    )
+    print(f"closure_strict_export_hash_ok={closure_strict_export_hash_ok}")
+    print(f"closure_strict_export_vision_hash_ok={closure_strict_export_vision_hash_ok}")
     print(f"preflight_command={preflight_cmd}")
     print(f"startup_helper_command={startup_helper_cmd}")
     print(f"failure_count={report['failure_count']}")

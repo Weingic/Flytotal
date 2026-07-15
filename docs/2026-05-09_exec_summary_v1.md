@@ -1,98 +1,96 @@
-# Flytotal 一页执行摘要 V1
+# Flytotal 物联网竞赛一页执行摘要 V2
 
-更新：2026-05-09 · 答辩 30 秒一页版
+更新：2026-07-13。对应 2026 全国大学生物联网设计竞赛乐鑫命题，当前是国赛材料准备稿，真实外场和同事件严格证据未完成前不得作为最终成绩页。
 
 ## 项目定位
 
-低成本边缘端反无人机感知系统，基于 ESP32 双节点（S3 主感知 + C3 身份链）+ LD2450/LD2451 双雷达 + 视觉摄像头 + 协同上报，目标 100 m 范围内**远距广搜、中距确认、近距固证**。
+Flytotal 是面向校园与重点区域低空安全的 AIoT 多源感知和云边协同预警系统。ESP32-S3 将近距二维雷达、远距运动雷达、RID 身份链和视觉确认状态融合为结构化风险事件，上传火山方舟豆包大模型研判，再对大模型下行指令做边缘安全校验、执行或拒绝，并形成可追溯事件证据。
 
-## 系统拓扑
+## 乐鑫命题四条硬要求
 
-```
-[LD2450 短距 2D]───┐
-[LD2451 长距运动]──┤
-                   ├── NodeA (ESP32-S3) ──UART──> 上位机/Dashboard
-[摄像头 + YOLO/CSRT]┤                  ↑
-                   │                 [Fusion + 多旋翼筛选 + 云台预测]
-[NodeB (ESP32-C3)]─┘                   │
-   Wi-Fi/BLE RID                       │
-                                  [事件 + 证据链]
-```
+官方命题页：`https://www.espressif.com/zh-hans/ecosystem/education/competition/iot`
 
-## 三大创新点（每条配 1 张图）
+| 官方要求 | 本项目对应实现 | 当前证据状态 |
+| --- | --- | --- |
+| ESP32-S3/C5/P4 之一作为核心主控 | NodeA 使用 ESP32-S3，负责传感输入、融合、风险/事件状态机、云端通信和下行策略执行 | 固件与实机串口链已完成 |
+| 至少一种传感器数据融合 | LD2450 近距轨迹 + LD2451 远距运动 + NodeB RID 身份 + 主机视觉状态在 ESP32-S3 汇合 | 代码和台架场景已完成；真实距离分层待测 |
+| 至少一个云端大模型 | 火山方舟 Ark 接口，模型为豆包 `doubao-1-5-pro-32k-250115` | API 与云端事件曾跑通；当前公共网络离线 |
+| 下行响应，或非音视频感知数据上行 | 上行发送雷达、身份、风险和事件摘要；下行支持阈值调整、模式切换、告警生成及安全拒绝 | 单独云端闭环已有记录；有效视觉同事件严格 15/15 待完成 |
 
-| # | 创新点 | 技术核心 | 证据图 |
-|---|---|---|---|
-| 1 | **多模态融合分阶段** | FAR/MID/NEAR 三阶段 + 距离/速度一致性矩阵 + 浮点置信度 | `outputs/fusion_compare_far_mid_near.png` |
-| 2 | **多旋翼特征抗干扰** | 速度区间 + 悬停容忍 + 轨迹曲率 + 持续时长 4 维筛选 | `outputs/multirotor_features.png` + `multirotor_confusion_matrix.png` |
-| 3 | **ESP32 边缘协同感知** | NodeA + NodeB UART 双节点身份链上报 + 基于目标距离推导的 handoff 4 态机（SINGLE_NODE/PENDING/ACTIVE/DONE，为多节点接力预留） | `outputs/co_sensing_timeline.png` |
+## 真实系统链路
 
-辅助创新：**云台二阶预测**（Lead 0.18s + Kd + 加速度 clamp + 低通滤波），见 `outputs/gimbal_prediction.png`。
-
-## 关键指标
-
-| 指标 | 数值 | 来源 |
-|---|---|---|
-| 检测距离 | 5 m – 100 m | 设计目标 + 现场协议 |
-| FAR 阶段 | >30 m，LD2451+RID 双源 | `Fusion.cpp:117` |
-| MID 阶段 | 10–30 m，2 源一致 | 同上 |
-| NEAR 阶段 | <10 m，必有视觉或 RID_MATCHED | 同上 |
-| 多旋翼确认延迟 | 5 帧 ≈ 0.5 s | `TrackConfig::ConfirmFrames=5` |
-| 云台预测 lead | 0.18 s 二阶外推 | `GimbalConfig::PredictorLeadTimeSeconds` |
-| Watchdog 时限 | 8 s（5 任务全注册） | `WatchdogConfig::TimeoutSeconds` |
-| NodeB 重连冷却 | 3 s（快阶段 5 次后切 15 s） | `NodeBConfig::ReconnectIntervalMs` |
-
-## 核心字段（数据契约）
-
-- 雷达：`x_mm / y_mm / vx_mm_s / vy_mm_s`、`lr_range_mm / lr_speed_mm_s`、`is_multirotor_like / multirotor_score`
-- 视觉：`vision_confidence (0-1) / bbox_stability_score / tracker_state`
-- 融合：`fusion_stage (FAR/MID/NEAR) / fusion_confidence (0-1) / fusion_level / fusion_reason`
-- 协同：`nodeb_online / handoff_from / handoff_to / continuity_hint`
-
-## 端到端延迟（典型场景，单位 ms）
-
-```
-雷达帧到达       ─┐
-LD2450 解析+卡尔曼 │  ~5
-轨迹更新+多旋翼判定│  ~3
-融合评估           │  ~2  →  Fusion 决策
-风险评分+事件状态机│  ~4
-云台目标计算+二阶外推│  ~1
-PWM 输出           ─┘  ~1     总计 ≈ 16 ms（雷达→云台）
-
-视觉支链：摄像头帧 → YOLO 旁路 (10 帧 1 次) → CSRT 实时 → 写 latest_status.json → host command 注入主链 → Fusion 加权
-延迟 ≈ 30-100 ms（独立线程，不阻塞主链）
+```text
+LD2450 近距二维轨迹 ─┐
+LD2451 远距运动预警 ─┤
+NodeB RID 身份链 ─────┼─> NodeA ESP32-S3
+主机 V4b 视觉状态 ────┘       │
+                              ├─ 本地融合、风险和事件状态机
+                              ├─ 结构化非音视频感知数据上行
+                              v
+                     火山方舟豆包云端大模型
+                              │
+                              v
+                     指令校验、执行或安全拒绝
+                              │
+                              v
+                 Dashboard、抓拍、事件导出和双层哈希
 ```
 
-详见 `docs/2026-05-09_latency_budget_v1.md`。
+摄像头 V4b ONNX 推理由现场 PC 网关运行，不冒充 ESP32-S3 端侧视觉推理。ESP32-S3 仍是传感融合、事件决策、云端通信和设备响应的核心控制器。
 
-## 设计 vs 实装回归保护
+## 三个核心创新点
 
-- **FusionConfig::Enabled = false 默认** → 烧固件不影响 v1.0 六基线
-- 运行时 `FUSION,ENABLE,1/0` host command 切换，无需重烧
-- `release/v1.0` tag 保留，30s 内可回退（见 `runbook_v1.md`）
+| 创新点 | 技术内容 | 可展示证据 |
+| --- | --- | --- |
+| 分阶段多源融合 | 远距运动先预警，近距二维轨迹、RID 与视觉逐步提高可信度；单源异常不直接包装成无人机确认 | `Fusion.cpp`、状态字段、场景矩阵、真实距离记录 |
+| 可约束的云边协同 | 云端读取结构化感知摘要并输出 JSON 指令；ESP32-S3 对参数范围、威胁状态和硬件集成状态做校验 | `CloudClient.cpp`、`cloud_command_*`、同事件导出 |
+| 可审计的自动视觉证据 | V4b 检测连续确认后自动启动 MIL 跟踪，拒绝黑帧和过期事件绑定，抓拍与事件分别形成 SHA256 | V4b 模型卡、Dashboard、严格事件 15/15 |
 
-## 答辩素材清单（产物路径）
+## 当前有证据的指标
 
+| 指标 | 当前结果 | 适用边界 |
+| --- | --- | --- |
+| V4b 独立测试集 Precision | `0.95506` | 103 张独立图像，置信度 0.45，不是外场距离结果 |
+| V4b 独立测试集 Recall | `0.77982` | 同上 |
+| V4b 独立测试集 F1 | `0.85859` | 同上 |
+| ONNX CPU P95 | `34.816 ms` | 当前 24 线程电脑、8 个 ONNX intra-op 线程 |
+| COCO val2017 图片触发 | `120/5000` | 困难负样本压力结果，不等于真实场地误报率 |
+| PC 工具完整回归 | `22/22 PASS` | 软件逻辑验证，不等于真实事件 15/15 |
+| 当前正式真实轨迹 | `0` | 等待无人机、人、车、鸟和近距实测 |
+| 真实视觉距离 | `PENDING` | 10/30/50 米必须逐点实测，不预写成功 |
+| 同一真实事件严格证据 | `PENDING` | 需 W-iPhone、有效 V4b 画面、云端同事件下行和严格导出 |
+
+## 已完成和未完成必须分开讲
+
+### 已完成
+
+1. ESP32-S3 主链、传感字段、风险/事件状态机和云端客户端已接入。
+2. 一条云端风险事件已证明 Ark API、`GENERATE_ALERT` 与边缘 `ALERT_GENERATED` 链路，但没有有效视觉抓拍，不能充当最终主证据。
+3. V4b 专用无人机模型已部署，独立评测、ONNX 运行时、自动锁定、有效画面和哈希链已通过离线验证。
+4. COM4 已收口为单一桥接所有者，视觉心跳、状态轮询和命令收件箱可以共存。
+
+### 未完成
+
+1. 新事件的 V4b、抓拍、Ark 下行、ESP32-S3 执行和严格导出同场 `15/15`。
+2. 真实无人机、人物、车辆、鸟类的召回、误报、漏报和近距轨迹数据。
+3. V4b 与 LD2451 的 10/30/50 米实测矩阵。
+4. 最终演示视频、答辩截图和外观/布线成品展示。
+
+## 30 秒演示主线
+
+```text
+真实目标进入
+-> ESP32-S3 汇合雷达、身份与视觉状态
+-> 风险升级并创建唯一事件号
+-> 非音视频结构化摘要上传豆包
+-> 云端返回带来源事件号的 JSON 指令
+-> ESP32-S3 校验并执行/拒绝
+-> Dashboard 展示同一事件、有效抓拍、命令效果和证据哈希
 ```
-outputs/
-├── fusion_compare_far_mid_near.png    ← 创新 1
-├── gimbal_prediction.png              ← 云台二阶预测
-├── multirotor_features.png            ← 创新 2 特征分布
-├── multirotor_confusion_matrix.png    ← 创新 2 分类性能
-└── co_sensing_timeline.png            ← 创新 3 状态切换
 
-docs/
-├── 2026-05-08_v5_2_overall_upgrade_v1.md      ← 总纲
-├── 2026-05-08_algorithm_formula_book_v1.md    ← 公式书
-├── 2026-05-08_hardware_bom_wiring_v1.md       ← 硬件 BOM
-├── 2026-05-08_v5_2_runbook_v1.md              ← 部署+回退
-├── 2026-04-30_v5_2_defense_qa_v1.md           ← 12 项 Q&A
-└── 2026-05-09_exec_summary_v1.md              ← 本文档
-```
+## 绝不夸大的四个边界
 
-## 给小白的解释
-
-这是什么：答辩前 30 秒可以让评委看完的一页摘要。
-有什么用：评委没时间读 10 份长文档，看完这页能立刻问到点子上。
-你现在该怎么做：打印一份贴在演示桌前；做 PPT 时第二页直接抄这个结构。
+1. `100 m` 只可描述为 LD2451 远距运动预警的设计与待测范围，不能说稳定识别小型无人机。
+2. `TRIGGER_PARACHUTE` 不在模型允许输出中；NodeA 即使收到也会以 `applied=false + edge_veto=1` 明确拒绝，硬件未集成，不能说已经执行反制。
+3. V4b 离线图像指标不能代替真实 10/30/50 米结果。
+4. 估算延迟和软件回归不能写成实机端到端实测；最终只引用带原始记录的现场数值。

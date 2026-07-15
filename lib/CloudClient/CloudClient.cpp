@@ -1,36 +1,62 @@
 #include "CloudClient.h"
 
 #include <cJSON.h>
-#include <esp_crt_bundle.h>
 #include <esp_http_client.h>
 #include <string.h>
 
-#ifndef esp_crt_bundle_attach
-#define esp_crt_bundle_attach arduino_esp_crt_bundle_attach
-#endif
-
 namespace {
+
+constexpr char kArkRootCaPem[] =
+    "-----BEGIN CERTIFICATE-----\n"
+    "MIIDjjCCAnagAwIBAgIQAzrx5qcRqaC7KGSxHQn65TANBgkqhkiG9w0BAQsFADBh\n"
+    "MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3\n"
+    "d3cuZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBH\n"
+    "MjAeFw0xMzA4MDExMjAwMDBaFw0zODAxMTUxMjAwMDBaMGExCzAJBgNVBAYTAlVT\n"
+    "MRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5j\n"
+    "b20xIDAeBgNVBAMTF0RpZ2lDZXJ0IEdsb2JhbCBSb290IEcyMIIBIjANBgkqhkiG\n"
+    "9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuzfNNNx7a8myaJCtSnX/RrohCgiN9RlUyfuI\n"
+    "2/Ou8jqJkTx65qsGGmvPrC3oXgkkRLpimn7Wo6h+4FR1IAWsULecYxpsMNzaHxmx\n"
+    "1x7e/dfgy5SDN67sH0NO3Xss0r0upS/kqbitOtSZpLYl6ZtrAGCSYP9PIUkY92eQ\n"
+    "q2EGnI/yuum06ZIya7XzV+hdG82MHauVBJVJ8zUtluNJbd134/tJS7SsVQepj5Wz\n"
+    "tCO7TG1F8PapspUwtP1MVYwnSlcUfIKdzXOS0xZKBgyMUNGPHgm+F6HmIcr9g+UQ\n"
+    "vIOlCsRnKPZzFBQ9RnbDhxSJITRNrw9FDKZJobq7nMWxM4MphQIDAQABo0IwQDAP\n"
+    "BgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBhjAdBgNVHQ4EFgQUTiJUIBiV\n"
+    "5uNu5g/6+rkS7QYXjzkwDQYJKoZIhvcNAQELBQADggEBAGBnKJRvDkhj6zHd6mcY\n"
+    "1Yl9PMWLSn/pvtsrF9+wX3N3KjITOYFnQoQj8kVnNeyIv/iPsGEMNKSuIEyExtv4\n"
+    "NeF22d+mQrvHRAiGfzZ0JFrabA0UWTW98kndth/Jsw1HKj2ZL7tcu7XUIOGZX1NG\n"
+    "Fdtom/DzMNU+MeKNhJ7jitralj41E6Vf8PlwUHBHQRFXGU7Aj64GxJUTFy8bJZ91\n"
+    "8rGOmaFvE7FBcf6IKshPECBV1/MUReXgRPTqh5Uykw7+U0b6LJ3/iyK5S9kJRaTe\n"
+    "pLiaWN0bfVKfjllDiIGknibVb63dDcY3fe0Dkhvld1927jyNxF1WW6LZZm6zNTfl\n"
+    "MrY=\n"
+    "-----END CERTIFICATE-----\n";
 
 constexpr const char *kSystemPrompt =
     "你是智慧园区低空安防系统的 AI 威胁评估专家。边缘节点会上传多源感知数据\n"
     "（双毫米波雷达、视觉、Remote-ID 身份链、多旋翼特征评分）。\n\n"
     "请评估威胁并严格返回如下 JSON（不要任何额外文字）：\n"
     "{\n"
+    "  \"event_id\": \"必须原样回显输入事件中的 event_id\",\n"
     "  \"threat_level\": \"LOW|MEDIUM|HIGH|CRITICAL\",\n"
     "  \"assessment\": \"一句话威胁分析（中文，30字内）\",\n"
     "  \"action\": \"处置建议（中文，30字内）\",\n"
     "  \"alert_text\": \"现场告警播报文本（中文，20字内）\",\n"
     "  \"command\": {\n"
-    "    \"type\": \"NONE|ADJUST_THRESHOLD|SWITCH_MODE|GENERATE_ALERT|TRIGGER_PARACHUTE\",\n"
+    "    \"type\": \"NONE|ADJUST_THRESHOLD|SWITCH_MODE|GENERATE_ALERT\",\n"
     "    \"params\": {}\n"
     "  }\n"
     "}\n\n"
     "判定规则：\n"
-    "- 合作目标（RID 白名单通过）→ threat_level=LOW，command.type=NONE\n"
-    "- 非合作 + 视觉确认 + 高风险 → threat_level=HIGH/CRITICAL\n"
-    "- 多旋翼评分高 + 非合作 → 建议 TRIGGER_PARACHUTE\n"
-    "- 若建议 ADJUST_THRESHOLD, 在 params 给 {\"event_threshold\": 数值}(50-90)\n"
-    "- 若建议 SWITCH_MODE, 在 params 给 {\"mode\":\"ENHANCED|STANDARD|ECONOMY\", \"reason\":\"理由\"}";
+    "- event_id 必须与输入中的 event_id 完全一致，不得省略、修改或编造\n"
+    "- TEST_POLICY：event_id=A1-CLOUD-TEST 时，threat_level=HIGH，command.type=GENERATE_ALERT；NodeA 只验证该测试响应，不执行动作\n"
+    "- LOW_RISK_POLICY：仅合作目标（RID 白名单通过）返回 threat_level=LOW，command.type=NONE\n"
+    "- HIGH_RISK_POLICY：非合作目标且输入 risk_level 为 HIGH_RISK/EVENT，或视觉已确认无人机时，必须返回 threat_level=HIGH/CRITICAL，command.type=GENERATE_ALERT\n"
+    "- HIGH_RISK_FORBIDDEN：HIGH/CRITICAL 时禁止 command.type=NONE，也禁止切换 ECONOMY\n"
+    "- 多旋翼评分高且非合作时同样必须返回 GENERATE_ALERT\n"
+    "- 降落伞硬件尚未接入，禁止返回 TRIGGER_PARACHUTE\n"
+    "- 仅 MEDIUM 可建议 ADJUST_THRESHOLD，并在 params 给 {\"event_threshold\": 数值}(50-90)\n"
+    "- 仅 LOW/MEDIUM 可建议 SWITCH_MODE，并在 params 给 {\"mode\":\"ENHANCED|STANDARD|ECONOMY\", \"reason\":\"理由\"}";
+
+constexpr double kAssessmentTemperature = 0.1;
 
 struct ResponseBuffer {
     char *data;
@@ -49,6 +75,7 @@ void copyText(char *destination, size_t destination_size, const char *source, co
 
 void resetResult(CloudAssessmentResult &result, const char *error = "NONE") {
     result = {};
+    copyText(result.response_event_id, sizeof(result.response_event_id), "NONE");
     copyText(result.threat_level, sizeof(result.threat_level), "LOW");
     copyText(result.assessment, sizeof(result.assessment), "云端未返回有效评估");
     copyText(result.action, sizeof(result.action), "保持本地闭环");
@@ -182,6 +209,7 @@ bool parseAssessmentJson(const char *json, CloudAssessmentResult &result) {
         return false;
     }
 
+    const char *responseEventId = jsonStringValue(root, "event_id");
     const char *threatLevel = jsonStringValue(root, "threat_level");
     const char *assessment = jsonStringValue(root, "assessment");
     const char *action = jsonStringValue(root, "action");
@@ -193,6 +221,7 @@ bool parseAssessmentJson(const char *json, CloudAssessmentResult &result) {
     const char *commandMode = hasParams ? jsonStringValue(params, "mode") : nullptr;
     const char *commandReason = hasParams ? jsonStringValue(params, "reason") : nullptr;
 
+    copyText(result.response_event_id, sizeof(result.response_event_id), responseEventId, "NONE");
     copyText(result.threat_level, sizeof(result.threat_level), threatLevel, "LOW");
     copyText(result.assessment, sizeof(result.assessment), assessment, "云端评估已返回");
     copyText(result.action, sizeof(result.action), action, "保持本地闭环");
@@ -232,6 +261,34 @@ bool parseAssessmentContent(const char *content, CloudAssessmentResult &result) 
     memcpy(jsonSlice, start, jsonLength);
     jsonSlice[jsonLength] = '\0';
     return parseAssessmentJson(jsonSlice, result);
+}
+
+bool isAlertPolicyRequired(const CloudSensingEvent &event) {
+    return strcmp(event.event_id, "A1-CLOUD-TEST") == 0 ||
+           strcmp(event.risk_level, "HIGH_RISK") == 0 ||
+           strcmp(event.risk_level, "EVENT") == 0 ||
+           strcmp(event.target_verdict, "VISUALLY_CONFIRMED_DRONE") == 0;
+}
+
+bool validateAssessmentPolicy(const CloudSensingEvent &event, CloudAssessmentResult &result) {
+    if (!isAlertPolicyRequired(event)) {
+        return true;
+    }
+
+    const bool highThreat = strcmp(result.threat_level, "HIGH") == 0 ||
+                            strcmp(result.threat_level, "CRITICAL") == 0;
+    const bool alertCommand = strcmp(result.command_type, "GENERATE_ALERT") == 0;
+    if (highThreat && alertCommand) {
+        return true;
+    }
+
+    const bool isTestRequest = strcmp(event.event_id, "A1-CLOUD-TEST") == 0;
+    copyText(
+        result.error,
+        sizeof(result.error),
+        isTestRequest ? "test_policy_mismatch" : "high_risk_policy_mismatch"
+    );
+    return false;
 }
 
 }  // namespace
@@ -308,6 +365,7 @@ bool CloudClient::buildRequestBody(
     cJSON_AddItemToArray(messages, systemMessage);
     cJSON_AddItemToArray(messages, userMessage);
     bool ok = addString(root, "model", model_);
+    ok = ok && addNumber(root, "temperature", kAssessmentTemperature);
     ok = ok && addString(systemMessage, "role", "system");
     ok = ok && addString(systemMessage, "content", kSystemPrompt);
     ok = ok && addString(userMessage, "role", "user");
@@ -360,6 +418,11 @@ bool CloudClient::assess(const CloudSensingEvent &event, CloudAssessmentResult &
         result.latency_ms = millis() - started;
         return false;
     }
+    if (event.event_id[0] == '\0' || strcmp(event.event_id, "NONE") == 0) {
+        copyText(result.error, sizeof(result.error), "request_event_id_missing");
+        result.latency_ms = millis() - started;
+        return false;
+    }
 
     char requestBody[4096] = {};
     if (!buildRequestBody(event, requestBody, sizeof(requestBody), result)) {
@@ -372,7 +435,8 @@ bool CloudClient::assess(const CloudSensingEvent &event, CloudAssessmentResult &
     esp_http_client_config_t config = {};
     config.url = endpoint_;
     config.timeout_ms = CloudClientLimits::HttpTimeoutMs;
-    config.crt_bundle_attach = esp_crt_bundle_attach;
+    config.cert_pem = kArkRootCaPem;
+    config.cert_len = sizeof(kArkRootCaPem);
     config.event_handler = httpEventHandler;
     config.user_data = &response;
 
@@ -410,6 +474,25 @@ bool CloudClient::assess(const CloudSensingEvent &event, CloudAssessmentResult &
     }
 
     result.parsed = parseResponse(responseData, result);
-    result.ok = result.parsed;
+    if (!result.parsed) {
+        result.ok = false;
+        return false;
+    }
+    if (result.response_event_id[0] == '\0' || strcmp(result.response_event_id, "NONE") == 0) {
+        copyText(result.error, sizeof(result.error), "response_event_id_missing");
+        result.ok = false;
+        return false;
+    }
+    if (strcmp(result.response_event_id, event.event_id) != 0) {
+        copyText(result.error, sizeof(result.error), "response_event_id_mismatch");
+        result.ok = false;
+        return false;
+    }
+    if (!validateAssessmentPolicy(event, result)) {
+        result.ok = false;
+        return false;
+    }
+
+    result.ok = true;
     return result.ok;
 }

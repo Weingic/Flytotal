@@ -28,6 +28,60 @@ ACCEPTANCE_AUTO_SCRIPT = find_tool_script("acceptance_auto_411_")
 USB_REPORT_DEFAULT = PROJECT_ROOT / "captures/latest_usb_camera_readiness_report.json"
 PREFLIGHT_REPORT_DEFAULT = PROJECT_ROOT / "captures/latest_411_preflight_report.json"
 
+
+def build_deployed_v4b_vision_command(
+    python_cmd: str,
+    *,
+    source_index: int,
+    backend: str,
+    tracker: str,
+    tracker_fallback: str,
+    source_warmup_frames: int,
+) -> str:
+    normalized_backend = backend if backend in {"auto", "msmf", "dshow"} else "auto"
+    normalized_tracker = tracker if tracker in {"csrt", "kcf", "mil"} else "csrt"
+    normalized_fallback = tracker_fallback if tracker_fallback in {"auto", "off"} else "auto"
+    return (
+        f"{python_cmd} tools/{VISION_BRIDGE_SCRIPT.name} "
+        f"--backend {normalized_backend} --source {max(0, int(source_index))} "
+        f"--tracker {normalized_tracker} --tracker-fallback {normalized_fallback} "
+        f"--source-warmup-frames {max(1, int(source_warmup_frames))} "
+        "--yolo-enabled --yolo-model models/yolov8n_drone.onnx "
+        "--yolo-class-ids 0 --yolo-class-names 0:drone "
+        "--yolo-model-label drone-v4b-hardneg-deployed "
+        "--yolo-score-threshold 0.45 --yolo-intra-op-threads 8 --yolo-auto-lock"
+    )
+
+
+def build_recommended_vision_command(python_cmd: str, recommended: dict[str, Any]) -> str:
+    try:
+        source_index = int(recommended.get("source_index", -1))
+        source_warmup_frames = int(recommended.get("source_warmup_frames", 12))
+    except (TypeError, ValueError):
+        return ""
+    tracker = str(recommended.get("tracker", "") or "").lower()
+    if source_index < 0 or tracker not in {"csrt", "kcf", "mil"}:
+        return ""
+    return build_deployed_v4b_vision_command(
+        python_cmd,
+        source_index=source_index,
+        backend=str(recommended.get("backend", "auto") or "auto").lower(),
+        tracker=tracker,
+        tracker_fallback=str(recommended.get("tracker_fallback", "auto") or "auto").lower(),
+        source_warmup_frames=source_warmup_frames,
+    )
+
+
+def build_fallback_vision_command(python_cmd: str) -> str:
+    return build_deployed_v4b_vision_command(
+        python_cmd,
+        source_index=0,
+        backend="auto",
+        tracker="csrt",
+        tracker_fallback="auto",
+        source_warmup_frames=12,
+    )
+
 def resolve_path(path: Path) -> Path:
     if path.is_absolute():
         return path
@@ -161,8 +215,12 @@ def main() -> int:
         )
         preflight_output_tail = tail_lines(preflight_output, 18)
 
-    preflight_report = load_json(preflight_report_file)
-    preflight_result = str(preflight_report.get("result", "UNKNOWN")).upper() if preflight_report else "UNKNOWN"
+    preflight_report = load_json(preflight_report_file) if bool(args.run_preflight) else {}
+    preflight_result = (
+        str(preflight_report.get("result", "UNKNOWN")).upper()
+        if bool(args.run_preflight) and preflight_report
+        else "SKIPPED"
+    )
     preflight_blocking_failures = (
         [str(item) for item in preflight_report.get("blocking_failures", [])]
         if isinstance(preflight_report, dict)
@@ -193,24 +251,32 @@ def main() -> int:
     if not preflight_acceptance_blocking_failures:
         preflight_acceptance_blocking_failures = list(preflight_blocking_failures)
     preflight_hints = [str(item) for item in preflight_report.get("hints", [])] if isinstance(preflight_report, dict) else []
-    preflight_can_start_live_stack = bool(preflight_report.get("can_start_live_stack", preflight_result != "FAIL")) if isinstance(preflight_report, dict) else False
-    preflight_can_run_acceptance = bool(preflight_report.get("can_run_acceptance", preflight_result == "PASS")) if isinstance(preflight_report, dict) else False
+    preflight_can_start_live_stack = (
+        bool(preflight_report.get("can_start_live_stack", preflight_result != "FAIL"))
+        if bool(args.run_preflight) and isinstance(preflight_report, dict)
+        else True
+    )
+    preflight_can_run_acceptance = (
+        bool(preflight_report.get("can_run_acceptance", preflight_result == "PASS"))
+        if bool(args.run_preflight) and isinstance(preflight_report, dict)
+        else False
+    )
 
     usb_report = load_json(usb_report_file)
     usb_result = str(usb_report.get("result", "UNKNOWN")).upper() if usb_report else "UNKNOWN"
     recommended = usb_report.get("recommended", {}) if isinstance(usb_report.get("recommended"), dict) else {}
-    recommended_vision_command = str(recommended.get("vision_bridge_command", "") or "").strip()
+    recommended_vision_command = build_recommended_vision_command(python_cmd, recommended)
     if not recommended_vision_command:
-        recommended_vision_command = (
-            f"{python_cmd} tools/{VISION_BRIDGE_SCRIPT.name} "
-            "--backend auto --source 0 --tracker csrt --tracker-fallback auto --source-warmup-frames 12"
-        )
+        recommended_vision_command = build_fallback_vision_command(python_cmd)
 
-    bridge_command = f"{python_cmd} tools/{NODE_BRIDGE_SCRIPT.name} --port {port_value} --baud {baud_value}"
+    bridge_command = (
+        f"{python_cmd} tools/{NODE_BRIDGE_SCRIPT.name} --port {port_value} --baud {baud_value} "
+        "--vision-forward-status"
+    )
     web_server_command = f"{python_cmd} tools/{WEB_SERVER_SCRIPT.name}"
     preflight_command = (
         f"{python_cmd} tools/{PREFLIGHT_SCRIPT.name} --port {port_value} --base-url {base_url} "
-        + ("--refresh-usb-check" if bool(args.refresh_usb_check) else "--no-refresh-usb-check")
+        "--skip-usb --no-refresh-usb-check"
     )
     health_check_command = (
         f"{python_cmd} -c \"import urllib.request,json;"
@@ -222,15 +288,18 @@ def main() -> int:
         suite_option_fragment = f"--suite {suite_name}"
     acceptance_command = (
         f"{python_cmd} tools/{ACCEPTANCE_FLOW_SCRIPT.name} "
-        f"--mode full --port {port_value} {suite_option_fragment} --base-url {base_url}"
+        f"--mode full --port {port_value} {suite_option_fragment} "
+        f"--no-run-suite --skip-usb --base-url {base_url}"
     )
     live_quick_check_command = (
         f"{python_cmd} tools/{ACCEPTANCE_FLOW_SCRIPT.name} "
-        f"--mode quick --port {port_value} {suite_option_fragment} --base-url {base_url}"
+        f"--mode quick --port {port_value} {suite_option_fragment} "
+        f"--no-run-suite --skip-usb --base-url {base_url}"
     )
     auto_acceptance_command = (
         f"{python_cmd} tools/{ACCEPTANCE_AUTO_SCRIPT.name} "
-        f"--port {port_value} {suite_option_fragment} --base-url {base_url}"
+        f"--port {port_value} {suite_option_fragment} "
+        f"--no-run-suite --skip-usb --base-url {base_url}"
     )
 
     terminals = [
@@ -248,7 +317,9 @@ def main() -> int:
 
     recommended_check_mode = "full"
     recommended_check_command = auto_acceptance_command
-    recommended_check_reason = "Environment ready. Recommended: run auto acceptance (quick then full)."
+    recommended_check_reason = (
+        "Environment ready. Run live acceptance without reopening the serial port or camera."
+    )
     preflight_vision_gate_failures = [
         item for item in preflight_acceptance_blocking_failures if "vision_runtime_not_ready" in item
     ]
@@ -281,6 +352,11 @@ def main() -> int:
         "base_url": base_url,
         "port": port_value,
         "baud": baud_value,
+        "vision_forward_status_enabled": True,
+        "serial_owner": "node_a_serial_bridge",
+        "camera_owner": "vision_bridge",
+        "live_acceptance_run_suite": False,
+        "live_acceptance_skip_usb": True,
         "suite": suite_name,
         "suite_names": suite_names,
         "suite_count": len(suite_names),

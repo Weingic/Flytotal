@@ -1,8 +1,13 @@
 ﻿# ???? Node A ?????????? JSON ???????????????????????????????????
 import argparse
+import atexit
 import json
+import os
+import re
 import sys
+import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib import error as urllib_error
@@ -15,9 +20,20 @@ try:
 except ImportError:  # pragma: no cover - handled on the user's machine
     serial = None  # type: ignore[assignment]
 
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - Windows-only module
+    msvcrt = None  # type: ignore[assignment]
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - POSIX-only module
+    fcntl = None  # type: ignore[assignment]
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MONITORED_PREFIXES = {
+    "BOOT,SESSION",
     "STATUS",
     "SELFTEST",
     "UPLINK,HB",
@@ -27,6 +43,10 @@ MONITORED_PREFIXES = {
     "LASTEVENT",
     "SUMMARY",
     "FUSION,STATUS",
+    "CLOUD,STATUS",
+    "CLOUD,TEST",
+    "CLOUD,RESULT",
+    "CLOUD,DEGRADED",
 }
 EVENT_HISTORY_PREFIXES = {"UPLINK,EVENT", "LASTEVENT", "EVENT,STATUS"}
 SUMMARY_COUNTER_FIELDS = (
@@ -41,6 +61,381 @@ SUMMARY_COUNTER_FIELDS = (
 )
 EVENT_STORE_DEDUP_COOLDOWN_MS = 1500
 EVENT_REOPEN_MARK_WINDOW_MS = 10000
+VISION_FORWARD_MAX_STALE_MS_DEFAULT = 2500
+SERIAL_WRITE_RETRY_COUNT = 2
+SERIAL_WRITE_RETRY_DELAY_S = 0.08
+JSON_READ_RETRY_COUNT = 3
+JSON_READ_RETRY_DELAY_S = 0.02
+SERIAL_COMMAND_MAX_LENGTH = 192
+SERIAL_COMMAND_QUEUE_LIMIT_DEFAULT = 64
+SERIAL_MIN_SEND_INTERVAL_S_DEFAULT = 0.10
+SERIAL_COMMAND_TTL_MS_DEFAULT = 30_000
+SERIAL_COMMAND_INBOX_BATCH_LIMIT = 16
+SERIAL_BRIDGE_CONTRACT_VERSION = 2
+
+CLOUD_PREFIX_FIELD_ALIASES = {
+    "CLOUD,STATUS": {
+        "enabled": "cloud_enabled",
+        "configured": "cloud_configured",
+        "wifi": "cloud_wifi_status",
+        "request_in_flight": "cloud_request_in_flight",
+        "dropped_total": "cloud_dropped_total",
+        "threat_level": "cloud_threat_level",
+        "alert_text": "cloud_alert_text",
+        "action": "cloud_action",
+        "command_type": "cloud_command_type",
+        "last_update_ms": "cloud_last_update_ms",
+        "error": "cloud_error",
+    },
+    "CLOUD,TEST": {
+        "validated": "cloud_test_validated",
+        "no_apply": "cloud_test_result_no_apply",
+        "response_event_id": "cloud_test_response_event_id",
+    },
+    "CLOUD,RESULT": {
+        "ok": "cloud_result_ok",
+        "source": "cloud_result_source",
+        "event_id": "cloud_request_event_id",
+        "expected_event_id": "cloud_expected_event_id",
+        "response_event_id": "cloud_response_event_id",
+        "http_status": "cloud_result_http_status",
+        "esp_error": "cloud_result_esp_error",
+        "latency_ms": "cloud_result_latency_ms",
+        "threat_level": "cloud_result_threat_level",
+        "action": "cloud_result_action",
+        "command_type": "cloud_result_command_type",
+        "error": "cloud_result_error",
+    },
+    "CLOUD,DEGRADED": {
+        "reason": "cloud_degraded_reason",
+        "error": "cloud_result_error",
+        "esp_error": "cloud_result_esp_error",
+        "http_status": "cloud_result_http_status",
+        "latency_ms": "cloud_result_latency_ms",
+    },
+}
+
+SERIAL_PRIORITY_SAFETY = 0
+SERIAL_PRIORITY_ACTION = 10
+SERIAL_PRIORITY_STATE = 20
+SERIAL_PRIORITY_POLL = 40
+
+
+def default_serial_owner_lock_path(port: str) -> Path:
+    normalized_port = re.sub(r"[^A-Z0-9_.-]+", "_", str(port or "UNKNOWN").upper()).strip("_.")
+    safe_port = normalized_port or "UNKNOWN"
+    return Path(tempfile.gettempdir()) / f"flytotal_node_a_serial_bridge_{safe_port}.owner.lock"
+
+
+class SerialPortOwnerLock:
+    def __init__(self, path: Path, port: str) -> None:
+        self.path = Path(path)
+        self.metadata_path = Path(f"{self.path}.json")
+        self.port = str(port or "UNKNOWN").strip().upper() or "UNKNOWN"
+        self._handle: Any | None = None
+        self.last_error: OSError | None = None
+
+    def _lock_handle(self, handle: Any) -> None:
+        if msvcrt is not None:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            return
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        raise OSError("platform file locking is unavailable")
+
+    def _unlock_handle(self, handle: Any) -> None:
+        if msvcrt is not None:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            return
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    def acquire(self) -> bool:
+        if self._handle is not None:
+            return True
+
+        self.last_error = None
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.touch(exist_ok=True)
+        handle = self.path.open("r+b")
+        try:
+            self._lock_handle(handle)
+        except OSError as exc:
+            self.last_error = exc
+            handle.close()
+            return False
+
+        self._handle = handle
+        metadata = {
+            "version": 1,
+            "pid": os.getpid(),
+            "port": self.port,
+            "acquired_ms": int(time.time() * 1000),
+        }
+        metadata_temp = self.metadata_path.with_name(
+            f".{self.metadata_path.name}.{os.getpid()}.tmp"
+        )
+        try:
+            metadata_temp.write_text(
+                json.dumps(metadata, ensure_ascii=True, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            metadata_temp.replace(self.metadata_path)
+        except OSError:
+            try:
+                metadata_temp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self.release()
+            raise
+        return True
+
+    def read_owner_metadata(self) -> dict[str, Any]:
+        for attempt in range(3):
+            try:
+                payload = json.loads(self.metadata_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                if attempt < 2:
+                    time.sleep(0.02)
+                continue
+            return payload if isinstance(payload, dict) else {}
+        return {}
+
+    def release(self) -> None:
+        handle = self._handle
+        self._handle = None
+        if handle is None:
+            return
+        try:
+            self._unlock_handle(handle)
+        except OSError:
+            pass
+        finally:
+            handle.close()
+
+
+@dataclass
+class PendingSerialCommand:
+    command: str
+    source: str
+    priority: int
+    sequence: int
+    enqueued_at: float
+    expires_at: float | None
+    dedupe_key: str
+
+
+def normalize_serial_command(command: str) -> str:
+    line = str(command or "").strip()
+    if not line:
+        raise ValueError("serial command is empty")
+    if "\r" in line or "\n" in line:
+        raise ValueError("serial command must contain exactly one line")
+    if len(line.encode("utf-8")) > SERIAL_COMMAND_MAX_LENGTH:
+        raise ValueError(f"serial command exceeds {SERIAL_COMMAND_MAX_LENGTH} bytes")
+    return line
+
+
+def classify_serial_command(command: str) -> tuple[int, str, float | None]:
+    line = normalize_serial_command(command)
+    upper = line.upper()
+
+    if upper == "RESET":
+        return SERIAL_PRIORITY_SAFETY, "", None
+    if upper == "TRACK,CLEAR":
+        return SERIAL_PRIORITY_SAFETY, "state:TRACK", 2.0
+    if upper == "VISION,LOST":
+        return SERIAL_PRIORITY_SAFETY, "state:VISION", 2.0
+    if upper == "CLOUD,ENABLE,0":
+        return SERIAL_PRIORITY_SAFETY, "state:CLOUD_ENABLE", 5.0
+
+    poll_commands = {
+        "STATUS",
+        "SELFTEST",
+        "SUMMARY",
+        "EVENT,STATUS",
+        "LASTEVENT",
+        "CLOUD,STATUS",
+        "RID,STATUS",
+        "FUSION,STATUS",
+        "REALINPUT,STATUS",
+        "CONFIG,STATUS",
+        "RISK,STATUS",
+    }
+    if upper in poll_commands:
+        return SERIAL_PRIORITY_POLL, f"poll:{upper}", 5.0
+
+    if upper.startswith("TRACK,"):
+        return SERIAL_PRIORITY_STATE, "state:TRACK", 2.0
+    if upper.startswith("VISION,CONF,"):
+        return SERIAL_PRIORITY_STATE, "state:VISION_CONF", 2.0
+    if upper.startswith("VISION,"):
+        return SERIAL_PRIORITY_STATE, "state:VISION", 2.0
+    if upper.startswith("RID,"):
+        return SERIAL_PRIORITY_STATE, "state:RID", 2.0
+    if upper.startswith("REALINPUT,"):
+        return SERIAL_PRIORITY_STATE, "state:REALINPUT", 5.0
+
+    return SERIAL_PRIORITY_ACTION, "", None
+
+
+class SerialCommandDispatcher:
+    def __init__(
+        self,
+        ser: Any,
+        *,
+        min_send_interval_s: float = SERIAL_MIN_SEND_INTERVAL_S_DEFAULT,
+        queue_limit: int = SERIAL_COMMAND_QUEUE_LIMIT_DEFAULT,
+        clock: Any = time.monotonic,
+        sleeper: Any = time.sleep,
+    ) -> None:
+        self.ser = ser
+        self.min_send_interval_s = max(0.0, float(min_send_interval_s))
+        self.queue_limit = max(1, int(queue_limit))
+        self.clock = clock
+        self.sleeper = sleeper
+        self.pending: list[PendingSerialCommand] = []
+        self.sequence = 0
+        self.last_sent_at = 0.0
+        self.has_sent = False
+        self.sent_count = 0
+        self.dropped_count = 0
+        self.expired_count = 0
+
+    @property
+    def pending_count(self) -> int:
+        return len(self.pending)
+
+    def _prune_expired(self, now: float) -> None:
+        retained: list[PendingSerialCommand] = []
+        for item in self.pending:
+            if item.expires_at is not None and now >= item.expires_at:
+                self.expired_count += 1
+                print(
+                    f"SERIAL_QUEUE_EXPIRED,source={item.source},command={item.command}",
+                    file=sys.stderr,
+                )
+                continue
+            retained.append(item)
+        self.pending = retained
+
+    def enqueue(
+        self,
+        command: str,
+        *,
+        source: str,
+        priority: int | None = None,
+        dedupe_key: str | None = None,
+        ttl_s: float | None = None,
+    ) -> bool:
+        line = normalize_serial_command(command)
+        classified_priority, classified_key, classified_ttl = classify_serial_command(line)
+        item_priority = classified_priority if priority is None else int(priority)
+        item_key = classified_key if dedupe_key is None else str(dedupe_key or "")
+        item_ttl = classified_ttl if ttl_s is None else ttl_s
+        now = float(self.clock())
+        self._prune_expired(now)
+
+        if item_key:
+            existing = [item for item in self.pending if item.dedupe_key == item_key]
+            if any(item.priority < item_priority for item in existing):
+                return True
+            self.pending = [item for item in self.pending if item.dedupe_key != item_key]
+
+        if len(self.pending) >= self.queue_limit:
+            worst_index = max(
+                range(len(self.pending)),
+                key=lambda index: (self.pending[index].priority, -self.pending[index].sequence),
+            )
+            worst = self.pending[worst_index]
+            if item_priority < worst.priority:
+                dropped = self.pending.pop(worst_index)
+                self.dropped_count += 1
+                print(
+                    "SERIAL_QUEUE_EVICTED,"
+                    f"source={dropped.source},priority={dropped.priority},command={dropped.command}",
+                    file=sys.stderr,
+                )
+            else:
+                self.dropped_count += 1
+                print(
+                    f"SERIAL_QUEUE_FULL,source={source},priority={item_priority},command={line}",
+                    file=sys.stderr,
+                )
+                return False
+
+        self.sequence += 1
+        expires_at = None
+        if item_ttl is not None:
+            expires_at = now + max(0.0, float(item_ttl))
+        self.pending.append(
+            PendingSerialCommand(
+                command=line,
+                source=str(source or "UNKNOWN"),
+                priority=item_priority,
+                sequence=self.sequence,
+                enqueued_at=now,
+                expires_at=expires_at,
+                dedupe_key=item_key,
+            )
+        )
+        return True
+
+    def enqueue_bundle(self, commands: list[str], *, source: str, priority: int | None = None) -> bool:
+        accepted = True
+        for command in commands:
+            accepted = self.enqueue(command, source=source, priority=priority) and accepted
+        return accepted
+
+    def pump(self) -> PendingSerialCommand | None:
+        now = float(self.clock())
+        self._prune_expired(now)
+        if not self.pending:
+            return None
+        if self.has_sent and (now - self.last_sent_at) + 1e-9 < self.min_send_interval_s:
+            return None
+
+        next_index = min(
+            range(len(self.pending)),
+            key=lambda index: (self.pending[index].priority, self.pending[index].sequence),
+        )
+        item = self.pending.pop(next_index)
+        sent = send_serial_line_with_retry(self.ser, item.command)
+        self.last_sent_at = float(self.clock())
+        self.has_sent = True
+        if sent:
+            self.sent_count += 1
+            return item
+        self.dropped_count += 1
+        return None
+
+    def send_blocking_bundle(self, commands: list[str], *, delay_s: float = 0.2) -> bool:
+        for command in commands:
+            line = str(command or "").strip()
+            if not line:
+                continue
+            now = float(self.clock())
+            required_gap = max(self.min_send_interval_s, max(0.0, float(delay_s)))
+            if self.has_sent:
+                wait_s = required_gap - (now - self.last_sent_at)
+                if wait_s > 0:
+                    self.sleeper(wait_s)
+            if not send_serial_line_with_retry(self.ser, normalize_serial_command(line)):
+                self.last_sent_at = float(self.clock())
+                self.has_sent = True
+                self.dropped_count += 1
+                return False
+            self.last_sent_at = float(self.clock())
+            self.has_sent = True
+            self.sent_count += 1
+        return True
 
 
 def require_pyserial() -> Any:
@@ -99,6 +494,12 @@ def normalize_fields(prefix: str, raw_fields: dict[str, str]) -> dict[str, Any]:
         "node": "node_id",
         "zone": "node_zone",
         "role": "node_role",
+        "boot_id": "boot_id",
+        "boot_count": "boot_count",
+        "reset_reason": "reset_reason",
+        "reset_reason_esp": "reset_reason_esp",
+        "reset_reason_raw": "reset_reason_raw",
+        "uptime_ms": "node_uptime_ms",
         "main_state": "main_state",
         "hunter": "hunter_state",
         "hunter_state": "hunter_state",
@@ -170,6 +571,10 @@ def normalize_fields(prefix: str, raw_fields: dict[str, str]) -> dict[str, Any]:
         "multirotor_score": "multirotor_score",
         "target_verdict": "target_verdict",
         "cloud_online": "cloud_online",
+        "cloud_contract_version": "cloud_contract_version",
+        "cloud_event_echo_required": "cloud_event_echo_required",
+        "cloud_test_no_apply": "cloud_test_no_apply",
+        "cloud_test_validated": "cloud_test_validated",
         "cloud_threat_level": "cloud_threat_level",
         "cloud_alert_text": "cloud_alert_text",
         "cloud_action": "cloud_action",
@@ -180,6 +585,9 @@ def normalize_fields(prefix: str, raw_fields: dict[str, str]) -> dict[str, Any]:
         "effective_event_threshold": "effective_event_threshold",
         "cloud_command_applied": "cloud_command_applied",
         "cloud_command_effect": "cloud_command_effect",
+        "cloud_command_source_event_id": "cloud_command_source_event_id",
+        "cloud_command_reason": "cloud_command_reason",
+        "cloud_command_applied_ms": "cloud_command_applied_ms",
         "uplink_state": "uplink_state",
         "last_event_id": "last_event_id",
         "last_reason": "last_reason",
@@ -233,6 +641,7 @@ def normalize_fields(prefix: str, raw_fields: dict[str, str]) -> dict[str, Any]:
         "last_y": "summary_last_y_mm",
     }
 
+    prefix_aliases = CLOUD_PREFIX_FIELD_ALIASES.get(prefix, {})
     for key, value in raw_fields.items():
         if prefix == "SUMMARY":
             summary_key = summary_alias_map.get(key)
@@ -240,9 +649,25 @@ def normalize_fields(prefix: str, raw_fields: dict[str, str]) -> dict[str, Any]:
                 normalized[summary_key] = coerce_value(value)
                 continue
 
+        prefix_key = prefix_aliases.get(key)
+        if prefix_key is not None:
+            normalized[prefix_key] = coerce_value(value)
+            continue
+
         target_key = alias_map.get(key)
         if target_key is not None:
             normalized[target_key] = coerce_value(value)
+
+    if prefix == "CLOUD,TEST" and {
+        "validated",
+        "no_apply",
+        "response_event_id",
+    }.issubset(raw_fields):
+        normalized["cloud_test_result_received_ms"] = normalized["last_update_ms"]
+    elif prefix == "CLOUD,RESULT":
+        normalized["cloud_result_received_ms"] = normalized["last_update_ms"]
+    elif prefix == "CLOUD,DEGRADED":
+        normalized["cloud_degraded_received_ms"] = normalized["last_update_ms"]
 
     return normalized
 
@@ -263,11 +688,21 @@ def build_initial_status(
     return {
         "ok": True,
         "available": False,
+        "serial_bridge_contract_version": SERIAL_BRIDGE_CONTRACT_VERSION,
         "online": 0,
         "stale_age_ms": 0,
         "node_id": default_node_id,
         "node_zone": default_node_zone,
         "node_role": default_node_role,
+        "boot_id": "UNKNOWN",
+        "boot_count": 0,
+        "reset_reason": "UNKNOWN",
+        "reset_reason_esp": "UNKNOWN",
+        "reset_reason_raw": 0,
+        "node_uptime_ms": 0,
+        "node_boot_change_count": 0,
+        "node_boot_first_seen_ms": 0,
+        "node_boot_last_change_ms": 0,
         "main_state": "UNKNOWN",
         "hunter_state": "UNKNOWN",
         "gimbal_state": "UNKNOWN",
@@ -326,6 +761,33 @@ def build_initial_status(
         "multirotor_score": 0.0,
         "target_verdict": "UNKNOWN_TARGET",
         "cloud_online": 0,
+        "cloud_contract_version": 0,
+        "cloud_event_echo_required": 0,
+        "cloud_test_no_apply": 0,
+        "cloud_test_validated": 0,
+        "cloud_enabled": 0,
+        "cloud_configured": 0,
+        "cloud_wifi_status": "UNKNOWN",
+        "cloud_request_in_flight": 0,
+        "cloud_dropped_total": 0,
+        "cloud_test_result_no_apply": 0,
+        "cloud_test_response_event_id": "NONE",
+        "cloud_test_result_received_ms": 0,
+        "cloud_result_ok": 0,
+        "cloud_result_source": "NONE",
+        "cloud_request_event_id": "NONE",
+        "cloud_expected_event_id": "NONE",
+        "cloud_response_event_id": "NONE",
+        "cloud_result_http_status": 0,
+        "cloud_result_esp_error": 0,
+        "cloud_result_latency_ms": 0,
+        "cloud_result_threat_level": "NONE",
+        "cloud_result_action": "NONE",
+        "cloud_result_command_type": "NONE",
+        "cloud_result_error": "NONE",
+        "cloud_result_received_ms": 0,
+        "cloud_degraded_reason": "NONE",
+        "cloud_degraded_received_ms": 0,
         "cloud_threat_level": "NONE",
         "cloud_alert_text": "NONE",
         "cloud_action": "NONE",
@@ -336,6 +798,9 @@ def build_initial_status(
         "effective_event_threshold": 76.0,
         "cloud_command_applied": 0,
         "cloud_command_effect": "NONE",
+        "cloud_command_source_event_id": "NONE",
+        "cloud_command_reason": "NONE",
+        "cloud_command_applied_ms": 0,
         "uplink_state": "UNKNOWN",
         "last_event_id": "NONE",
         "last_reason": "NONE",
@@ -847,17 +1312,119 @@ def load_records_from_payload(path: Path) -> list[dict[str, Any]]:
     return normalized
 
 
-def load_json_payload(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {"ok": True, "available": False}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {"ok": False, "available": False}
+def load_json_payload(
+    path: Path,
+    *,
+    retry_count: int = JSON_READ_RETRY_COUNT,
+    retry_delay_s: float = JSON_READ_RETRY_DELAY_S,
+) -> dict[str, Any]:
+    attempts = max(1, int(retry_count))
+    payload: Any = None
+    for attempt in range(1, attempts + 1):
+        try:
+            if not path.exists():
+                return {"ok": True, "available": False}
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            break
+        except (OSError, json.JSONDecodeError):
+            if attempt >= attempts:
+                return {"ok": False, "available": False}
+            time.sleep(max(0.0, float(retry_delay_s)))
     if not isinstance(payload, dict):
         return {"ok": False, "available": False}
     payload.setdefault("ok", True)
     return payload
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return default
+
+
+def build_vision_forward_plan(
+    payload: dict[str, Any],
+    *,
+    now_ms: int,
+    max_stale_ms: int,
+    file_mtime_ms: int = 0,
+) -> dict[str, Any]:
+    timestamp_ms = _safe_int(payload.get("timestamp_ms", 0), 0)
+    if timestamp_ms < 946684800000:
+        timestamp_ms = max(0, int(file_mtime_ms))
+    stale_age_ms = max(0, int(now_ms) - timestamp_ms) if timestamp_ms > 0 else max(0, int(now_ms))
+    available = bool(payload.get("available", bool(payload))) and bool(payload.get("ok", True))
+    fresh = available and timestamp_ms > 0 and (
+        max(0, int(max_stale_ms)) <= 0 or stale_age_ms <= max(0, int(max_stale_ms))
+    )
+    source_ready = _safe_int(payload.get("source_ready", 0), 0) == 1
+    chain_ready = _safe_int(payload.get("vision_chain_ready", 0), 0) == 1
+
+    if not fresh:
+        state = "LOST"
+        reason = "VISION_STATUS_STALE" if timestamp_ms > 0 else "VISION_STATUS_MISSING"
+    elif not source_ready or not chain_ready:
+        state = "LOST"
+        reason = "VISION_RUNTIME_NOT_READY"
+    else:
+        raw_state = str(payload.get("vision_state", "VISION_IDLE") or "VISION_IDLE").strip().upper()
+        state_map = {
+            "VISION_LOCKED": "LOCKED",
+            "VISION_SEARCHING": "SEARCHING",
+            "VISION_LOST": "LOST",
+            "VISION_IDLE": "IDLE",
+            "LOCKED": "LOCKED",
+            "SEARCHING": "SEARCHING",
+            "LOST": "LOST",
+            "IDLE": "IDLE",
+        }
+        state = state_map.get(raw_state, "LOST")
+        reason = "VISION_STATUS_FRESH"
+
+    confidence = min(1.0, max(0.0, _safe_float(payload.get("vision_confidence", 0.0), 0.0)))
+    stability = min(1.0, max(0.0, _safe_float(payload.get("bbox_stability_score", 0.0), 0.0)))
+    frame_ready = _safe_int(payload.get("frame_content_ready", 0), 0) == 1
+    frame_reason = str(payload.get("frame_quality_reason", "UNVERIFIED") or "UNVERIFIED").strip().upper()
+    locked_flag = _safe_int(payload.get("vision_locked", 0), 0) == 1
+    if state == "LOCKED" and (not locked_flag or not frame_ready or frame_reason != "OK"):
+        state = "SEARCHING" if fresh and source_ready and chain_ready else "LOST"
+        confidence = 0.0
+        stability = 0.0
+        reason = "LOCK_REJECTED_INVALID_FRAME"
+
+    commands: list[str] = []
+    if state == "LOCKED":
+        commands.append(
+            "VISION,CONF,"
+            f"confidence={confidence:.2f},stability={stability:.2f},state=TRACKING"
+        )
+        commands.append("VISION,LOCKED")
+    else:
+        commands.append(f"VISION,{state}")
+
+    signature = "|".join(commands)
+    return {
+        "fresh": fresh,
+        "timestamp_ms": timestamp_ms,
+        "stale_age_ms": stale_age_ms,
+        "state": state,
+        "reason": reason,
+        "commands": commands,
+        "signature": signature,
+        "confidence": round(confidence, 3),
+        "stability": round(stability, 3),
+        "frame_ready": frame_ready,
+        "frame_reason": frame_reason,
+        "lock_source": str(payload.get("lock_source", "NONE") or "NONE"),
+    }
 
 
 def summary_snapshot_from_status(status: dict[str, Any]) -> dict[str, int]:
@@ -1084,7 +1651,19 @@ def update_status_from_line(state: dict[str, Any], line: str) -> bool:
     if prefix not in MONITORED_PREFIXES or not fields:
         return False
 
-    state.update(normalize_fields(prefix, fields))
+    normalized = normalize_fields(prefix, fields)
+    next_boot_id = str(normalized.get("boot_id", "") or "").strip()
+    if next_boot_id and next_boot_id != "UNKNOWN":
+        observed_ms = int(normalized.get("last_update_ms", int(time.time() * 1000)) or 0)
+        previous_boot_id = str(state.get("boot_id", "") or "").strip()
+        previous_known = previous_boot_id not in {"", "UNKNOWN", "NONE"}
+        if not previous_known:
+            state["node_boot_first_seen_ms"] = observed_ms
+            state["node_boot_last_change_ms"] = observed_ms
+        elif previous_boot_id != next_boot_id:
+            state["node_boot_change_count"] = int(state.get("node_boot_change_count", 0) or 0) + 1
+            state["node_boot_last_change_ms"] = observed_ms
+    state.update(normalized)
     state["ok"] = True
     state["available"] = True
     state["last_raw_line"] = line
@@ -1102,35 +1681,211 @@ def extract_state_signature(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def maybe_send_command(ser: Any, last_sent_at: float, interval_s: float, command: str) -> float:
+def send_serial_line_with_retry(
+    ser: Any,
+    command: str,
+    *,
+    retry_count: int = SERIAL_WRITE_RETRY_COUNT,
+    retry_delay_s: float = SERIAL_WRITE_RETRY_DELAY_S,
+) -> bool:
+    line = str(command or "").strip()
+    if not line:
+        return True
+
+    attempts = max(1, int(retry_count))
+    for attempt in range(1, attempts + 1):
+        try:
+            ser.write((line + "\n").encode("utf-8"))
+            ser.flush()
+            return True
+        except Exception as exc:
+            is_serial_error = serial is not None and isinstance(exc, serial.SerialException)
+            if not is_serial_error:
+                raise
+            if attempt >= attempts:
+                print(
+                    f"SERIAL_WRITE_FAILED,command={line},attempts={attempts},error={type(exc).__name__}",
+                    file=sys.stderr,
+                )
+                return False
+            print(
+                f"SERIAL_WRITE_RETRY,command={line},attempt={attempt},error={type(exc).__name__}",
+                file=sys.stderr,
+            )
+            try:
+                ser.reset_output_buffer()
+            except Exception:
+                pass
+            time.sleep(max(0.0, float(retry_delay_s)))
+    return False
+
+
+def maybe_enqueue_command(
+    dispatcher: SerialCommandDispatcher,
+    last_enqueued_at: float,
+    interval_s: float,
+    command: str,
+    *,
+    source: str,
+) -> float:
     if interval_s <= 0:
-        return last_sent_at
+        return last_enqueued_at
     now = time.monotonic()
-    if last_sent_at == 0.0 or (now - last_sent_at) >= interval_s:
-        ser.write((command + "\n").encode("utf-8"))
-        ser.flush()
-        return now
-    return last_sent_at
+    if last_enqueued_at == 0.0 or (now - last_enqueued_at) >= interval_s:
+        dispatcher.enqueue(command, source=source)
+        return time.monotonic()
+    return last_enqueued_at
 
 
-def send_startup_commands(ser: Any, commands: list[str], delay_s: float = 0.2) -> None:
-    for command in commands:
-        line = str(command or "").strip()
-        if not line:
-            continue
-        ser.write((line + "\n").encode("utf-8"))
-        ser.flush()
-        time.sleep(max(delay_s, 0.0))
-
-
-def maybe_send_command_bundle(ser: Any, last_sent_at: float, interval_s: float, commands: list[str]) -> float:
+def maybe_enqueue_command_bundle(
+    dispatcher: SerialCommandDispatcher,
+    last_enqueued_at: float,
+    interval_s: float,
+    commands: list[str],
+    *,
+    source: str,
+    priority: int | None = None,
+) -> float:
     if interval_s <= 0 or not commands:
-        return last_sent_at
+        return last_enqueued_at
     now = time.monotonic()
-    if last_sent_at == 0.0 or (now - last_sent_at) >= interval_s:
-        send_startup_commands(ser, commands)
-        return now
-    return last_sent_at
+    if last_enqueued_at == 0.0 or (now - last_enqueued_at) >= interval_s:
+        dispatcher.enqueue_bundle(commands, source=source, priority=priority)
+        return time.monotonic()
+    return last_enqueued_at
+
+
+def maybe_forward_vision_status(
+    dispatcher: SerialCommandDispatcher,
+    status_file: Path,
+    *,
+    last_signature: str,
+    last_sent_at: float,
+    interval_s: float,
+    max_stale_ms: int,
+    echo: bool = False,
+) -> tuple[str, float, dict[str, Any]]:
+    payload = load_json_payload(status_file)
+    try:
+        file_mtime_ms = int(status_file.stat().st_mtime * 1000) if status_file.exists() else 0
+    except OSError:
+        file_mtime_ms = 0
+    plan = build_vision_forward_plan(
+        payload,
+        now_ms=int(time.time() * 1000),
+        max_stale_ms=max_stale_ms,
+        file_mtime_ms=file_mtime_ms,
+    )
+    signature = str(plan.get("signature", ""))
+    now = time.monotonic()
+    changed = signature != last_signature
+    due = last_sent_at == 0.0 or changed or (now - last_sent_at) >= max(0.1, float(interval_s))
+    if not due:
+        return last_signature, last_sent_at, plan
+
+    commands = plan.get("commands", [])
+    queued_commands = commands
+    if not changed and plan.get("state") == "LOCKED" and isinstance(commands, list):
+        locked_heartbeat = [
+            str(command)
+            for command in commands
+            if str(command).strip().upper() == "VISION,LOCKED"
+        ]
+        if locked_heartbeat:
+            queued_commands = locked_heartbeat
+    plan["queued_commands"] = queued_commands
+    queued = True
+    if isinstance(queued_commands, list):
+        queued = dispatcher.enqueue_bundle(
+            [str(command) for command in queued_commands],
+            source="VISION_FORWARD",
+        )
+    if echo or changed:
+        print(
+            "VISION_FORWARD,"
+            f"state={plan.get('state', 'LOST')},fresh={int(bool(plan.get('fresh')))},"
+            f"age_ms={int(plan.get('stale_age_ms', 0) or 0)},"
+            f"confidence={float(plan.get('confidence', 0.0) or 0.0):.2f},"
+            f"stability={float(plan.get('stability', 0.0) or 0.0):.2f},"
+            f"lock_source={plan.get('lock_source', 'NONE')},reason={plan.get('reason', 'NONE')}"
+        )
+    queued_at = time.monotonic()
+    return (signature if queued else last_signature), queued_at, plan
+
+
+def consume_serial_command_inbox(
+    dispatcher: SerialCommandDispatcher,
+    inbox_dir: Path,
+    *,
+    batch_limit: int = SERIAL_COMMAND_INBOX_BATCH_LIMIT,
+    now_ms: int | None = None,
+) -> dict[str, int]:
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    current_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
+    result = {"processed": 0, "accepted": 0, "expired": 0, "rejected": 0}
+
+    try:
+        request_files = sorted(inbox_dir.glob("*.json"))[: max(1, int(batch_limit))]
+    except OSError as exc:
+        print(f"SERIAL_INBOX_READ_FAILED,error={type(exc).__name__}", file=sys.stderr)
+        return result
+
+    for request_file in request_files:
+        result["processed"] += 1
+        try:
+            payload = json.loads(request_file.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("request payload must be a JSON object")
+            command = normalize_serial_command(str(payload.get("command", "")))
+            request_id = str(payload.get("id", request_file.stem) or request_file.stem)
+            created_ms = int(payload.get("created_ms", 0) or 0)
+            if created_ms <= 0:
+                created_ms = int(request_file.stat().st_mtime * 1000)
+            ttl_ms = max(1, int(payload.get("ttl_ms", SERIAL_COMMAND_TTL_MS_DEFAULT)))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            result["rejected"] += 1
+            print(
+                f"SERIAL_INBOX_REJECTED,file={request_file.name},error={type(exc).__name__}",
+                file=sys.stderr,
+            )
+            try:
+                request_file.unlink(missing_ok=True)
+            except OSError:
+                pass
+            continue
+
+        age_ms = max(0, current_ms - created_ms)
+        if age_ms >= ttl_ms:
+            result["expired"] += 1
+            print(
+                f"SERIAL_INBOX_EXPIRED,id={request_id},age_ms={age_ms},command={command}",
+                file=sys.stderr,
+            )
+            try:
+                request_file.unlink(missing_ok=True)
+            except OSError:
+                pass
+            continue
+
+        remaining_ttl_s = max(0.001, (ttl_ms - age_ms) / 1000.0)
+        if dispatcher.enqueue(
+            command,
+            source=f"INBOX:{request_id}",
+            ttl_s=remaining_ttl_s,
+        ):
+            result["accepted"] += 1
+            print(f"SERIAL_INBOX_ACCEPTED,id={request_id},command={command}")
+            try:
+                request_file.unlink(missing_ok=True)
+            except OSError as exc:
+                print(
+                    f"SERIAL_INBOX_CLEANUP_FAILED,id={request_id},error={type(exc).__name__}",
+                    file=sys.stderr,
+                )
+        else:
+            print(f"SERIAL_INBOX_DEFERRED,id={request_id},command={command}", file=sys.stderr)
+
+    return result
 
 
 def main() -> int:
@@ -1138,6 +1893,12 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description="Bridge Node A serial status into a JSON file")
     parser.add_argument("--port", required=True, help="Serial port, for example COM4")
+    parser.add_argument(
+        "--owner-lock-file",
+        type=Path,
+        default=None,
+        help="Optional process-owner lock path; defaults to a per-port file in the system temp directory",
+    )
     parser.add_argument("--baud", type=int, default=115200, help="Serial baud rate")
     parser.add_argument("--timeout", type=float, default=0.2, help="Serial read timeout in seconds")
     parser.add_argument("--output-file", type=Path, default=Path("captures/latest_node_status.json"), help="JSON file written with the latest Node A status")
@@ -1166,8 +1927,85 @@ def main() -> int:
     parser.add_argument("--startup-command", action="append", default=[], help="Serial command sent once after boot wait; can be repeated")
     parser.add_argument("--repeat-command", action="append", default=[], help="Serial command repeated at --repeat-command-interval; can be repeated")
     parser.add_argument("--repeat-command-interval", type=float, default=0.0, help="Seconds between repeated command bundles, set to 0 to disable")
+    parser.add_argument(
+        "--serial-min-send-interval",
+        type=float,
+        default=SERIAL_MIN_SEND_INTERVAL_S_DEFAULT,
+        help="Global minimum seconds between any two serial commands",
+    )
+    parser.add_argument(
+        "--serial-command-queue-limit",
+        type=int,
+        default=SERIAL_COMMAND_QUEUE_LIMIT_DEFAULT,
+        help="Maximum number of pending commands held by the single serial dispatcher",
+    )
+    parser.add_argument(
+        "--command-inbox-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Consume local command request files without allowing another process to open COM",
+    )
+    parser.add_argument(
+        "--command-inbox-dir",
+        type=Path,
+        default=Path("captures/serial_command_inbox"),
+        help="Directory containing one-command JSON requests",
+    )
+    parser.add_argument(
+        "--vision-forward-status",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Forward fresh vision_bridge status into Node A over this owned serial port",
+    )
+    parser.add_argument(
+        "--vision-status-file",
+        type=Path,
+        default=Path("captures/latest_status.json"),
+        help="Vision runtime status JSON consumed when --vision-forward-status is enabled",
+    )
+    parser.add_argument(
+        "--vision-forward-interval",
+        type=float,
+        default=0.75,
+        help="Seconds between repeated vision state forwards",
+    )
+    parser.add_argument(
+        "--vision-forward-max-stale-ms",
+        type=int,
+        default=VISION_FORWARD_MAX_STALE_MS_DEFAULT,
+        help="Maximum vision status age before forwarding VISION,LOST; set 0 to disable age limit",
+    )
     parser.add_argument("--echo", action="store_true", help="Echo raw serial lines to the terminal")
     args = parser.parse_args()
+
+    owner_lock_file = (
+        resolve_path(args.owner_lock_file)
+        if args.owner_lock_file is not None
+        else default_serial_owner_lock_path(args.port)
+    )
+    owner_lock = SerialPortOwnerLock(owner_lock_file, args.port)
+    if not owner_lock.acquire():
+        owner = owner_lock.read_owner_metadata()
+        print(
+            "SERIAL_OWNER_CONFLICT,"
+            f"port={args.port},owner_pid={owner.get('pid', 'UNKNOWN')},"
+            f"owner_port={owner.get('port', 'UNKNOWN')},lock_file={owner_lock_file.as_posix()}",
+            file=sys.stderr,
+        )
+        return 2
+    atexit.register(owner_lock.release)
+    print(
+        "SERIAL_OWNER_ACQUIRED,"
+        f"port={args.port},pid={os.getpid()},lock_file={owner_lock_file.as_posix()}"
+    )
+
+    try:
+        ser = serial_module.Serial(args.port, args.baud, timeout=args.timeout)
+    except serial_module.SerialException as exc:
+        print(f"Failed to open {args.port}: {exc}", file=sys.stderr)
+        owner_lock.release()
+        return 1
+    atexit.register(ser.close)
 
     output_file = resolve_path(args.output_file)
     events_file = resolve_path(args.events_file)
@@ -1176,6 +2014,8 @@ def main() -> int:
     result_file = resolve_path(args.result_file)
     result_history_file = resolve_path(args.result_history_file)
     session_log_dir = resolve_path(args.session_log_dir)
+    vision_status_file = resolve_path(args.vision_status_file)
+    command_inbox_dir = resolve_path(args.command_inbox_dir)
     inferred_node_id, inferred_node_zone, inferred_node_role = infer_node_metadata_from_output_file(output_file)
     default_node_id = str(args.default_node_id or "").strip() or inferred_node_id
     default_node_zone = str(args.default_node_zone or "").strip() or inferred_node_zone
@@ -1218,20 +2058,21 @@ def main() -> int:
         center_enabled,
     )
 
-    try:
-        ser = serial_module.Serial(args.port, args.baud, timeout=args.timeout)
-    except serial_module.SerialException as exc:
-        print(f"Failed to open {args.port}: {exc}", file=sys.stderr)
-        return 1
-
     status_sent_at = 0.0
     selftest_sent_at = 0.0
     summary_sent_at = 0.0
     event_status_sent_at = 0.0
     last_event_sent_at = 0.0
     repeat_command_sent_at = 0.0
+    vision_forward_sent_at = 0.0
+    vision_forward_signature = ""
 
     with ser:
+        dispatcher = SerialCommandDispatcher(
+            ser,
+            min_send_interval_s=max(0.0, args.serial_min_send_interval),
+            queue_limit=max(1, args.serial_command_queue_limit),
+        )
         time.sleep(0.5)
         ser.reset_input_buffer()
         ser.reset_output_buffer()
@@ -1243,6 +2084,21 @@ def main() -> int:
         print(f"Writing test result to: {result_file.as_posix()}")
         print(f"Writing test result history to: {result_history_file.as_posix()}")
         print(f"Writing session timeline logs to: {session_log_dir.as_posix()}")
+        if args.vision_forward_status:
+            print(
+                "Vision forwarding enabled: "
+                f"status={vision_status_file.as_posix()}, interval={max(0.1, args.vision_forward_interval):.2f}s, "
+                f"max_stale_ms={max(0, args.vision_forward_max_stale_ms)}"
+            )
+        print(
+            "Serial dispatcher enabled: "
+            f"min_interval={dispatcher.min_send_interval_s:.3f}s, "
+            f"queue_limit={dispatcher.queue_limit}, "
+            f"inbox={'ON' if args.command_inbox_enabled else 'OFF'}"
+        )
+        if args.command_inbox_enabled:
+            command_inbox_dir.mkdir(parents=True, exist_ok=True)
+            print(f"Reading serial command requests from: {command_inbox_dir.as_posix()}")
         print(
             "Default node metadata: "
             f"id={default_node_id}, zone={default_node_zone}, role={default_node_role}"
@@ -1254,22 +2110,54 @@ def main() -> int:
             )
 
         time.sleep(max(args.boot_wait, 0.0))
-        send_startup_commands(ser, args.startup_command)
+        dispatcher.send_blocking_bundle(args.startup_command, delay_s=0.2)
 
         try:
             while True:
-                status_sent_at = maybe_send_command(ser, status_sent_at, args.status_interval, "STATUS")
-                selftest_sent_at = maybe_send_command(ser, selftest_sent_at, args.selftest_interval, "SELFTEST")
-                summary_sent_at = maybe_send_command(ser, summary_sent_at, args.summary_interval, "SUMMARY")
-                event_status_sent_at = maybe_send_command(
-                    ser, event_status_sent_at, args.event_status_interval, "EVENT,STATUS"
+                if args.command_inbox_enabled:
+                    consume_serial_command_inbox(dispatcher, command_inbox_dir)
+                status_sent_at = maybe_enqueue_command(
+                    dispatcher, status_sent_at, args.status_interval, "STATUS", source="POLL_STATUS"
                 )
-                last_event_sent_at = maybe_send_command(
-                    ser, last_event_sent_at, args.last_event_interval, "LASTEVENT"
+                selftest_sent_at = maybe_enqueue_command(
+                    dispatcher, selftest_sent_at, args.selftest_interval, "SELFTEST", source="POLL_SELFTEST"
                 )
-                repeat_command_sent_at = maybe_send_command_bundle(
-                    ser, repeat_command_sent_at, args.repeat_command_interval, args.repeat_command
+                summary_sent_at = maybe_enqueue_command(
+                    dispatcher, summary_sent_at, args.summary_interval, "SUMMARY", source="POLL_SUMMARY"
                 )
+                event_status_sent_at = maybe_enqueue_command(
+                    dispatcher,
+                    event_status_sent_at,
+                    args.event_status_interval,
+                    "EVENT,STATUS",
+                    source="POLL_EVENT_STATUS",
+                )
+                last_event_sent_at = maybe_enqueue_command(
+                    dispatcher,
+                    last_event_sent_at,
+                    args.last_event_interval,
+                    "LASTEVENT",
+                    source="POLL_LAST_EVENT",
+                )
+                repeat_command_sent_at = maybe_enqueue_command_bundle(
+                    dispatcher,
+                    repeat_command_sent_at,
+                    args.repeat_command_interval,
+                    args.repeat_command,
+                    source="REPEAT",
+                )
+                if args.vision_forward_status:
+                    vision_forward_signature, vision_forward_sent_at, _ = maybe_forward_vision_status(
+                        dispatcher,
+                        vision_status_file,
+                        last_signature=vision_forward_signature,
+                        last_sent_at=vision_forward_sent_at,
+                        interval_s=max(0.1, args.vision_forward_interval),
+                        max_stale_ms=max(0, args.vision_forward_max_stale_ms),
+                        echo=bool(args.echo),
+                    )
+
+                dispatcher.pump()
 
                 raw = ser.readline()
                 if not raw:
@@ -1374,6 +2262,7 @@ def main() -> int:
         except KeyboardInterrupt:
             print("\nNode A serial bridge stopped.")
 
+    owner_lock.release()
     return 0
 
 

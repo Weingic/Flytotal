@@ -33,7 +33,7 @@ constexpr bool AdvancedPredictorEnabled = true;
 constexpr float PredictorKp = 0.45f;
 constexpr float PredictorKd = 0.05f;
 constexpr float PredictorFallbackDtSeconds = 0.02f;
-constexpr float PredictorLeadTimeSeconds = 0.18f;
+constexpr float PredictorLeadTimeSeconds = 0.05f;
 constexpr float PredictorMaxAccelMmS2 = 5000.0f;
 constexpr float PredictorAccelFilterAlpha = 0.70f;
 constexpr float CenterPanDeg = 90.0f;
@@ -54,6 +54,7 @@ constexpr int TiltPin = 5;
 constexpr int PwmFrequencyHz = 50;
 constexpr int PulseMinUs = 500;
 constexpr int PulseMaxUs = 2500;
+constexpr float WriteDeadbandDeg = 2.0f;
 }
 
 namespace RadarConfig {
@@ -182,6 +183,9 @@ constexpr bool IgnoreBackgroundAudio = false;
 }
 
 namespace CloudConfig {
+constexpr unsigned int ContractVersion = 2;
+constexpr bool EventEchoRequired = true;
+constexpr bool TestNoApply = true;
 constexpr unsigned long HeartbeatMs = 1000;
 constexpr unsigned long EventReportMs = 250;
 constexpr bool AiEnabledByDefault = false;

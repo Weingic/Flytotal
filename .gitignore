@@ -29,6 +29,7 @@ captures/event_exports/
 captures/real_radar_checks/
 captures/v5_2/
 outputs/
+runs/
 
 # Local model assets can be large and environment-specific.
 *.onnx

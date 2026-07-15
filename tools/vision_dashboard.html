@@ -3,21 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Flytotal 本地联调看板</title>
+  <title>Flytotal 低空安全 AIoT 看板</title>
+  <link rel="icon" href="data:,">
   <style>
     :root {
-      --bg: #f4efe6;
-      --panel: rgba(255, 248, 239, 0.88);
-      --panel-strong: rgba(255, 244, 230, 0.96);
-      --ink: #202020;
-      --muted: #6d665e;
-      --line: rgba(91, 76, 59, 0.18);
-      --accent: #d85a2a;
-      --ok: #1d7a5a;
-      --warn: #b77a00;
-      --danger: #b23a2f;
-      --offline: #6f6761;
-      --shadow: 0 18px 50px rgba(61, 42, 18, 0.12);
+      --bg: #f2f5f4;
+      --panel: #ffffff;
+      --panel-strong: #f8faf9;
+      --ink: #17211e;
+      --muted: #5f6b66;
+      --line: #d7dfdb;
+      --accent: #c75232;
+      --ok: #17785a;
+      --warn: #9b6900;
+      --danger: #b13d32;
+      --offline: #69736f;
+      --shadow: 0 8px 24px rgba(27, 45, 38, 0.08);
     }
 
     * { box-sizing: border-box; }
@@ -26,10 +27,7 @@
       margin: 0;
       font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
       color: var(--ink);
-      background:
-        radial-gradient(circle at top right, rgba(216, 90, 42, 0.18), transparent 32%),
-        radial-gradient(circle at bottom left, rgba(29, 122, 90, 0.16), transparent 30%),
-        linear-gradient(180deg, #fbf6ef 0%, #f1e6d9 100%);
+      background: var(--bg);
       min-height: 100vh;
     }
 
@@ -37,7 +35,18 @@
       width: min(1280px, calc(100vw - 32px));
       margin: 0 auto;
       padding: 28px 0 40px;
+      display: flex;
+      flex-direction: column;
     }
+
+    .page > section { order: 10; }
+    .page > .hero { order: 0; }
+    .page > .competition-overview { order: 1; }
+    .page > .content-grid { order: 2; }
+    .page > .status-grid { order: 3; }
+    .page > .legacy-delivery { order: 20; }
+    .page > .legacy-fleet { order: 21; }
+    .page > .legacy-co-sensing { order: 22; }
 
     .hero,
     .status-grid,
@@ -58,27 +67,29 @@
 
     .content-grid {
       grid-template-columns: 1.1fr 0.9fr;
+      margin-bottom: 18px;
     }
 
     .panel {
+      min-width: 0;
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 24px;
+      border-radius: 8px;
       box-shadow: var(--shadow);
-      backdrop-filter: blur(10px);
       transition: border-color 160ms ease, box-shadow 160ms ease, opacity 160ms ease;
     }
 
     .hero-card {
       padding: 24px;
-      background: linear-gradient(140deg, rgba(255, 250, 244, 0.95), rgba(255, 238, 220, 0.92));
+      background: var(--panel);
+      border-left: 4px solid var(--accent);
     }
 
     .hero-title {
       margin: 0 0 8px;
       font-size: clamp(30px, 4vw, 48px);
-      line-height: 0.96;
-      letter-spacing: -0.04em;
+      line-height: 1.05;
+      letter-spacing: 0;
     }
 
     .hero-text,
@@ -105,7 +116,7 @@
     .source-mode-title {
       font-size: 12px;
       font-weight: 800;
-      letter-spacing: 0.08em;
+      letter-spacing: 0;
       text-transform: uppercase;
       color: var(--muted);
     }
@@ -114,7 +125,7 @@
       margin-top: 10px;
       padding: 10px 12px;
       border: 1px solid rgba(183, 122, 0, 0.28);
-      border-radius: 14px;
+      border-radius: 6px;
       background: rgba(255, 248, 235, 0.92);
       color: var(--warn);
       font-size: 13px;
@@ -128,7 +139,7 @@
       display: flex;
       flex-direction: column;
       gap: 12px;
-      background: linear-gradient(150deg, rgba(255, 244, 230, 0.96), rgba(244, 255, 250, 0.92));
+      background: var(--panel);
     }
 
     .status-card.stale {
@@ -146,7 +157,99 @@
       margin: 0;
       font-size: 18px;
       font-weight: 800;
-      letter-spacing: -0.02em;
+      letter-spacing: 0;
+    }
+
+    .competition-overview {
+      margin-bottom: 18px;
+      padding: 18px 0 20px;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .competition-header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 12px;
+    }
+
+    .competition-kicker {
+      margin-bottom: 4px;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .competition-title {
+      margin: 0;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+
+    .competition-verdict {
+      margin-bottom: 12px;
+      padding: 11px 13px;
+      border-left: 4px solid var(--warn);
+      border-radius: 4px;
+      background: #fffaf0;
+      color: var(--warn);
+      font-size: 14px;
+      font-weight: 750;
+      line-height: 1.5;
+    }
+
+    .competition-verdict.ok {
+      border-left-color: var(--ok);
+      background: #f0faf6;
+      color: var(--ok);
+    }
+
+    .competition-verdict.danger {
+      border-left-color: var(--danger);
+      background: #fff4f2;
+      color: var(--danger);
+    }
+
+    .chain-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--line);
+    }
+
+    .chain-stage {
+      min-width: 0;
+      padding: 15px;
+      background: var(--panel);
+    }
+
+    .chain-stage-label {
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .chain-stage-value,
+    .chain-stage-pills {
+      min-height: 28px;
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .chain-stage-meta {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
     }
 
     .status-subtitle,
@@ -173,7 +276,7 @@
       color: var(--muted);
       font-size: 13px;
       text-transform: uppercase;
-      letter-spacing: 0.08em;
+      letter-spacing: 0;
     }
 
     .value {
@@ -191,9 +294,9 @@
     .capture-frame {
       aspect-ratio: 16 / 9;
       margin: 16px 20px 12px;
-      border-radius: 20px;
+      border-radius: 8px;
       overflow: hidden;
-      background: linear-gradient(145deg, rgba(32, 32, 32, 0.92), rgba(66, 56, 46, 0.96));
+      background: #202421;
       position: relative;
       border: 1px solid rgba(255, 255, 255, 0.08);
     }
@@ -369,7 +472,7 @@
     .fleet-card-title {
       font-size: 18px;
       font-weight: 800;
-      letter-spacing: -0.02em;
+      letter-spacing: 0;
     }
 
     .fleet-card-meta {
@@ -475,7 +578,7 @@
       display: block;
       margin-bottom: 6px;
       font-size: 12px;
-      letter-spacing: 0.04em;
+      letter-spacing: 0;
       text-transform: uppercase;
       color: var(--muted);
     }
@@ -571,7 +674,7 @@
       color: var(--muted);
       font-size: 12px;
       text-transform: uppercase;
-      letter-spacing: 0.06em;
+      letter-spacing: 0;
     }
 
     .detail-item span {
@@ -715,7 +818,7 @@
       font-weight: 700;
       color: var(--muted);
       text-transform: uppercase;
-      letter-spacing: 0.06em;
+      letter-spacing: 0;
     }
 
     .coach-port-row input {
@@ -800,7 +903,7 @@
       font-size: 12px;
       color: var(--muted);
       text-transform: uppercase;
-      letter-spacing: 0.08em;
+      letter-spacing: 0;
       font-weight: 700;
       padding: 10px 12px;
       text-align: left;
@@ -880,7 +983,7 @@
       border-radius: 999px;
       font-size: 12px;
       font-weight: 700;
-      letter-spacing: 0.03em;
+      letter-spacing: 0;
       border: 1px solid transparent;
     }
 
@@ -953,7 +1056,7 @@
       font-weight: 700;
       color: var(--muted);
       text-transform: uppercase;
-      letter-spacing: .06em;
+      letter-spacing: 0;
       margin-bottom: 6px;
     }
     .summary-card-value {
@@ -1036,7 +1139,7 @@
       font-weight: 700;
       color: var(--muted);
       text-transform: uppercase;
-      letter-spacing: .06em;
+      letter-spacing: 0;
       white-space: nowrap;
     }
     .policy-bar-text {
@@ -1063,7 +1166,7 @@
       font-weight: 700;
       color: var(--muted);
       text-transform: uppercase;
-      letter-spacing: .06em;
+      letter-spacing: 0;
       margin-bottom: 8px;
     }
     .verdict-sentence {
@@ -1114,6 +1217,7 @@
     @media (max-width: 1080px) {
       .status-grid,
       .content-grid { grid-template-columns: 1fr; }
+      .chain-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
 
     @media (max-width: 720px) {
@@ -1124,6 +1228,13 @@
 
       .hero-card,
       .status-card { padding: 18px; }
+
+      .competition-header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .chain-grid { grid-template-columns: 1fr; }
 
       .facts { grid-template-columns: 1fr; }
       .concept-grid { grid-template-columns: 1fr; }
@@ -1138,11 +1249,8 @@
   <div class="page">
     <section class="hero">
       <div class="panel hero-card">
-        <h1 class="hero-title">Flytotal 本地联调看板</h1>
-        <p class="hero-text">
-          这块页面现在同时展示三条信息链：视觉实时状态、Node A 主链状态、抓拍证据记录。
-          目的不是做炫技大屏，而是让你在本地联调时一眼看清系统现在在干什么、刚刚抓到了什么、主链此刻处于什么状态。
-        </p>
+        <h1 class="hero-title">Flytotal 低空安全 AIoT</h1>
+        <p class="hero-text">ESP32-S3 多源感知 · V4b 视觉确认 · 豆包云端研判 · 事件级上下行与证据闭环</p>
         <div class="source-mode-bar">
           <span class="source-mode-title">数据源模式</span>
           <button class="filter-btn active" type="button" id="dataModeLiveBtn">真实链路</button>
@@ -1155,11 +1263,48 @@
       </div>
     </section>
 
-    <section style="margin-bottom: 18px;">
+    <section class="competition-overview" aria-labelledby="competitionOverviewTitle">
+      <div class="competition-header">
+        <div>
+          <div class="competition-kicker">乐鑫物联网设计竞赛 · Node A</div>
+          <h2 class="competition-title" id="competitionOverviewTitle">物联网主链实时状态</h2>
+        </div>
+        <div id="competitionModeBadge"><span class="pill normal">真实链路</span></div>
+      </div>
+      <div class="competition-verdict" id="competitionVerdict">正在读取主链与证据状态。</div>
+      <div class="chain-grid">
+        <div class="chain-stage">
+          <div class="chain-stage-label">01 · ESP32-S3 核心节点</div>
+          <div class="chain-stage-value" id="overviewNodeValue"><span class="pill offline">OFFLINE</span></div>
+          <div class="chain-stage-meta" id="overviewNodeMeta">A1 · UNKNOWN · --</div>
+        </div>
+        <div class="chain-stage">
+          <div class="chain-stage-label">02 · 雷达 / RID / 视觉融合</div>
+          <div class="chain-stage-value" id="overviewFusionValue"><span class="pill normal">IDLE</span></div>
+          <div class="chain-stage-meta" id="overviewFusionMeta">NONE · NONE · UNKNOWN_TARGET</div>
+        </div>
+        <div class="chain-stage">
+          <div class="chain-stage-label">03 · V4b 视觉确认</div>
+          <div class="chain-stage-value" id="overviewVisionValue"><span class="pill offline">OFFLINE</span></div>
+          <div class="chain-stage-meta" id="overviewVisionMeta">OFFLINE · frame UNAVAILABLE</div>
+        </div>
+        <div class="chain-stage">
+          <div class="chain-stage-label">04 · 豆包回令 / 严格证据</div>
+          <div class="chain-stage-pills">
+            <span id="overviewCloudValue"><span class="pill offline">CLOUD OFFLINE</span></span>
+            <span id="overviewEvidenceValue"><span class="pill warn">EVIDENCE WAIT</span></span>
+          </div>
+          <div class="chain-stage-meta" id="overviewCloudMeta">command NONE · event NONE</div>
+          <div class="chain-stage-meta" id="overviewEvidenceMeta">严格同事件证据尚未通过</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="legacy-delivery" style="margin-bottom: 18px;">
       <article class="panel records-panel">
         <div class="table-header">
-          <h2 class="section-title">答辩 / 冻结摘要</h2>
-          <p class="section-subtitle">把 Day5-Day7 的结果、检查单和冻结资产收成一块，便于现场快速判断“这版能不能讲”。</p>
+          <h2 class="section-title">历史工程资产</h2>
+          <p class="section-subtitle">不同阶段的构建、套件与文档记录，仅用于工程复核，不替代当前同事件严格证据。</p>
         </div>
         <div class="summary-strip" id="deliverySummaryStrip">
           <div class="summary-chip" id="deliveryReadyChip">交付 WAIT</div>
@@ -1172,7 +1317,7 @@
         <div class="result-overview" id="deliveryOverviewValue">总览：等待结果与冻结资产加载。</div>
         <div class="result-concepts">
           <div class="concept-row">
-            <div class="concept-title">今日可汇报资产</div>
+            <div class="concept-title">历史资产状态</div>
             <div id="deliveryAssetStateValue"><span class="pill normal">等待数据</span></div>
           </div>
           <div class="concept-grid">
@@ -1207,11 +1352,11 @@
       </article>
     </section>
 
-    <section style="margin-bottom: 18px;">
+    <section class="legacy-fleet" style="margin-bottom: 18px;">
       <article class="panel records-panel">
         <div class="table-header">
-          <h2 class="section-title">双节点基线</h2>
-          <p class="section-subtitle">这里先把 A1 / A2 的最低契约和在线状态收口到同一块，先验收“双节点同时在线不报错”。</p>
+          <h2 class="section-title">双节点扩展基线</h2>
+          <p class="section-subtitle">非计划必要内容，推荐扩展方向：A2 状态不作为当前 Node A 物联网主证据。</p>
         </div>
         <div class="summary-strip">
           <div class="summary-chip" id="fleetOnlineChip">在线 0/2</div>
@@ -1249,11 +1394,11 @@
       </article>
     </section>
 
-    <section style="margin-bottom: 18px;">
+    <section class="legacy-co-sensing" style="margin-bottom: 18px;">
       <article class="panel records-panel">
         <div class="table-header">
-          <h2 class="section-title">协同感知视图</h2>
-          <p class="section-subtitle">这里只展示现有 NodeA / NodeB 字段和协同仿真输出，用来回答“节点之间如何联动”。</p>
+          <h2 class="section-title">协同感知扩展</h2>
+          <p class="section-subtitle">非计划必要内容，推荐扩展方向：仿真或 NodeB 字段不能包装成当前真实外场结果。</p>
         </div>
         <div class="summary-strip">
           <div class="summary-chip" id="coSensingAvailableChip">协同 WAIT</div>
@@ -1347,6 +1492,8 @@
         <h2 class="status-title">云端大模型威胁评估</h2>
         <p class="status-subtitle">NodeA 上传多源感知数据到豆包大模型，返回威胁评估与处置指令；边缘端保留安全否决权。</p>
         <div class="status-row"><div class="label">云端连接</div><div class="value" id="cloudOnlineValue"><span class="pill offline">OFFLINE</span></div></div>
+        <div class="status-row"><div class="label">云端契约</div><div class="value" id="cloudContractValue"><span class="pill offline">V0</span></div></div>
+        <div class="status-row"><div class="label">安全预检</div><div class="value" id="cloudPreflightValue"><span class="pill warn">WAIT</span></div></div>
         <div class="status-row"><div class="label">威胁等级</div><div class="value" id="cloudThreatLevelValue"><span class="pill normal">NONE</span></div></div>
         <div class="status-row"><div class="label">告警文本</div><div class="value" id="cloudAlertTextValue">NONE</div></div>
         <div class="status-row"><div class="label">处置建议</div><div class="value" id="cloudActionValue">NONE</div></div>
@@ -1355,6 +1502,8 @@
         <div class="status-row"><div class="label">指令已执行</div><div class="value" id="cloudCommandAppliedValue"><span class="pill normal">NO</span></div></div>
         <div class="status-row"><div class="label">运行时阈值</div><div class="value" id="cloudThresholdValue">默认</div></div>
         <div class="status-row"><div class="label">触发事件</div><div class="value" id="cloudCommandSourceEventValue">NONE</div></div>
+        <div class="status-row"><div class="label">请求 / 期望 / 返回</div><div class="value" id="cloudRawEventChainValue">NONE / NONE / NONE</div></div>
+        <div class="status-row"><div class="label">原始返回结果</div><div class="value" id="cloudRawResultValue">NONE / HTTP 0</div></div>
         <div class="status-row"><div class="label">指令理由</div><div class="value" id="cloudCommandReasonValue">NONE</div></div>
         <div class="status-row"><div class="label">执行时刻</div><div class="value" id="cloudCommandAppliedTimeValue">--</div></div>
         <div class="status-row"><div class="label">错误信息</div><div class="value" id="cloudErrorValue">NONE</div></div>
@@ -1421,6 +1570,7 @@
         <div class="capture-header">
           <h2 class="section-title">最新抓拍</h2>
           <p class="section-subtitle">最新一条结构化抓拍记录和它对应的图片证据。</p>
+          <div id="latestCaptureFreshnessValue"><span class="pill warn">等待抓拍时间</span></div>
         </div>
         <div class="capture-frame">
           <img id="latestImage" alt="最新抓拍图">
@@ -1498,7 +1648,7 @@
       <article class="panel capture-panel">
         <div class="capture-header">
           <h2 class="section-title">事件详情（最小回放）</h2>
-          <p class="section-subtitle">点选上方事件行后，这里显示事件编号、时间、风险、白名单、视觉状态、触发标志与抓拍证据。</p>
+          <p class="section-subtitle">点选上方事件行后，这里显示事件编号、时间、风险、白名单、视觉状态、云端研判、触发标志与抓拍证据。</p>
           <div class="timeline-check-actions">
             <button class="mini-btn" type="button" id="eventDetailExportBtn" disabled>导出当前事件证据 JSON</button>
             <button class="mini-btn" type="button" id="eventMatchModeBtn">匹配模式：兜底</button>
@@ -1510,7 +1660,7 @@
         <div class="capture-frame">
           <img id="eventDetailImage" alt="事件抓拍图">
           <canvas id="eventDetailOverlayCanvas" class="evidence-overlay"></canvas>
-          <div class="overlay-caption" id="eventDetailOverlayCaption">CSRT conf=0.00 / YOLO conf=0.00 / agreement=NO</div>
+          <div class="overlay-caption" id="eventDetailOverlayCaption">Tracker conf=0.00 / YOLO conf=0.00 / agreement=NO</div>
           <div class="capture-empty" id="eventDetailEmpty">当前还没有可回放的事件证据。先运行 Node A 串口桥接和 vision_bridge 抓拍。</div>
         </div>
         <div class="facts">
@@ -1525,9 +1675,21 @@
           <div class="fact"><span class="label">Hunter 状态</span><div class="value" id="eventDetailHunterValue">UNKNOWN</div></div>
           <div class="fact"><span class="label">视觉状态</span><div class="value" id="eventDetailVisionValue">UNKNOWN</div></div>
           <div class="fact"><span class="label">视觉质量</span><div class="value" id="eventDetailVisionQualityValue">NO_VISUAL</div></div>
+          <div class="fact"><span class="label">锁定方式</span><div class="value" id="eventDetailLockSourceValue">UNKNOWN</div></div>
+          <div class="fact"><span class="label">模型判定</span><div class="value" id="eventDetailAutoLockValue">none / 0.00</div></div>
+          <div class="fact"><span class="label">画面有效性</span><div class="value" id="eventDetailFrameQualityValue">UNVERIFIED</div></div>
+          <div class="fact"><span class="label">视觉证据 Hash</span><div class="value" id="eventDetailVisionHashValue" style="font-size:12px;word-break:break-all;">--</div></div>
           <div class="fact"><span class="label">融合等级</span><div class="value" id="eventDetailFusionValue">NONE</div></div>
           <div class="fact"><span class="label">多旋翼筛选</span><div class="value" id="eventDetailMultirotorValue">UNKNOWN / 0.0</div></div>
           <div class="fact"><span class="label">LD2451 远距</span><div class="value" id="eventDetailLd2451Value">0.00m / 0.00mps / 0</div></div>
+          <div class="fact"><span class="label">云端在线</span><div class="value" id="eventDetailCloudOnlineValue">OFFLINE</div></div>
+          <div class="fact"><span class="label">云端契约 / 预检</span><div class="value" id="eventDetailCloudContractValue">V0 / WAIT</div></div>
+          <div class="fact"><span class="label">云端威胁</span><div class="value" id="eventDetailCloudThreatValue">NONE</div></div>
+          <div class="fact"><span class="label">云端命令</span><div class="value" id="eventDetailCloudCommandValue">NONE</div></div>
+          <div class="fact"><span class="label">边缘执行</span><div class="value" id="eventDetailCloudEffectValue">NONE</div></div>
+          <div class="fact"><span class="label">云端来源事件</span><div class="value" id="eventDetailCloudSourceValue">NONE</div></div>
+          <div class="fact"><span class="label">请求 / 期望 / 返回</span><div class="value" id="eventDetailCloudRawEventsValue">NONE / NONE / NONE</div></div>
+          <div class="fact"><span class="label">云端建议</span><div class="value" id="eventDetailCloudAdviceValue">NONE</div></div>
           <div class="fact"><span class="label">事件状态</span><div class="value" id="eventDetailStateValue">NONE</div></div>
           <div class="fact"><span class="label">触发原因</span><div class="value" id="eventDetailReasonValue">NONE</div></div>
           <div class="fact"><span class="label">触发标志</span><div class="value" id="eventDetailTriggerValue">NONE</div></div>
@@ -1817,6 +1979,7 @@
     const DATA_MODE_STORAGE_KEY = "flytotal_data_mode";
     let testResultsFilter = "all";
     let dataMode = "live";
+    let dataModeRevision = 0;
     const expandedTestResults = new Set();
     let selectedTimelineSession = "";
     let sessionTimelineFilter = "all";
@@ -1826,6 +1989,7 @@
     let latestSessionTimelineSessions = [];
     let latestNodeFleet = [];
     let latestRuntimeStatus = null;
+    let latestNodeStatus = null;
     let latestCaptureRecord = null;
     let latestCoSensingPayload = null;
     let latestNodeEventRecords = [];
@@ -1986,10 +2150,118 @@
         ? semanticPill("当前：真实链路", "ok")
         : semanticPill("当前：模拟链路", "warn");
       banner.style.display = liveMode ? "none" : "block";
+      updateCompetitionOverview();
+    }
+
+    function updateCompetitionOverview() {
+      const verdict = document.getElementById("competitionVerdict");
+      const modeBadge = document.getElementById("competitionModeBadge");
+      if (!verdict || !modeBadge) return;
+
+      const node = latestNodeStatus && typeof latestNodeStatus === "object" ? latestNodeStatus : {};
+      const runtime = latestRuntimeStatus && typeof latestRuntimeStatus === "object" ? latestRuntimeStatus : {};
+      const closure = latestDeliveryAssets?.metrics?.evidence_closure || {};
+      const liveMode = dataMode === "live";
+      const nodeAvailable = Boolean(node.available);
+      const nodeOnline = nodeAvailable && Number(node.online ?? 0) === 1;
+      const staleAgeMs = Math.max(0, Number(node.stale_age_ms ?? 0));
+      const fusionEnabled = nodeOnline && Number(node.fusion_enabled ?? 0) === 1;
+      const fusionLevel = String(node.fusion_level || "NONE").toUpperCase();
+      const fusionStage = String(node.fusion_stage || "NONE").toUpperCase();
+      const detectorState = String(node.detector_state || runtime.detector_state || "OFFLINE").toUpperCase();
+      const visionRuntimeOnline = Number(node.vision_runtime_online ?? (runtime.available ? 1 : 0)) === 1;
+      const frameReady = Number(node.frame_content_ready ?? runtime.frame_content_ready ?? 0) === 1;
+      const visionReady = visionRuntimeOnline && detectorState === "READY_ONNX" && frameReady;
+      const cloudOnline = nodeOnline && Number(node.cloud_online ?? 0) === 1;
+      const cloudContractVersion = Number(node.cloud_contract_version ?? 0);
+      const cloudEchoRequired = Number(node.cloud_event_echo_required ?? 0) === 1;
+      const cloudTestNoApply = Number(node.cloud_test_no_apply ?? 0) === 1;
+      const cloudTestValidated = Number(node.cloud_test_validated ?? 0) === 1;
+      const cloudTestRawReady =
+        Number(node.cloud_test_result_no_apply ?? 0) === 1 &&
+        String(node.cloud_test_response_event_id || "").trim().toUpperCase() === "A1-CLOUD-TEST";
+      const cloudResultThreatLevel = String(node.cloud_result_threat_level || "NONE").trim().toUpperCase();
+      const cloudResultCommandType = String(node.cloud_result_command_type || "NONE").trim().toUpperCase();
+      const cloudTestPolicyReady =
+        ["HIGH", "CRITICAL"].includes(cloudResultThreatLevel) &&
+        cloudResultCommandType === "GENERATE_ALERT";
+      const cloudPreflightReady = cloudTestValidated && cloudTestRawReady && cloudTestPolicyReady;
+      const cloudPreflightLabel = !cloudTestValidated
+        ? "WAIT"
+        : (!cloudTestRawReady ? "RAW WAIT" : (cloudTestPolicyReady ? "PASS" : "POLICY WAIT"));
+      const cloudCapabilitiesReady = cloudContractVersion >= 2 && cloudEchoRequired && cloudTestNoApply;
+      const cloudReady = cloudOnline && cloudCapabilitiesReady && cloudPreflightReady;
+      const closureAvailable = Boolean(closure.available);
+      const closureResult = String(closure.result || "WAIT").toUpperCase();
+      const closurePass = closureAvailable && closureResult === "PASS";
+
+      modeBadge.innerHTML = liveMode
+        ? semanticPill("真实链路", "ok")
+        : semanticPill("模拟链路", "warn");
+      document.getElementById("overviewNodeValue").innerHTML = semanticPill(
+        nodeOnline ? "ONLINE" : "OFFLINE",
+        nodeOnline ? "ok" : "offline"
+      );
+      document.getElementById("overviewNodeMeta").textContent =
+        `${node.node_id || "A1"} · ${node.main_state || "UNKNOWN"} · age ${Math.round(staleAgeMs)} ms`;
+      document.getElementById("overviewFusionValue").innerHTML = semanticPill(
+        fusionEnabled ? "ACTIVE" : "IDLE",
+        fusionEnabled ? "ok" : "normal"
+      );
+      document.getElementById("overviewFusionMeta").textContent =
+        `${fusionLevel} · ${fusionStage} · ${node.target_verdict || "UNKNOWN_TARGET"}`;
+      document.getElementById("overviewVisionValue").innerHTML = semanticPill(
+        visionReady ? "READY" : (visionRuntimeOnline ? "WAIT" : "OFFLINE"),
+        visionReady ? "ok" : (visionRuntimeOnline ? "warn" : "offline")
+      );
+      document.getElementById("overviewVisionMeta").textContent =
+        `${detectorState} · ${node.detector_model_label || runtime.detector_model_label || "model unavailable"} · frame ${node.frame_quality_reason || runtime.frame_quality_reason || "UNAVAILABLE"}`;
+      document.getElementById("overviewCloudValue").innerHTML = semanticPill(
+        cloudReady ? "CLOUD READY" : (cloudOnline ? "CLOUD UNSAFE" : "CLOUD OFFLINE"),
+        cloudReady ? "ok" : (cloudOnline ? "danger" : "offline")
+      );
+      document.getElementById("overviewEvidenceValue").innerHTML = semanticPill(
+        closurePass ? "EVIDENCE PASS" : (closureAvailable ? `EVIDENCE ${closureResult}` : "EVIDENCE WAIT"),
+        closurePass ? "ok" : (closureAvailable ? "danger" : "warn")
+      );
+      document.getElementById("overviewCloudMeta").textContent =
+        `V${cloudContractVersion} · preflight ${cloudPreflightLabel} · command ${node.cloud_command_effect || "NONE"} · event ${node.cloud_command_source_event_id || node.event_id || "NONE"}`;
+      document.getElementById("overviewEvidenceMeta").textContent = closureAvailable
+        ? `event ${closure.latest_event_id || "NONE"} · bound captures ${closure.bound_capture_count ?? 0}`
+        : "严格同事件证据尚未生成";
+      updateLatestCaptureFreshness();
+
+      if (!liveMode) {
+        verdict.className = "competition-verdict danger";
+        verdict.textContent = "当前为模拟链路，不可作为比赛现场证据。";
+        return;
+      }
+
+      const blockers = [];
+      if (!nodeOnline) blockers.push("ESP32-S3 Node A 未在线");
+      if (!visionReady) blockers.push("V4b 视觉未就绪");
+      if (!cloudOnline) blockers.push("豆包云端未在线");
+      if (nodeOnline && !cloudCapabilitiesReady) blockers.push("云端安全契约 V2 未确认");
+      if (nodeOnline && cloudCapabilitiesReady && !cloudTestValidated) blockers.push("CLOUD,TEST 安全预检未通过");
+      if (nodeOnline && cloudCapabilitiesReady && cloudTestValidated && !cloudTestRawReady) blockers.push("CLOUD,TEST 原始无动作回显未持久化");
+      if (nodeOnline && cloudCapabilitiesReady && cloudTestValidated && cloudTestRawReady && !cloudTestPolicyReady) blockers.push("豆包测试策略未返回 HIGH/CRITICAL + GENERATE_ALERT");
+      if (!closurePass) blockers.push(closureAvailable ? "严格同事件证据未通过" : "严格同事件证据未生成");
+      if (blockers.length > 0) {
+        verdict.className = "competition-verdict danger";
+        verdict.textContent = `当前不可作为完整现场证据：${blockers.join("；")}。`;
+        return;
+      }
+
+      verdict.className = "competition-verdict ok";
+      verdict.textContent = "当前物联网主链和严格同事件证据均已通过，可进入答辩展示。";
     }
 
     function setDataMode(mode, shouldReload = true) {
-      dataMode = normalizeDataMode(mode);
+      const nextMode = normalizeDataMode(mode);
+      if (nextMode !== dataMode) {
+        dataModeRevision += 1;
+      }
+      dataMode = nextMode;
       writeDataMode(dataMode);
       refreshDataModeUI();
       if (shouldReload) {
@@ -2070,7 +2342,11 @@
 
     function evidenceSource(record = null) {
       const source = {};
-      Object.assign(source, latestRuntimeStatus || {});
+      const normalizePath = (value) => String(value || "").replaceAll("\\", "/").toLowerCase();
+      const recordPath = normalizePath(record?.file_path || record?.capture_path);
+      const runtimePath = normalizePath(latestRuntimeStatus?.last_capture_file);
+      const runtimeMatches = !record || (recordPath && runtimePath && recordPath === runtimePath);
+      if (runtimeMatches) Object.assign(source, latestRuntimeStatus || {});
       Object.assign(source, record || latestCaptureRecord || {});
       return source;
     }
@@ -2136,7 +2412,8 @@
       const agreement = !!(csrtBox && detections.some((item) => bboxIou(csrtBox, item.box) >= 0.2));
 
       if (csrtBox) {
-        drawOverlayBox(ctx, csrtBox, scaleInfo, "#2ecc71", `CSRT ${formatFixed(source.vision_confidence, 2)}`);
+        const trackerLabel = String(source.tracker_name || source.active_tracker_name || "TRACKER").toUpperCase();
+        drawOverlayBox(ctx, csrtBox, scaleInfo, "#2ecc71", `${trackerLabel} ${formatFixed(source.vision_confidence, 2)}`);
       }
       detections.slice(0, 4).forEach((item) => {
         const score = Number(item.score ?? item.confidence ?? 0);
@@ -2147,13 +2424,18 @@
       const hasEvidence = !!csrtBox || detections.length > 0;
       canvas.style.display = hasEvidence ? "block" : "none";
       caption.style.display = hasEvidence ? "block" : "none";
+      const trackerLabel = String(source.tracker_name || source.active_tracker_name || "TRACKER").toUpperCase();
       caption.textContent =
-        `CSRT conf=${formatFixed(source.vision_confidence, 2)} / YOLO conf=${formatFixed(yoloScore, 2)} / agreement=${agreement ? "YES" : "NO"}`;
+        `${trackerLabel} conf=${formatFixed(source.vision_confidence, 2)} / YOLO conf=${formatFixed(yoloScore, 2)} / agreement=${agreement ? "YES" : "NO"}`;
     }
 
     function redrawEvidenceOverlays() {
       redrawCaptureOverlay("latestImage", "latestOverlayCanvas", "latestOverlayCaption", latestCaptureRecord);
-      const detailCapture = currentNodeEventDetail?.latest_capture || null;
+      const detailCaptureRecord = currentNodeEventDetail?.latest_capture || null;
+      const detailVisionEvidence = currentNodeEventDetail?.event_object_v1?.vision_evidence || null;
+      const detailCapture = detailCaptureRecord
+        ? { ...detailCaptureRecord, ...(detailVisionEvidence || {}) }
+        : null;
       redrawCaptureOverlay("eventDetailImage", "eventDetailOverlayCanvas", "eventDetailOverlayCaption", detailCapture);
     }
 
@@ -2999,6 +3281,7 @@
         document.getElementById("runtimeEventBindSourceValue").textContent = "NONE";
         document.getElementById("runtimeTimeValue").textContent = "--";
         redrawEvidenceOverlays();
+        updateCompetitionOverview();
         return;
       }
 
@@ -3023,7 +3306,7 @@
         `${requestedTracker} -> ${activeTracker} / fallback=${fallbackApplied ? "ON" : "OFF"}`;
       document.getElementById("runtimeTrackerAvailableValue").textContent = availableTrackers;
       document.getElementById("runtimeVisionConfirmValue").textContent =
-        `CSRT ${formatFixed(status.vision_confidence, 2)} / stable ${formatFixed(status.bbox_stability_score, 2)} / ${status.tracker_state || "UNKNOWN"} / ${status.detector_state || "NONE"} / ${status.detector_model_label || "none"} / ${status.detector_class_strategy || "none"}`;
+        `${activeTracker} ${formatFixed(status.vision_confidence, 2)} / ${status.lock_source || "NONE"} / auto ${formatFixed(status.auto_lock_score, 2)} / frame ${status.frame_quality_reason || "UNMEASURED"} / ${status.tracker_state || "UNKNOWN"} / ${status.detector_state || "NONE"} / ${status.detector_model_label || "none"}`;
       document.getElementById("runtimeFrameValue").textContent = String(status.frame_index ?? 0);
       document.getElementById("runtimeBboxValue").textContent =
         `${status.bbox_x ?? 0}, ${status.bbox_y ?? 0}, ${status.bbox_w ?? 0}, ${status.bbox_h ?? 0}`;
@@ -3033,11 +3316,13 @@
       document.getElementById("runtimeEventBindSourceValue").textContent = String(status.event_id_source || "none");
       document.getElementById("runtimeTimeValue").textContent = formatTime(status.timestamp_ms);
       redrawEvidenceOverlays();
+      updateCompetitionOverview();
     }
 
     function setNodeStatus(status) {
       const nodeCard = document.getElementById("nodeCard");
       if (!status || !status.available) {
+        latestNodeStatus = null;
         latestNodeOnline = false;
         nodeCard.classList.remove("live");
         nodeCard.classList.add("stale");
@@ -3070,9 +3355,11 @@
         document.getElementById("nodeMessageValue").textContent = "NONE";
         document.getElementById("nodeTimeValue").textContent = "--";
         updateOperationCoach();
+        updateCompetitionOverview();
         return;
       }
 
+      latestNodeStatus = status;
       const isOnline = Number(status.online ?? 0) === 1;
       latestNodeOnline = isOnline;
       nodeCard.classList.toggle("live", isOnline);
@@ -3152,6 +3439,7 @@
       document.getElementById("nodeTimeValue").textContent =
         `${formatTime(status.last_update_ms)} / ${Math.round((status.stale_age_ms ?? 0) / 1000)}s`;
       updateOperationCoach();
+      updateCompetitionOverview();
     }
 
     function setCloudThreatStatus(status) {
@@ -3161,6 +3449,8 @@
         cloudCard.classList.remove("live");
         cloudCard.classList.add("stale");
         document.getElementById("cloudOnlineValue").innerHTML = semanticPill("OFFLINE", "offline");
+        document.getElementById("cloudContractValue").innerHTML = semanticPill("V0", "offline");
+        document.getElementById("cloudPreflightValue").innerHTML = semanticPill("WAIT", "warn");
         document.getElementById("cloudThreatLevelValue").innerHTML = cloudThreatPill("NONE");
         document.getElementById("cloudAlertTextValue").textContent = "NONE";
         document.getElementById("cloudActionValue").textContent = "NONE";
@@ -3169,17 +3459,46 @@
         document.getElementById("cloudCommandAppliedValue").innerHTML = semanticPill("NO", "normal");
         document.getElementById("cloudThresholdValue").textContent = "默认";
         document.getElementById("cloudCommandSourceEventValue").textContent = "NONE";
+        document.getElementById("cloudRawEventChainValue").textContent = "NONE / NONE / NONE";
+        document.getElementById("cloudRawResultValue").textContent = "NONE / HTTP 0";
         document.getElementById("cloudCommandReasonValue").textContent = "NONE";
         document.getElementById("cloudCommandAppliedTimeValue").textContent = "--";
         document.getElementById("cloudErrorValue").textContent = "NONE";
         document.getElementById("cloudTimeValue").textContent = "--";
+        updateCompetitionOverview();
         return;
       }
       const cloudOnline = Number(status.cloud_online ?? 0) === 1;
-      cloudCard.classList.toggle("live", cloudOnline);
-      cloudCard.classList.toggle("stale", !cloudOnline);
+      const contractVersion = Number(status.cloud_contract_version ?? 0);
+      const echoRequired = Number(status.cloud_event_echo_required ?? 0) === 1;
+      const testNoApply = Number(status.cloud_test_no_apply ?? 0) === 1;
+      const testValidated = Number(status.cloud_test_validated ?? 0) === 1;
+      const testRawReady =
+        Number(status.cloud_test_result_no_apply ?? 0) === 1 &&
+        String(status.cloud_test_response_event_id || "").trim().toUpperCase() === "A1-CLOUD-TEST";
+      const resultThreatLevel = String(status.cloud_result_threat_level || "NONE").trim().toUpperCase();
+      const resultCommandType = String(status.cloud_result_command_type || "NONE").trim().toUpperCase();
+      const testPolicyReady =
+        ["HIGH", "CRITICAL"].includes(resultThreatLevel) &&
+        resultCommandType === "GENERATE_ALERT";
+      const preflightReady = testValidated && testRawReady && testPolicyReady;
+      const preflightLabel = !testValidated
+        ? "WAIT"
+        : (!testRawReady ? "RAW WAIT" : (testPolicyReady ? "PASS" : "POLICY WAIT"));
+      const contractReady = contractVersion >= 2 && echoRequired && testNoApply;
+      const cloudReady = cloudOnline && contractReady && preflightReady;
+      cloudCard.classList.toggle("live", cloudReady);
+      cloudCard.classList.toggle("stale", !cloudReady);
       document.getElementById("cloudOnlineValue").innerHTML =
         semanticPill(cloudOnline ? "ONLINE" : "OFFLINE", cloudOnline ? "ok" : "offline");
+      document.getElementById("cloudContractValue").innerHTML = semanticPill(
+        contractReady ? `V${contractVersion} · ECHO · NO-APPLY` : `V${contractVersion} · LEGACY/UNKNOWN`,
+        contractReady ? "ok" : "danger"
+      );
+      document.getElementById("cloudPreflightValue").innerHTML = semanticPill(
+        preflightLabel,
+        preflightReady ? "ok" : (testValidated ? "danger" : "warn")
+      );
       document.getElementById("cloudThreatLevelValue").innerHTML =
         cloudThreatPill(status.cloud_threat_level || "NONE");
       document.getElementById("cloudAlertTextValue").textContent = status.cloud_alert_text || "NONE";
@@ -3195,12 +3514,17 @@
         threshold > 0 ? `${threshold.toFixed(1)}（大模型覆盖）` : "默认 76.0";
       document.getElementById("cloudCommandSourceEventValue").textContent =
         status.cloud_command_source_event_id || "NONE";
+      document.getElementById("cloudRawEventChainValue").textContent =
+        `${status.cloud_request_event_id || "NONE"} / ${status.cloud_expected_event_id || "NONE"} / ${status.cloud_response_event_id || "NONE"}`;
+      document.getElementById("cloudRawResultValue").textContent =
+        `${Number(status.cloud_result_ok ?? 0) === 1 ? "OK" : "WAIT/FAIL"} / ${status.cloud_result_source || "NONE"} / HTTP ${Number(status.cloud_result_http_status ?? 0)}`;
       document.getElementById("cloudCommandReasonValue").textContent =
         status.cloud_command_reason || "NONE";
       document.getElementById("cloudCommandAppliedTimeValue").textContent =
         formatTime(status.cloud_command_applied_ms);
       document.getElementById("cloudErrorValue").textContent = status.cloud_error || "NONE";
       document.getElementById("cloudTimeValue").textContent = formatTime(status.cloud_last_update_ms);
+      updateCompetitionOverview();
     }
 
     function setParameterStatus(status) {
@@ -3330,6 +3654,31 @@
       document.getElementById("testResultFinishValue").textContent = formatTime(result.finished_ms);
     }
 
+    function updateLatestCaptureFreshness() {
+      const badge = document.getElementById("latestCaptureFreshnessValue");
+      if (!badge) return;
+      const record = latestCaptureRecord;
+      if (!record || typeof record !== "object") {
+        badge.innerHTML = semanticPill("暂无抓拍", "normal");
+        return;
+      }
+
+      const timestampMs = Number(record.timestamp_ms ?? 0);
+      const ageMs = timestampMs > 0 ? Math.max(0, Date.now() - timestampMs) : 0;
+      let ageText = "时间未知";
+      if (timestampMs > 0 && ageMs < 60_000) ageText = `${Math.round(ageMs / 1000)} 秒前`;
+      else if (timestampMs > 0 && ageMs < 3_600_000) ageText = `${Math.round(ageMs / 60_000)} 分钟前`;
+      else if (timestampMs > 0) ageText = `${(ageMs / 3_600_000).toFixed(1)} 小时前`;
+      const runtimeOnline = Number(latestNodeStatus?.vision_runtime_online ?? 0) === 1;
+      const fresh = timestampMs > 0 && ageMs <= 15_000 && runtimeOnline;
+      const eventId = normalizeEventId(record.event_id || "NONE");
+      const bindingText = eventId && eventId !== "NONE" ? "已绑定事件" : "未绑定事件";
+      badge.innerHTML = semanticPill(
+        `${fresh ? "实时抓拍" : "历史抓拍"} · ${ageText} · ${bindingText}`,
+        fresh ? "ok" : "warn"
+      );
+    }
+
     function setLatest(record) {
       const image = document.getElementById("latestImage");
       const empty = document.getElementById("emptyState");
@@ -3346,6 +3695,7 @@
         document.getElementById("bboxValue").textContent = "--";
         document.getElementById("centerValue").textContent = "--";
         redrawEvidenceOverlays();
+        updateLatestCaptureFreshness();
         return;
       }
 
@@ -3363,6 +3713,7 @@
       document.getElementById("bboxValue").textContent = formatBBox(record);
       document.getElementById("centerValue").textContent = `${record.center_x}, ${record.center_y}`;
       redrawCaptureOverlay("latestImage", "latestOverlayCanvas", "latestOverlayCaption", latestCaptureRecord);
+      updateLatestCaptureFreshness();
     }
 
     function renderRecords(records) {
@@ -3835,9 +4186,20 @@
       document.getElementById("eventDetailHunterValue").textContent = "UNKNOWN";
       document.getElementById("eventDetailVisionValue").textContent = "UNKNOWN";
       document.getElementById("eventDetailVisionQualityValue").textContent = "NO_VISUAL";
+      document.getElementById("eventDetailLockSourceValue").innerHTML = semanticPill("UNKNOWN", "offline");
+      document.getElementById("eventDetailAutoLockValue").textContent = "none / 0.00";
+      document.getElementById("eventDetailFrameQualityValue").innerHTML = semanticPill("UNVERIFIED", "offline");
+      document.getElementById("eventDetailVisionHashValue").innerHTML = '<span class="pill offline" style="font-size:10px;padding:1px 6px;">未计算</span>';
       document.getElementById("eventDetailFusionValue").innerHTML = fusionLevelPill("NONE");
       document.getElementById("eventDetailMultirotorValue").innerHTML = `${semanticPill("UNKNOWN", "normal")} <span style="font-size:13px;color:var(--muted);margin-left:6px;">score 0.0</span>`;
       document.getElementById("eventDetailLd2451Value").innerHTML = `${triggerPill(0)} <span style="font-size:13px;color:var(--muted);margin-left:6px;">0.00m / 0.00mps</span>`;
+      document.getElementById("eventDetailCloudOnlineValue").innerHTML = semanticPill("OFFLINE", "offline");
+      document.getElementById("eventDetailCloudContractValue").innerHTML = semanticPill("V0 / WAIT", "offline");
+      document.getElementById("eventDetailCloudThreatValue").innerHTML = cloudThreatPill("NONE");
+      document.getElementById("eventDetailCloudCommandValue").textContent = "NONE";
+      document.getElementById("eventDetailCloudEffectValue").innerHTML = cloudCommandEffectPill("NONE");
+      document.getElementById("eventDetailCloudSourceValue").textContent = "NONE";
+      document.getElementById("eventDetailCloudAdviceValue").textContent = "NONE";
       document.getElementById("eventDetailStateValue").textContent = "NONE";
       document.getElementById("eventDetailReasonValue").textContent = "NONE";
       document.getElementById("eventDetailTriggerValue").textContent = "NONE";
@@ -3877,11 +4239,15 @@
       const eventObject = detail?.event_object_v1 && typeof detail.event_object_v1 === "object"
         ? detail.event_object_v1
         : {};
+      const visionEvidence = eventObject?.vision_evidence && typeof eventObject.vision_evidence === "object"
+        ? eventObject.vision_evidence
+        : {};
+      const overlayCapture = capture ? { ...capture, ...visionEvidence } : null;
       if (captureImageUrl) {
         image.src = captureImageUrl.startsWith("data:")
           ? captureImageUrl
           : `${captureImageUrl}?t=${capture.timestamp_ms || eventRecord.host_logged_ms || eventRecord.timestamp_ms || Date.now()}`;
-        image.onload = () => redrawCaptureOverlay("eventDetailImage", "eventDetailOverlayCanvas", "eventDetailOverlayCaption", capture);
+        image.onload = () => redrawCaptureOverlay("eventDetailImage", "eventDetailOverlayCanvas", "eventDetailOverlayCaption", overlayCapture);
         image.style.display = "block";
         empty.style.display = "none";
       } else {
@@ -3906,6 +4272,16 @@
       const hunterState = String(eventObject.hunter_state || eventRecord.hunter_state || "UNKNOWN");
       const visionState = String(eventObject.vision_state || eventRecord.vision_state || "UNKNOWN");
       const visionQuality = String(eventObject.vision_quality || eventRecord.vision_quality || "NO_VISUAL");
+      const lockSource = String(eventObject.vision_lock_source || visionEvidence.lock_source || "UNKNOWN");
+      const automaticLock = Number(eventObject.vision_automatic_lock ?? visionEvidence.automatic_lock ?? 0) === 1;
+      const autoLockScore = Number(eventObject.vision_auto_lock_score ?? visionEvidence.auto_lock_score ?? 0);
+      const autoLockClassName = String(eventObject.vision_auto_lock_class_name || visionEvidence.auto_lock_class_name || "none");
+      const frameContentReady = Number(eventObject.vision_frame_content_ready ?? visionEvidence.frame_content_ready ?? 0) === 1;
+      const frameQualityReason = String(eventObject.vision_frame_quality_reason || visionEvidence.frame_quality_reason || "UNVERIFIED");
+      const visionEvidenceQuality = String(eventObject.vision_evidence_quality || visionEvidence.evidence_quality || "NO_CAPTURE");
+      const frameMeanLuma = Number(visionEvidence.frame_mean_luma ?? 0);
+      const frameLumaStddev = Number(visionEvidence.frame_luma_stddev ?? 0);
+      const visionEvidenceHash = String(eventObject.vision_evidence_hash || visionEvidence.vision_evidence_hash || "--");
       const fusionLevel = String(eventObject.fusion_level || eventRecord.fusion_level || "NONE");
       const fusionStage = String(eventObject.fusion_stage || eventRecord.fusion_stage || "NONE");
       const fusionConfidence = Number(eventObject.fusion_confidence ?? eventRecord.fusion_confidence ?? 0);
@@ -3915,6 +4291,43 @@
       const farMotionTrigger = Number(eventObject.far_motion_trigger ?? eventRecord.far_motion_trigger ?? 0);
       const ld2451RangeM = Number(eventObject.ld2451_range_m ?? eventRecord.ld2451_range_m ?? 0);
       const ld2451SpeedMps = Number(eventObject.ld2451_speed_mps ?? eventRecord.ld2451_speed_mps ?? 0);
+      const cloudOnline = Number(eventObject.cloud_online ?? eventRecord.cloud_online ?? 0) === 1;
+      const cloudContractVersion = Number(eventObject.cloud_contract_version ?? eventRecord.cloud_contract_version ?? 0);
+      const cloudEchoRequired = Number(eventObject.cloud_event_echo_required ?? eventRecord.cloud_event_echo_required ?? 0) === 1;
+      const cloudTestNoApply = Number(eventObject.cloud_test_no_apply ?? eventRecord.cloud_test_no_apply ?? 0) === 1;
+      const cloudTestValidated = Number(eventObject.cloud_test_validated ?? eventRecord.cloud_test_validated ?? 0) === 1;
+      const cloudTestResultNoApply = Number(eventObject.cloud_test_result_no_apply ?? eventRecord.cloud_test_result_no_apply ?? 0) === 1;
+      const cloudTestResponseEventId = normalizeEventId(
+        eventObject.cloud_test_response_event_id || eventRecord.cloud_test_response_event_id || "NONE"
+      ) || "NONE";
+      const cloudTestRawReady = cloudTestResultNoApply && cloudTestResponseEventId.toUpperCase() === "A1-CLOUD-TEST";
+      const cloudResultThreatLevel = String(
+        eventObject.cloud_result_threat_level || eventRecord.cloud_result_threat_level || "NONE"
+      ).trim().toUpperCase();
+      const cloudResultCommandType = String(
+        eventObject.cloud_result_command_type || eventRecord.cloud_result_command_type || "NONE"
+      ).trim().toUpperCase();
+      const cloudTestPolicyReady =
+        ["HIGH", "CRITICAL"].includes(cloudResultThreatLevel) &&
+        cloudResultCommandType === "GENERATE_ALERT";
+      const cloudPreflightReady = cloudTestValidated && cloudTestRawReady && cloudTestPolicyReady;
+      const cloudPreflightLabel = !cloudTestValidated
+        ? "TEST WAIT"
+        : (!cloudTestRawReady ? "RAW WAIT" : (cloudTestPolicyReady ? "TEST PASS" : "POLICY WAIT"));
+      const cloudContractReady = cloudContractVersion >= 2 && cloudEchoRequired && cloudTestNoApply;
+      const cloudThreatLevel = String(eventObject.cloud_threat_level || eventRecord.cloud_threat_level || "NONE");
+      const cloudCommandType = String(eventObject.cloud_command_type || eventRecord.cloud_command_type || "NONE");
+      const cloudCommandEffect = String(eventObject.cloud_command_effect || eventRecord.cloud_command_effect || "NONE");
+      const cloudSourceEventId = normalizeEventId(eventObject.cloud_command_source_event_id || eventRecord.cloud_command_source_event_id || "NONE") || "NONE";
+      const cloudRequestEventId = normalizeEventId(eventObject.cloud_request_event_id || eventRecord.cloud_request_event_id || "NONE") || "NONE";
+      const cloudExpectedEventId = normalizeEventId(eventObject.cloud_expected_event_id || eventRecord.cloud_expected_event_id || "NONE") || "NONE";
+      const cloudResponseEventId = normalizeEventId(eventObject.cloud_response_event_id || eventRecord.cloud_response_event_id || "NONE") || "NONE";
+      const cloudAlertText = String(eventObject.cloud_alert_text || eventRecord.cloud_alert_text || "NONE");
+      const cloudAction = String(eventObject.cloud_action || eventRecord.cloud_action || "NONE");
+      const cloudAdvice = [cloudAlertText, cloudAction]
+        .map((item) => String(item || "").trim())
+        .filter((item) => item && item.toUpperCase() !== "NONE")
+        .join(" / ") || "NONE";
       const eventState = String(eventObject.event_state || eventRecord.event_state || eventRecord.event_status || "NONE");
       const reason = String(eventRecord.reason || "NONE");
       const triggerFlags = String(eventObject.trigger_flags || eventRecord.trigger_flags || "NONE");
@@ -3937,12 +4350,42 @@
       document.getElementById("eventDetailHunterValue").innerHTML = semanticPill(hunterState, "normal");
       document.getElementById("eventDetailVisionValue").innerHTML = visionStatePill(visionState);
       document.getElementById("eventDetailVisionQualityValue").textContent = visionQuality;
+      document.getElementById("eventDetailLockSourceValue").innerHTML = semanticPill(
+        lockSource,
+        automaticLock ? "ok" : (lockSource === "MANUAL_ROI" ? "warn" : "offline")
+      );
+      document.getElementById("eventDetailAutoLockValue").textContent = `${autoLockClassName} / ${autoLockScore.toFixed(2)}`;
+      document.getElementById("eventDetailFrameQualityValue").innerHTML =
+        `${semanticPill(visionEvidenceQuality, frameContentReady && frameQualityReason === "OK" ? "ok" : "warn")}` +
+        `<span style="font-size:13px;color:var(--muted);margin-left:6px;">${frameQualityReason} · mean=${frameMeanLuma.toFixed(1)} · std=${frameLumaStddev.toFixed(1)}</span>`;
+      (function() {
+        const el = document.getElementById("eventDetailVisionHashValue");
+        const valid = visionEvidenceHash && visionEvidenceHash !== "--" && visionEvidenceHash.length === 64;
+        el.innerHTML = valid
+          ? `<span class="pill ok" style="font-size:10px;padding:1px 6px;margin-right:4px;">SHA256</span><span title="${visionEvidenceHash}" style="font-family:monospace;">${visionEvidenceHash.slice(0, 16)}&hellip;</span>`
+          : '<span class="pill offline" style="font-size:10px;padding:1px 6px;">未计算</span>';
+      })();
       document.getElementById("eventDetailFusionValue").innerHTML =
         `${fusionLevelPill(fusionLevel)}<span style="font-size:13px;color:var(--muted);margin-left:6px;">${fusionStage} · conf=${fusionConfidence.toFixed(2)} · ${fusionReason}</span>`;
       document.getElementById("eventDetailMultirotorValue").innerHTML =
         `${semanticPill(isMultirotorLike ? "LIKE" : "UNKNOWN", isMultirotorLike ? "ok" : "warn")}<span style="font-size:13px;color:var(--muted);margin-left:6px;">score ${multirotorScore.toFixed(1)}</span>`;
       document.getElementById("eventDetailLd2451Value").innerHTML =
         `${triggerPill(farMotionTrigger)}<span style="font-size:13px;color:var(--muted);margin-left:6px;">${formatFixed(ld2451RangeM, 2)}m / ${formatFixed(ld2451SpeedMps, 2)}mps</span>`;
+      document.getElementById("eventDetailCloudOnlineValue").innerHTML =
+        semanticPill(cloudOnline ? "ONLINE" : "OFFLINE", cloudOnline ? "ok" : "offline");
+      document.getElementById("eventDetailCloudContractValue").innerHTML = semanticPill(
+        cloudContractReady && cloudPreflightReady
+          ? `V${cloudContractVersion} / TEST PASS`
+          : `V${cloudContractVersion} / ${cloudPreflightLabel}`,
+        cloudContractReady && cloudPreflightReady ? "ok" : "danger"
+      );
+      document.getElementById("eventDetailCloudThreatValue").innerHTML = cloudThreatPill(cloudThreatLevel);
+      document.getElementById("eventDetailCloudCommandValue").textContent = cloudCommandType;
+      document.getElementById("eventDetailCloudEffectValue").innerHTML = cloudCommandEffectPill(cloudCommandEffect);
+      document.getElementById("eventDetailCloudSourceValue").textContent = cloudSourceEventId;
+      document.getElementById("eventDetailCloudRawEventsValue").textContent =
+        `${cloudRequestEventId} / ${cloudExpectedEventId} / ${cloudResponseEventId}`;
+      document.getElementById("eventDetailCloudAdviceValue").textContent = cloudAdvice;
       document.getElementById("eventDetailStateValue").innerHTML = eventStatusPill(eventState);
       document.getElementById("eventDetailReasonValue").innerHTML = handoverPill(reason);
       document.getElementById("eventDetailTriggerValue").innerHTML = semanticPill(triggerFlags, "normal");
@@ -4044,23 +4487,23 @@
       const docs = Array.isArray(latestDeliveryAssets?.assets?.docs) ? latestDeliveryAssets.assets.docs : [];
 
       document.getElementById("deliveryReadyChip").innerHTML = semanticPill(
-        summary.deliverable_ready ? "交付 READY" : "交付 WAIT",
+        summary.deliverable_ready ? "工程交付 READY" : "工程交付 WAIT",
         summary.deliverable_ready ? "ok" : "warn"
       );
       document.getElementById("deliverySuiteChip").innerHTML = semanticPill(
-        summary.suite_ok ? "套件 PASS" : "套件 WAIT",
+        summary.suite_ok ? "历史套件 PASS" : "历史套件 WAIT",
         summary.suite_ok ? "ok" : "warn"
       );
       document.getElementById("deliveryContractChip").innerHTML = semanticPill(
-        summary.contract_ok ? "契约 PASS" : "契约 WAIT",
+        summary.contract_ok ? "字段契约 PASS" : "字段契约 WAIT",
         summary.contract_ok ? "ok" : "warn"
       );
       document.getElementById("deliveryEvidenceChip").innerHTML = semanticPill(
-        summary.evidence_ready ? "证据 READY" : "证据 WAIT",
+        summary.evidence_ready ? "证据文件 READY" : "证据文件 WAIT",
         summary.evidence_ready ? "ok" : "warn"
       );
       document.getElementById("deliveryBundleChip").innerHTML = semanticPill(
-        summary.bundle_result || "NONE",
+        `构建包 ${summary.bundle_result || "NONE"}`,
         String(summary.bundle_result || "").toUpperCase() === "PASS" ? "ok" : "warn"
       );
       document.getElementById("deliveryExportChip").textContent =
@@ -4099,21 +4542,31 @@
       if (!latestDeliveryAssets?.available) {
         overview.className = "result-overview";
         overview.textContent = "总览：还没有可用的交付资产。";
+        updateCompetitionOverview();
         return;
       }
 
       const bundleWarnings = Number(summary.bundle_warning_count || 0);
       const bundleFailures = Number(summary.bundle_failure_count || 0);
       if (bundleFailures > 0 || !summary.deliverable_ready) {
+        const blockers = [];
+        if (!summary.suite_ok) blockers.push("历史套件未通过");
+        if (!summary.contract_ok) blockers.push("字段契约未通过");
+        if (!closure.available || String(closure.result || "").toUpperCase() !== "PASS") {
+          blockers.push("严格证据闭环未通过");
+        }
+        if (bundleFailures > 0) blockers.push(`构建包失败 ${bundleFailures} 项`);
         overview.className = "result-overview warn";
         overview.textContent =
-          `总览：当前仍有 ${bundleFailures} 个失败项、${bundleWarnings} 个告警项，适合做内部演示，不建议直接当最终冻结版。`;
+          `历史资产不可替代最终答辩证据：${blockers.join("；") || "工程交付尚未就绪"}。构建包告警 ${bundleWarnings} 项。`;
+        updateCompetitionOverview();
         return;
       }
 
       overview.className = "result-overview ok";
       overview.textContent =
         `总览：这版已具备答辩/汇报资产。套件=${summary.suite_ok ? "PASS" : "WAIT"}，契约=${summary.contract_ok ? "PASS" : "WAIT"}，证据=${summary.evidence_ready ? "READY" : "WAIT"}。`;
+      updateCompetitionOverview();
     }
 
     function renderNodeFleet(payload) {
@@ -4767,6 +5220,11 @@
     }
 
     async function loadData() {
+      const requestedMode = dataMode;
+      const requestedModeRevision = dataModeRevision;
+      const modeRequestIsCurrent = () => (
+        requestedMode === dataMode && requestedModeRevision === dataModeRevision
+      );
       try {
         const [status, nodeStatus, nodeFleet, coSensing, captures, nodeEvents, testSession, testResult, testResults, deliveryAssets, sessionTimelineSessions, dataSource] = await Promise.all([
           loadStatus(),
@@ -4782,6 +5240,7 @@
           loadSessionTimelineSessions(),
           loadDataSource(),
         ]);
+        if (!modeRequestIsCurrent()) return;
         if (!selectedTimelineSession && sessionTimelineSessions.latest_file) {
           selectedTimelineSession = sessionTimelineSessions.latest_file;
         }
@@ -4789,6 +5248,7 @@
           loadSessionTimeline(selectedTimelineSession),
           loadSessionCaptures(selectedTimelineSession),
         ]);
+        if (!modeRequestIsCurrent()) return;
         setRuntimeStatus(status);
         setNodeStatus(nodeStatus);
         setCloudThreatStatus(nodeStatus);
@@ -4823,6 +5283,7 @@
           refreshDataModeUI();
         }
       } catch (error) {
+        if (!modeRequestIsCurrent()) return;
         document.getElementById("recordsBody").innerHTML =
           `<tr><td colspan="7">读取数据失败：${error}</td></tr>`;
         document.getElementById("nodeEventsBody").innerHTML =

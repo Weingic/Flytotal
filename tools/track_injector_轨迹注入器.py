@@ -2377,14 +2377,16 @@ def main() -> int:
     session_log_dir = resolve_path(args.session_log_dir)
     status_file = resolve_path(Path("captures/latest_node_status.json"))
     contract_report_file = resolve_path(Path("captures/latest_uplink_contract_report.json"))
-    write_session_json(session_file, build_session_payload())
-    write_event_history_json(events_file, [])
 
     try:
         ser = serial.Serial(args.port, args.baud, timeout=0.2)
     except serial.SerialException as exc:
         print(f"Failed to open {args.port}: {exc}", file=sys.stderr)
         return 1
+
+    # Preserve the last valid evidence when the requested serial port cannot be opened.
+    write_session_json(session_file, build_session_payload())
+    write_event_history_json(events_file, [])
 
     stop_event = threading.Event()
     observer = SerialObserver()

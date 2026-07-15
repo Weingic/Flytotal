@@ -4,7 +4,7 @@
       "name": "coco-yolov8n",
       "path": "models/yolov8n.onnx",
       "source": "Ultralytics YOLOv8n COCO pretrained weights",
-      "purpose": "通用目标检测 + CSRT 跟踪辅助，不声明无人机专用识别",
+      "purpose": "Generic object detection plus CSRT tracking assistance. This model has no drone class.",
       "export_command": "python tools/export_yolo_models.py --preset coco",
       "input_size": 640,
       "classes": {
@@ -16,9 +16,9 @@
     {
       "name": "drone-yolov8n",
       "path": "models/yolov8n_drone.onnx",
-      "source": "本地训练或第三方授权无人机数据集训练权重",
-      "purpose": "无人机专用视觉确认模型",
-      "export_command": "python tools/export_yolo_models.py --weights models/best_drone.pt --output models/yolov8n_drone.onnx --model-label drone",
+      "source": "Locally trained YOLOv8 detector from licensed drone datasets",
+      "purpose": "Drone-specific visual confirmation model for PC-side vision_bridge inference.",
+      "export_command": "python tools/export_yolo_models.py --weights runs/drone/v1/weights/best.pt --output models/yolov8n_drone.onnx --model-label drone",
       "input_size": 640,
       "classes": {
         "0": "drone"
@@ -27,8 +27,8 @@
     }
   ],
   "notes": [
-    "ONNX/PT/PKL 大文件不进 Git。",
-    "真实模型 hash 在本地导出后填写。",
-    "COCO 通用模型没有 drone 类，只能作为通用目标检测和跟踪辅助。"
+    "ONNX, PT, PKL, image datasets, and training runs are local assets and must not be committed.",
+    "Copy this file to models/MODEL_MANIFEST.json after export and fill the real hashes locally.",
+    "COCO yolov8n is not a drone detector. Use the drone-yolov8n entry only after training with licensed drone data."
   ]
 }

@@ -47,6 +47,7 @@ struct CloudAssessmentResult {
     int http_status;
     int esp_error;
     unsigned long latency_ms;
+    char response_event_id[CloudClientLimits::EventIdSize];
     char threat_level[CloudClientLimits::ThreatLevelSize];
     char assessment[CloudClientLimits::AssessmentSize];
     char action[CloudClientLimits::ActionSize];

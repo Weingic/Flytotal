@@ -193,6 +193,7 @@ struct SystemData {
     char cloud_error[64];
     unsigned long cloud_last_update_ms;
     bool cloud_online;
+    bool cloud_test_validated;
     float runtime_event_threshold;
     bool cloud_command_applied;
     char cloud_command_effect[64];
@@ -284,6 +285,7 @@ struct UnifiedOutputSnapshot {
     char cloud_error[64];
     unsigned long cloud_last_update_ms;
     bool cloud_online;
+    bool cloud_test_validated;
     float runtime_event_threshold;
     bool cloud_command_applied;
     char cloud_command_effect[64];

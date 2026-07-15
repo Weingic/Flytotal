@@ -7,8 +7,12 @@ from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SUPPORTED_TRACKERS = ("csrt", "kcf")
+SUPPORTED_TRACKERS = ("csrt", "kcf", "mil")
 SUPPORTED_CAPTURE_BACKENDS = ("auto", "msmf", "dshow")
+DEFAULT_FRAME_MIN_MEAN_LUMA = 5.0
+DEFAULT_FRAME_MAX_MEAN_LUMA = 250.0
+DEFAULT_FRAME_MIN_LUMA_STDDEV = 2.0
+DEFAULT_DRONE_MODEL = PROJECT_ROOT / "models" / "yolov8n_drone.onnx"
 
 
 def resolve_path(path: Path) -> Path:
@@ -30,11 +34,46 @@ def tracker_available(cv: Any, tracker_name: str) -> bool:
         return hasattr(cv, "TrackerCSRT_create") or (hasattr(cv, "legacy") and hasattr(cv.legacy, "TrackerCSRT_create"))
     if tracker_name == "kcf":
         return hasattr(cv, "TrackerKCF_create") or (hasattr(cv, "legacy") and hasattr(cv.legacy, "TrackerKCF_create"))
+    if tracker_name == "mil":
+        return hasattr(cv, "TrackerMIL_create") or (hasattr(cv, "legacy") and hasattr(cv.legacy, "TrackerMIL_create"))
     return False
 
 
 def list_available_trackers(cv: Any) -> list[str]:
     return [name for name in SUPPORTED_TRACKERS if tracker_available(cv, name)]
+
+
+def evaluate_frame_quality(
+    cv: Any,
+    frame: Any,
+    min_mean_luma: float = DEFAULT_FRAME_MIN_MEAN_LUMA,
+    max_mean_luma: float = DEFAULT_FRAME_MAX_MEAN_LUMA,
+    min_luma_stddev: float = DEFAULT_FRAME_MIN_LUMA_STDDEV,
+) -> dict[str, Any]:
+    if frame is None:
+        return {"ready": False, "mean_luma": 0.0, "luma_stddev": 0.0, "reason": "FRAME_MISSING"}
+    try:
+        gray = frame if len(frame.shape) == 2 else cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+        mean_value, stddev_value = cv.meanStdDev(gray)
+        mean_luma = float(mean_value[0][0])
+        luma_stddev = float(stddev_value[0][0])
+    except Exception:
+        return {"ready": False, "mean_luma": 0.0, "luma_stddev": 0.0, "reason": "FRAME_INVALID"}
+
+    if mean_luma < max(0.0, float(min_mean_luma)):
+        reason = "FRAME_TOO_DARK"
+    elif mean_luma > min(255.0, float(max_mean_luma)):
+        reason = "FRAME_TOO_BRIGHT"
+    elif luma_stddev < max(0.0, float(min_luma_stddev)):
+        reason = "FRAME_TOO_FLAT"
+    else:
+        reason = "OK"
+    return {
+        "ready": reason == "OK",
+        "mean_luma": round(mean_luma, 3),
+        "luma_stddev": round(luma_stddev, 3),
+        "reason": reason,
+    }
 
 
 def resolve_capture_backend(cv: Any, backend: str) -> tuple[int, str]:
@@ -72,6 +111,9 @@ def probe_camera(
     height: int,
     warmup_frames: int,
     backend: str,
+    min_mean_luma: float,
+    max_mean_luma: float,
+    min_luma_stddev: float,
 ) -> dict[str, Any]:
     api_preference, active_backend = resolve_capture_backend(cv, backend)
     try:
@@ -90,6 +132,11 @@ def probe_camera(
         "fps": 0.0,
         "read_success_count": 0,
         "read_attempt_count": 0,
+        "content_ready_count": 0,
+        "frame_content_ready": False,
+        "frame_mean_luma": 0.0,
+        "frame_luma_stddev": 0.0,
+        "frame_quality_reason": "FRAME_MISSING",
     }
     if not cap.isOpened():
         cap.release()
@@ -103,7 +150,14 @@ def probe_camera(
 
     attempts = max(1, warmup_frames + 1)
     success_count = 0
+    content_ready_count = 0
     last_shape = (0, 0)
+    selected_quality: dict[str, Any] = {
+        "ready": False,
+        "mean_luma": 0.0,
+        "luma_stddev": 0.0,
+        "reason": "FRAME_MISSING",
+    }
     for _ in range(attempts):
         ok, frame = cap.read()
         if not ok or frame is None:
@@ -113,16 +167,33 @@ def probe_camera(
             last_shape = (int(frame.shape[1]), int(frame.shape[0]))
         except Exception:
             last_shape = (0, 0)
+        quality = evaluate_frame_quality(
+            cv,
+            frame,
+            min_mean_luma=min_mean_luma,
+            max_mean_luma=max_mean_luma,
+            min_luma_stddev=min_luma_stddev,
+        )
+        if bool(quality.get("ready")):
+            content_ready_count += 1
+            selected_quality = quality
+        elif not bool(selected_quality.get("ready")):
+            selected_quality = quality
 
     fps_value = float(cap.get(cv.CAP_PROP_FPS) or 0.0)
     cap.release()
 
     record["read_attempt_count"] = attempts
     record["read_success_count"] = success_count
-    record["frame_ready"] = success_count > 0
+    record["frame_ready"] = content_ready_count > 0
     record["frame_width"] = last_shape[0]
     record["frame_height"] = last_shape[1]
     record["fps"] = round(fps_value, 3)
+    record["content_ready_count"] = content_ready_count
+    record["frame_content_ready"] = bool(selected_quality.get("ready"))
+    record["frame_mean_luma"] = float(selected_quality.get("mean_luma", 0.0) or 0.0)
+    record["frame_luma_stddev"] = float(selected_quality.get("luma_stddev", 0.0) or 0.0)
+    record["frame_quality_reason"] = str(selected_quality.get("reason", "FRAME_MISSING"))
     return record
 
 
@@ -134,6 +205,8 @@ def build_report(
     requested_index_range: tuple[int, int],
     recommended_tracker_fallback: str,
     recommended_source_warmup_frames: int,
+    drone_model_path: Path,
+    drone_model_ready: bool,
     failures: list[str],
     warnings: list[str],
 ) -> dict[str, Any]:
@@ -142,15 +215,28 @@ def build_report(
     opened_records = [item for item in camera_records if bool(item.get("opened"))]
     recommended_source = int(ready_records[0]["source_index"]) if ready_records else -1
     recommended_backend = str(ready_records[0].get("backend_active", "auto") or "auto") if ready_records else str(probe_backends[0] if probe_backends else "auto")
-    recommended_tracker = "csrt" if "csrt" in trackers_available else ("kcf" if "kcf" in trackers_available else "")
+    recommended_tracker = next((name for name in SUPPORTED_TRACKERS if name in trackers_available), "")
     recommended_command = ""
     if recommended_source >= 0 and recommended_tracker:
+        try:
+            model_command_path = drone_model_path.relative_to(PROJECT_ROOT).as_posix()
+        except ValueError:
+            model_command_path = drone_model_path.as_posix()
+        yolo_args = ""
+        if drone_model_ready:
+            yolo_args = (
+                f" --yolo-enabled --yolo-model {model_command_path}"
+                " --yolo-class-ids 0 --yolo-class-names 0:drone"
+                " --yolo-model-label drone-v4b-hardneg-deployed"
+                " --yolo-score-threshold 0.45 --yolo-intra-op-threads 8 --yolo-auto-lock"
+            )
         recommended_command = (
             "python tools/vision_bridge_视觉桥接.py "
             f"--backend {recommended_backend} "
             f"--source {recommended_source} --tracker {recommended_tracker} "
             f"--tracker-fallback {recommended_tracker_fallback} "
             f"--source-warmup-frames {max(1, int(recommended_source_warmup_frames))}"
+            f"{yolo_args}"
         )
     recommended_web_server_command = "python tools/vision_web_server_视觉网页服务.py"
 
@@ -169,6 +255,11 @@ def build_report(
         "trackers": {
             "supported": list(SUPPORTED_TRACKERS),
             "available": trackers_available,
+        },
+        "detector": {
+            "drone_model_path": drone_model_path.as_posix(),
+            "drone_model_ready": bool(drone_model_ready),
+            "auto_lock_recommended": bool(drone_model_ready),
         },
         "capture_backends": {
             "supported": list(SUPPORTED_CAPTURE_BACKENDS),
@@ -200,12 +291,16 @@ def main() -> int:
     parser.add_argument("--width", type=int, default=1280, help="Requested camera width during probe")
     parser.add_argument("--height", type=int, default=720, help="Requested camera height during probe")
     parser.add_argument("--warmup-frames", type=int, default=6, help="Frames to read before readiness decision")
+    parser.add_argument("--frame-min-mean-luma", type=float, default=DEFAULT_FRAME_MIN_MEAN_LUMA, help="Reject camera frames darker than this mean luma")
+    parser.add_argument("--frame-max-mean-luma", type=float, default=DEFAULT_FRAME_MAX_MEAN_LUMA, help="Reject camera frames brighter than this mean luma")
+    parser.add_argument("--frame-min-luma-stddev", type=float, default=DEFAULT_FRAME_MIN_LUMA_STDDEV, help="Reject camera frames with less visual variation than this luma standard deviation")
     parser.add_argument("--backend", choices=list(SUPPORTED_CAPTURE_BACKENDS), default="auto", help="Preferred OpenCV capture backend")
     parser.add_argument("--backend-fallback", choices=["auto", "off"], default="auto", help="When probe fails on preferred backend, auto-try other backends or not")
     parser.add_argument("--require-csrt", action="store_true", help="Fail when CSRT tracker is unavailable")
     parser.add_argument("--recommended-tracker-fallback", choices=["auto", "off"], default="auto", help="Tracker fallback mode used in recommended vision_bridge command")
     parser.add_argument("--recommended-source-warmup-frames", type=int, default=12, help="Source warmup frames used in recommended vision_bridge command")
     parser.add_argument("--allow-no-camera", action="store_true", help="Do not fail when no camera source is ready")
+    parser.add_argument("--drone-model", type=Path, default=DEFAULT_DRONE_MODEL, help="Drone-specific ONNX model used in the recommended automatic-lock command")
     parser.add_argument(
         "--report-file",
         type=Path,
@@ -215,6 +310,8 @@ def main() -> int:
     args = parser.parse_args()
 
     report_file = resolve_path(args.report_file)
+    drone_model_path = resolve_path(args.drone_model)
+    drone_model_ready = drone_model_path.is_file() and drone_model_path.stat().st_size > 0
     failures: list[str] = []
     warnings: list[str] = []
     camera_records: list[dict[str, Any]] = []
@@ -234,6 +331,8 @@ def main() -> int:
             requested_index_range=(args.start_index, args.end_index),
             recommended_tracker_fallback=args.recommended_tracker_fallback,
             recommended_source_warmup_frames=args.recommended_source_warmup_frames,
+            drone_model_path=drone_model_path,
+            drone_model_ready=drone_model_ready,
             failures=failures,
             warnings=warnings,
         )
@@ -265,6 +364,9 @@ def main() -> int:
                 height=max(0, args.height),
                 warmup_frames=max(0, args.warmup_frames),
                 backend=backend_name,
+                min_mean_luma=args.frame_min_mean_luma,
+                max_mean_luma=args.frame_max_mean_luma,
+                min_luma_stddev=args.frame_min_luma_stddev,
             )
             attempt_records.append(record)
             if bool(record.get("frame_ready")):
@@ -288,7 +390,9 @@ def main() -> int:
     elif args.require_csrt and "csrt" not in trackers_available:
         failures.append("tracker_csrt_required_but_unavailable")
     elif "csrt" not in trackers_available:
-        warnings.append("tracker_csrt_unavailable_using_kcf_fallback")
+        warnings.append("tracker_csrt_unavailable_using_tracker_fallback")
+    if not drone_model_ready:
+        warnings.append("drone_yolo_model_unavailable_manual_lock_only")
 
     report = build_report(
         report_file=report_file,
@@ -298,6 +402,8 @@ def main() -> int:
         requested_index_range=(start_index, end_index),
         recommended_tracker_fallback=args.recommended_tracker_fallback,
         recommended_source_warmup_frames=args.recommended_source_warmup_frames,
+        drone_model_path=drone_model_path,
+        drone_model_ready=drone_model_ready,
         failures=failures,
         warnings=warnings,
     )
@@ -318,6 +424,8 @@ def main() -> int:
     print(f"recommended_tracker={recommended.get('tracker', 'NONE') or 'NONE'}")
     print(f"recommended_tracker_fallback={recommended.get('tracker_fallback', 'auto')}")
     print(f"recommended_source_warmup_frames={recommended.get('source_warmup_frames', 12)}")
+    print(f"drone_model_ready={int(drone_model_ready)}")
+    print(f"drone_model={drone_model_path.as_posix()}")
     print(f"recommended_command={recommended.get('vision_bridge_command', '')}")
     print(f"recommended_web_server_command={recommended.get('vision_web_server_command', '')}")
     print(f"report_file={report_file.as_posix()}")

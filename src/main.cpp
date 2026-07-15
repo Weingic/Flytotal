@@ -1,13 +1,16 @@
 #include <Arduino.h>
 #include <ESP32Servo.h>
 #include <WiFi.h>
+#include <esp_system.h>
 #include <esp_task_wdt.h>
+#include <esp32s3/rom/rtc.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "AppConfig.h"
 #include "CloudClient.h"
@@ -53,6 +56,122 @@ Servo servoPan;
 Servo servoTilt;
 
 namespace {
+
+RTC_DATA_ATTR uint32_t retainedBootCount = 0;
+uint32_t currentBootCount = 0;
+esp_reset_reason_t currentResetReason = ESP_RST_UNKNOWN;
+RESET_REASON currentRawResetReason = NO_MEAN;
+char currentBootId[40] = {0};
+
+const char *resetReasonName(esp_reset_reason_t reason) {
+    switch (reason) {
+        case ESP_RST_POWERON:
+            return "POWERON";
+        case ESP_RST_EXT:
+            return "EXTERNAL";
+        case ESP_RST_SW:
+            return "SOFTWARE";
+        case ESP_RST_PANIC:
+            return "PANIC";
+        case ESP_RST_INT_WDT:
+            return "INT_WDT";
+        case ESP_RST_TASK_WDT:
+            return "TASK_WDT";
+        case ESP_RST_WDT:
+            return "WDT";
+        case ESP_RST_DEEPSLEEP:
+            return "DEEPSLEEP";
+        case ESP_RST_BROWNOUT:
+            return "BROWNOUT";
+        case ESP_RST_SDIO:
+            return "SDIO";
+        case ESP_RST_UNKNOWN:
+        default:
+            return "UNKNOWN";
+    }
+}
+
+const char *rawResetReasonName(RESET_REASON reason) {
+    switch (reason) {
+        case POWERON_RESET:
+            return "POWERON";
+        case RTC_SW_SYS_RESET:
+        case RTC_SW_CPU_RESET:
+            return "SOFTWARE";
+        case DEEPSLEEP_RESET:
+            return "DEEPSLEEP";
+        case TG0WDT_SYS_RESET:
+            return "TASK_WDT";
+        case TG1WDT_SYS_RESET:
+        case RTCWDT_SYS_RESET:
+        case TG0WDT_CPU_RESET:
+        case RTCWDT_CPU_RESET:
+        case RTCWDT_RTC_RESET:
+        case TG1WDT_CPU_RESET:
+        case SUPER_WDT_RESET:
+            return "WDT";
+        case RTCWDT_BROWN_OUT_RESET:
+            return "BROWNOUT";
+        case USB_UART_CHIP_RESET:
+            return "USB_UART";
+        case USB_JTAG_CHIP_RESET:
+            return "USB_JTAG";
+        case POWER_GLITCH_RESET:
+            return "POWER_GLITCH";
+        case GLITCH_RTC_RESET:
+            return "CLOCK_GLITCH";
+        case EFUSE_RESET:
+            return "EFUSE";
+        case INTRUSION_RESET:
+            return "INTRUSION";
+        case NO_MEAN:
+        default:
+            return "UNKNOWN";
+    }
+}
+
+const char *effectiveResetReasonName() {
+    const char *espReason = resetReasonName(currentResetReason);
+    return strcmp(espReason, "UNKNOWN") != 0 ? espReason : rawResetReasonName(currentRawResetReason);
+}
+
+void initializeBootTelemetry() {
+    currentResetReason = esp_reset_reason();
+    currentRawResetReason = rtc_get_reset_reason(0);
+    retainedBootCount = retainedBootCount == UINT32_MAX ? 1 : retainedBootCount + 1;
+    currentBootCount = retainedBootCount;
+    const uint32_t bootNonce = esp_random();
+    snprintf(
+        currentBootId,
+        sizeof(currentBootId),
+        "%s-%08lX-%08lX",
+        NodeConfig::NodeId,
+        static_cast<unsigned long>(currentBootCount),
+        static_cast<unsigned long>(bootNonce)
+    );
+}
+
+void printBootTelemetryFields() {
+    Serial.print(",boot_id=");
+    Serial.print(currentBootId[0] != '\0' ? currentBootId : "UNKNOWN");
+    Serial.print(",boot_count=");
+    Serial.print(currentBootCount);
+    Serial.print(",reset_reason=");
+    Serial.print(effectiveResetReasonName());
+    Serial.print(",reset_reason_esp=");
+    Serial.print(resetReasonName(currentResetReason));
+    Serial.print(",reset_reason_raw=");
+    Serial.print(static_cast<int>(currentRawResetReason));
+    Serial.print(",uptime_ms=");
+    Serial.print(millis());
+}
+
+void emitBootSession() {
+    Serial.print("BOOT,SESSION,node=");
+    Serial.print(NodeConfig::NodeId);
+    printBootTelemetryFields();
+    Serial.println();
+}
 
 void initializeWatchdog() {
     if (!WatchdogConfig::Enabled) {
@@ -231,6 +350,7 @@ struct AiCloudControl {
     bool enabled;
     bool wifi_started;
     bool request_in_flight;
+    bool test_request_pending;
     unsigned long last_enqueue_ms;
     unsigned long last_wifi_retry_ms;
     char last_event_id[32];
@@ -376,7 +496,7 @@ float runtimeKp = GimbalConfig::PredictorKp;
 float runtimeKd = GimbalConfig::PredictorKd;
 SimTrackInput simTrack = {false, 0.0f, 0.0f, 0};
 RidIdentityPacket ridIdentity = {false, {0}, {0}, {0}, 0, {0}, {0}, 0, 0};
-ManualServoControl manualServo = {false, true, GimbalConfig::CenterPanDeg, GimbalConfig::CenterTiltDeg};
+ManualServoControl manualServo = {false, false, GimbalConfig::CenterPanDeg, GimbalConfig::CenterTiltDeg};
 VisionOverrideControl visionOverride = {false, VISION_IDLE};
 DebugOutputControl debugOutput = {
     AppSerialConfig::LocalDebugEnabledByDefault,
@@ -389,7 +509,7 @@ DebugOutputControl debugOutput = {
     false
 };
 UplinkOutputControl uplinkOutput = {AppSerialConfig::UplinkOutputEnabledByDefault};
-AiCloudControl aiCloud = {CloudConfig::AiEnabledByDefault, false, false, 0, 0, {0}};
+AiCloudControl aiCloud = {CloudConfig::AiEnabledByDefault, false, false, false, 0, 0, {0}};
 uint32_t aiCloudDroppedCount = 0;
 unsigned long lastCloudErrLogMs = 0;
 char lastCloudErrType[32] = {0};
@@ -450,6 +570,9 @@ constexpr size_t NodeRuntimeCacheSlots = 4;
 NodeRuntimeCache nodeRuntimeCaches[NodeRuntimeCacheSlots] = {};
 SummaryStats summaryStats = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0f, 0, 0.0f, 0.0f, {0}};
 bool servosAttached = false;
+bool servoWriteCacheValid = false;
+float lastWrittenPanDeg = GimbalConfig::CenterPanDeg;
+float lastWrittenTiltDeg = GimbalConfig::CenterTiltDeg;
 constexpr unsigned long SimTrackHoldMs = 1500;
 constexpr unsigned long GimbalDebugIntervalMs = 250;
 constexpr unsigned long DataDebugIntervalMs = 250;
@@ -1710,14 +1833,45 @@ void attachServosIfNeeded() {
     servosAttached = true;
 }
 
+void resetServoWriteCache() {
+    servoWriteCacheValid = false;
+    lastWrittenPanDeg = GimbalConfig::CenterPanDeg;
+    lastWrittenTiltDeg = GimbalConfig::CenterTiltDeg;
+}
+
 void detachServosIfNeeded() {
     if (!servosAttached) {
+        resetServoWriteCache();
         return;
     }
 
     servoPan.detach();
     servoTilt.detach();
     servosAttached = false;
+    resetServoWriteCache();
+}
+
+void writeServosWithDeadband(float pan_deg, float tilt_deg) {
+    const float targetPan = clampPanAngle(pan_deg);
+    const float targetTilt = clampTiltAngle(tilt_deg);
+
+    if (!servoWriteCacheValid) {
+        servoPan.write(static_cast<int>(targetPan));
+        servoTilt.write(static_cast<int>(targetTilt));
+        lastWrittenPanDeg = targetPan;
+        lastWrittenTiltDeg = targetTilt;
+        servoWriteCacheValid = true;
+        return;
+    }
+
+    if (fabsf(targetPan - lastWrittenPanDeg) >= ServoConfig::WriteDeadbandDeg) {
+        servoPan.write(static_cast<int>(targetPan));
+        lastWrittenPanDeg = targetPan;
+    }
+    if (fabsf(targetTilt - lastWrittenTiltDeg) >= ServoConfig::WriteDeadbandDeg) {
+        servoTilt.write(static_cast<int>(targetTilt));
+        lastWrittenTiltDeg = targetTilt;
+    }
 }
 
 void setServoEnabled(bool enabled) {
@@ -2212,14 +2366,39 @@ void setCloudResult(const CloudAssessmentResult &result, unsigned long now) {
     portEXIT_CRITICAL(&dataMutex);
 }
 
+void setCloudTestValidated(bool validated) {
+    portENTER_CRITICAL(&dataMutex);
+    if (globalData.cloud_test_validated != validated) {
+        globalData.cloud_test_validated = validated;
+        syncActiveNodeRuntimeCacheLocked();
+    }
+    portEXIT_CRITICAL(&dataMutex);
+}
+
+bool cloudResponseMatchesActiveEvent(const char *response_event_id) {
+    if (response_event_id == nullptr || response_event_id[0] == '\0' || strcmp(response_event_id, "NONE") == 0) {
+        return false;
+    }
+
+    bool matches = false;
+    portENTER_CRITICAL(&dataMutex);
+    matches =
+        runtimeEventStatus.active &&
+        runtimeEventStatus.event_id[0] != '\0' &&
+        strcmp(runtimeEventStatus.event_id, response_event_id) == 0;
+    portEXIT_CRITICAL(&dataMutex);
+    return matches;
+}
+
 void setCloudCommandEffectLocked(bool applied, const char *effect) {
     globalData.cloud_command_applied = applied;
     copyEventId(globalData.cloud_command_effect, sizeof(globalData.cloud_command_effect), normalizeOptionalField(effect));
 }
 
 void setCloudCommandAuditLocked(const char *source_event_id, const char *reason, unsigned long now) {
+    const bool useActiveEventFallback = source_event_id == nullptr || source_event_id[0] == '\0';
     const char *resolvedEventId = normalizeOptionalField(source_event_id);
-    if (strcmp(resolvedEventId, "NONE") == 0 && runtimeEventStatus.active && runtimeEventStatus.event_id[0] != '\0') {
+    if (useActiveEventFallback && runtimeEventStatus.active && runtimeEventStatus.event_id[0] != '\0') {
         resolvedEventId = runtimeEventStatus.event_id;
     }
     copyEventId(globalData.cloud_command_source_event_id, sizeof(globalData.cloud_command_source_event_id), resolvedEventId);
@@ -2312,7 +2491,7 @@ void applyCloudCommand(const CloudAssessmentResult &result, unsigned long now, c
         if (!targetEnabled && strcmp(globalData.cloud_threat_level, "LOW") != 0) {
             rejected = true;
             copyEventId(effect, sizeof(effect), "DOWNGRADE_REJECTED_THREAT_ACTIVE");
-            setCloudCommandEffectLocked(true, effect);
+            setCloudCommandEffectLocked(false, "DOWNGRADE_REJECTED_THREAT_ACTIVE");
             setCloudCommandAuditLocked(source_event_id, result.command_reason, now);
         } else {
             globalData.fusion_enabled = targetEnabled;
@@ -2346,10 +2525,16 @@ void applyCloudCommand(const CloudAssessmentResult &result, unsigned long now, c
 
     if (commandType == "TRIGGER_PARACHUTE") {
         portENTER_CRITICAL(&dataMutex);
-        setCloudCommandEffectLocked(true, "PARACHUTE_INTENT_LOGGED");
+        setCloudCommandEffectLocked(false, "PARACHUTE_REJECTED_NOT_INTEGRATED");
         setCloudCommandAuditLocked(source_event_id, result.command_reason, now);
         portEXIT_CRITICAL(&dataMutex);
-        printCloudCommandResult(commandTypeBuffer, "PARACHUTE_INTENT_LOGGED", nullptr, nullptr, "status=NOT_INTEGRATED");
+        printCloudCommandResult(
+            commandTypeBuffer,
+            "PARACHUTE_REJECTED_NOT_INTEGRATED",
+            nullptr,
+            nullptr,
+            "status=NOT_INTEGRATED,edge_veto=1"
+        );
         return;
     }
 
@@ -2405,6 +2590,7 @@ bool parseManualCloudApply(const String &rawValue, CloudAssessmentResult &result
     portENTER_CRITICAL(&dataMutex);
     copyEventId(currentThreatLevel, sizeof(currentThreatLevel), normalizeOptionalField(globalData.cloud_threat_level, "NONE"));
     portEXIT_CRITICAL(&dataMutex);
+    copyEventId(result.response_event_id, sizeof(result.response_event_id), "HOST_APPLY");
     copyEventId(result.threat_level, sizeof(result.threat_level), currentThreatLevel);
     copyEventId(result.assessment, sizeof(result.assessment), "HOST_APPLY");
     copyEventId(result.action, sizeof(result.action), "HOST_APPLY");
@@ -2546,6 +2732,8 @@ void setAiCloudEnabled(bool enabled) {
     if (!enabled) {
         aiCloud.last_event_id[0] = '\0';
         aiCloud.last_enqueue_ms = 0;
+        globalData.cloud_test_validated = false;
+        syncActiveNodeRuntimeCacheLocked();
     }
     portEXIT_CRITICAL(&dataMutex);
 }
@@ -2562,6 +2750,14 @@ void emitCloudStatus() {
 
     Serial.print("CLOUD,STATUS,enabled=");
     Serial.print(control.enabled ? 1 : 0);
+    Serial.print(",cloud_contract_version=");
+    Serial.print(CloudConfig::ContractVersion);
+    Serial.print(",cloud_event_echo_required=");
+    Serial.print(CloudConfig::EventEchoRequired ? 1 : 0);
+    Serial.print(",cloud_test_no_apply=");
+    Serial.print(CloudConfig::TestNoApply ? 1 : 0);
+    Serial.print(",cloud_test_validated=");
+    Serial.print(snapshot.cloud_test_validated ? 1 : 0);
     Serial.print(",configured=");
     Serial.print(hasWifiCredentials() && hasArkCredentials() ? 1 : 0);
     Serial.print(",wifi=");
@@ -2601,6 +2797,28 @@ void emitCloudStatus() {
 }
 
 void queueCloudTest(unsigned long now) {
+    bool alreadyValidated = false;
+    bool requestInFlight = false;
+    bool testRequestPending = false;
+    portENTER_CRITICAL(&dataMutex);
+    alreadyValidated = globalData.cloud_test_validated;
+    requestInFlight = aiCloud.request_in_flight;
+    testRequestPending = aiCloud.test_request_pending;
+    portEXIT_CRITICAL(&dataMutex);
+
+    if (alreadyValidated) {
+        Serial.println("CLOUD,TEST,queued=0,reason=already_validated");
+        return;
+    }
+
+    const bool queueHasPendingRequest =
+        aiCloudQueue != nullptr && uxQueueMessagesWaiting(aiCloudQueue) > 0;
+    if (requestInFlight || testRequestPending || queueHasPendingRequest) {
+        Serial.println("CLOUD,TEST,queued=0,reason=request_busy");
+        return;
+    }
+
+    setCloudTestValidated(false);
     if (!hasWifiCredentials() || !hasArkCredentials()) {
         setCloudError("missing_credentials", now);
         Serial.println("CLOUD,ERROR,reason=missing_credentials");
@@ -2609,9 +2827,15 @@ void queueCloudTest(unsigned long now) {
 
     CloudSensingEvent event = {};
     CloudClient::buildTestEvent(event);
+    portENTER_CRITICAL(&dataMutex);
+    aiCloud.test_request_pending = true;
+    portEXIT_CRITICAL(&dataMutex);
     if (queueAiCloudAssessment(event, true, "TEST", now)) {
         Serial.println("CLOUD,QUEUED,source=TEST");
     } else {
+        portENTER_CRITICAL(&dataMutex);
+        aiCloud.test_request_pending = false;
+        portEXIT_CRITICAL(&dataMutex);
         Serial.println("CLOUD,ERROR,reason=queue_failed");
     }
 }
@@ -2646,6 +2870,7 @@ void maintainAiCloudWifi(unsigned long now) {
     if (WiFi.status() == WL_CONNECTED) {
         return;
     }
+    setCloudTestValidated(false);
 
     bool retry = false;
     portENTER_CRITICAL(&dataMutex);
@@ -2659,6 +2884,34 @@ void maintainAiCloudWifi(unsigned long now) {
     if (retry) {
         WiFi.begin(FLYTOTAL_WIFI_SSID, FLYTOTAL_WIFI_PASSWORD);
     }
+}
+
+constexpr time_t CloudTlsValidAfterEpoch = 1704067200;  // 2024-01-01 UTC
+constexpr uint32_t CloudTimeSyncTimeoutMs = 8000;
+constexpr uint32_t CloudTimeSyncPollMs = 250;
+constexpr const char *CloudNtpServerPrimary = "pool.ntp.org";
+constexpr const char *CloudNtpServerSecondary = "time.nist.gov";
+
+bool isCloudTimeSynced() {
+    time_t now = time(nullptr);
+    return now >= CloudTlsValidAfterEpoch;
+}
+
+bool ensureCloudTimeSynced() {
+    if (isCloudTimeSynced()) {
+        return true;
+    }
+
+    configTime(0, 0, CloudNtpServerPrimary, CloudNtpServerSecondary);
+    const unsigned long started = millis();
+    while ((millis() - started) < CloudTimeSyncTimeoutMs) {
+        feedCurrentTaskWatchdog();
+        if (isCloudTimeSynced()) {
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(CloudTimeSyncPollMs));
+    }
+    return isCloudTimeSynced();
 }
 
 RuntimeInputControl getInputControlSnapshot() {
@@ -3359,6 +3612,7 @@ UnifiedOutputSnapshot buildUnifiedOutputSnapshot(const SystemData &snapshot, con
     copyEventId(unified.cloud_error, sizeof(unified.cloud_error), normalizeOptionalField(snapshot.cloud_error));
     unified.cloud_last_update_ms = snapshot.cloud_last_update_ms;
     unified.cloud_online = snapshot.cloud_online;
+    unified.cloud_test_validated = snapshot.cloud_test_validated;
     unified.runtime_event_threshold = clampRuntimeEventThreshold(snapshot.runtime_event_threshold);
     unified.cloud_command_applied = snapshot.cloud_command_applied;
     copyEventId(unified.cloud_command_effect, sizeof(unified.cloud_command_effect), normalizeOptionalField(snapshot.cloud_command_effect));
@@ -3496,6 +3750,14 @@ void printNormalizedStateFields(const UnifiedOutputSnapshot &snapshot) {
     Serial.print(snapshot.target_verdict[0] != '\0' ? snapshot.target_verdict : "UNKNOWN_TARGET");
     Serial.print(",cloud_online=");
     Serial.print(snapshot.cloud_online ? 1 : 0);
+    Serial.print(",cloud_contract_version=");
+    Serial.print(CloudConfig::ContractVersion);
+    Serial.print(",cloud_event_echo_required=");
+    Serial.print(CloudConfig::EventEchoRequired ? 1 : 0);
+    Serial.print(",cloud_test_no_apply=");
+    Serial.print(CloudConfig::TestNoApply ? 1 : 0);
+    Serial.print(",cloud_test_validated=");
+    Serial.print(snapshot.cloud_test_validated ? 1 : 0);
     Serial.print(",cloud_threat_level=");
     Serial.print(snapshot.cloud_threat_level[0] != '\0' ? snapshot.cloud_threat_level : "NONE");
     Serial.print(",cloud_alert_text=");
@@ -4968,6 +5230,7 @@ void emitStatusSnapshot() {
     Serial.print(NodeConfig::NodeZone);
     Serial.print(",baseline_version=");
     Serial.print(NodeConfig::BaselineVersion);
+    printBootTelemetryFields();
     Serial.print(",hunter=");
     Serial.print(hunterStateName(snapshot.hunter_state));
     Serial.print(",gimbal=");
@@ -5039,7 +5302,9 @@ void emitSelfTestSnapshot() {
     Serial.print(",role=");
     Serial.print(NodeConfig::NodeRole);
     Serial.print(",baseline_version=");
-    Serial.println(NodeConfig::BaselineVersion);
+    Serial.print(NodeConfig::BaselineVersion);
+    printBootTelemetryFields();
+    Serial.println();
 
     Serial.print("SELFTEST,monitor_baud=");
     Serial.print(AppSerialConfig::MonitorBaudRate);
@@ -6596,7 +6861,7 @@ void handleHostCommand(const String &line) {
         }
         manualServo.test_mode_enabled = false;
         setManualServoAngles(GimbalConfig::CenterPanDeg, GimbalConfig::CenterTiltDeg);
-        setServoEnabled(true);
+        setServoEnabled(false);
         setSafeMode(false);
         debugOutput.enabled = AppSerialConfig::LocalDebugEnabledByDefault;
         debugOutput.quiet_mode_enabled = AppSerialConfig::QuietModeEnabledByDefault;
@@ -7186,13 +7451,7 @@ void TrackingTask(void *pvParameters) {
     registerCurrentTaskWatchdog("Track_Task");
     ESP32PWM::allocateTimer(0);
     ESP32PWM::allocateTimer(1);
-
-    servoPan.setPeriodHertz(ServoConfig::PwmFrequencyHz);
-    servoTilt.setPeriodHertz(ServoConfig::PwmFrequencyHz);
-
-    servoPan.attach(ServoConfig::PanPin, ServoConfig::PulseMinUs, ServoConfig::PulseMaxUs);
-    servoTilt.attach(ServoConfig::TiltPin, ServoConfig::PulseMinUs, ServoConfig::PulseMaxUs);
-    servosAttached = true;
+    setServoEnabled(manualServo.servo_enabled);
 
     HunterState lastHunterState = HUNTER_IDLE;
     GimbalState lastGimbalState = STATE_SCANNING;
@@ -7583,8 +7842,7 @@ void TrackingTask(void *pvParameters) {
 
         if (manualServo.servo_enabled) {
             attachServosIfNeeded();
-            servoPan.write(static_cast<int>(clampPanAngle(outputPan)));
-            servoTilt.write(static_cast<int>(clampTiltAngle(outputTilt)));
+            writeServosWithDeadband(outputPan, outputTilt);
         }
 
         printGimbalDebug(track_snapshot, gimbal_output.state, now);
@@ -7844,6 +8102,75 @@ void CloudTask(void *pvParameters) {
     }
 }
 
+bool writeBufferedSerialLine(char *buffer, size_t capacity, int written) {
+    if (buffer == nullptr || written < 0 || static_cast<size_t>(written) + 2 > capacity) {
+        static constexpr char kOverflowLine[] = "CLOUD,ERROR,reason=serial_line_overflow\r\n";
+        Serial.write(reinterpret_cast<const uint8_t *>(kOverflowLine), sizeof(kOverflowLine) - 1);
+        return false;
+    }
+
+    buffer[written] = '\r';
+    buffer[written + 1] = '\n';
+    Serial.write(reinterpret_cast<const uint8_t *>(buffer), static_cast<size_t>(written) + 2);
+    return true;
+}
+
+void emitCloudTestValidationLine(const CloudAssessmentResult &result) {
+    char line[160] = {};
+    const int written = snprintf(
+        line,
+        sizeof(line),
+        "CLOUD,TEST,validated=1,no_apply=1,response_event_id=%s",
+        result.response_event_id[0] != '\0' ? result.response_event_id : "NONE"
+    );
+    writeBufferedSerialLine(line, sizeof(line), written);
+}
+
+void emitCloudDegradedLine(const CloudAssessmentResult &result) {
+    char line[320] = {};
+    const int written = snprintf(
+        line,
+        sizeof(line),
+        "CLOUD,DEGRADED,reason=assess_failed,error=%s,esp_error=%d,http_status=%d,latency_ms=%lu",
+        result.error[0] != '\0' ? result.error : "unknown",
+        result.esp_error,
+        result.http_status,
+        result.latency_ms
+    );
+    writeBufferedSerialLine(line, sizeof(line), written);
+}
+
+void emitCloudAssessmentResultLine(
+    bool ok,
+    const AiCloudQueueItem &item,
+    const CloudAssessmentResult &result
+) {
+    char line[1024] = {};
+    const int written = snprintf(
+        line,
+        sizeof(line),
+        "CLOUD,RESULT,ok=%d,source=%s,event_id=%s,expected_event_id=%s,response_event_id=%s,"
+        "http_status=%d,esp_error=%d,latency_ms=%lu,threat_level=%s,alert_text=%s,action=%s,"
+        "command_type=%s,command_mode=%s,command_threshold=%.1f,error=%s",
+        ok ? 1 : 0,
+        item.source[0] != '\0' ? item.source : "UNKNOWN",
+        item.event.event_id[0] != '\0' ? item.event.event_id : "NONE",
+        item.event.event_id[0] != '\0' ? item.event.event_id : "NONE",
+        result.response_event_id[0] != '\0' ? result.response_event_id : "NONE",
+        result.http_status,
+        result.esp_error,
+        result.latency_ms,
+        result.threat_level[0] != '\0' ? result.threat_level : "NONE",
+        result.alert_text[0] != '\0' ? result.alert_text : "NONE",
+        result.action[0] != '\0' ? result.action : "NONE",
+        result.command_type[0] != '\0' ? result.command_type : "NONE",
+        result.command_mode[0] != '\0' ? result.command_mode : "STANDARD",
+        result.command_threshold_value,
+        result.error[0] != '\0' ? result.error : "NONE"
+    );
+    writeBufferedSerialLine(line, sizeof(line), written);
+}
+
 void AiCloudTask(void *pvParameters) {
     (void)pvParameters;
     registerCurrentTaskWatchdog("AI_Cloud_Task");
@@ -7856,8 +8183,15 @@ void AiCloudTask(void *pvParameters) {
 
         AiCloudQueueItem item = {};
         if (aiCloudQueue != nullptr && xQueueReceive(aiCloudQueue, &item, pdMS_TO_TICKS(500)) == pdTRUE) {
+            const bool isTestRequest = strcmp(item.source, "TEST") == 0;
+            if (isTestRequest) {
+                setCloudTestValidated(false);
+            }
             portENTER_CRITICAL(&dataMutex);
             aiCloud.request_in_flight = true;
+            if (isTestRequest) {
+                aiCloud.test_request_pending = false;
+            }
             portEXIT_CRITICAL(&dataMutex);
 
             CloudAssessmentResult result = {};
@@ -7871,59 +8205,64 @@ void AiCloudTask(void *pvParameters) {
                 const unsigned long failedAt = millis();
                 setCloudError("wifi_not_connected", failedAt);
                 if (shouldEmitCloudFailureLog("wifi_not_connected", failedAt)) {
-                    Serial.print("CLOUD,RESULT,ok=0,error=wifi_not_connected,wifi=");
-                    Serial.println(wifiStatusName(WiFi.status()));
+                    char line[128] = {};
+                    const int written = snprintf(
+                        line,
+                        sizeof(line),
+                        "CLOUD,RESULT,ok=0,error=wifi_not_connected,wifi=%s",
+                        wifiStatusName(WiFi.status())
+                    );
+                    writeBufferedSerialLine(line, sizeof(line), written);
+                }
+            } else if (!ensureCloudTimeSynced()) {
+                const unsigned long failedAt = millis();
+                setCloudError("time_not_synced", failedAt);
+                if (shouldEmitCloudFailureLog("time_not_synced", failedAt)) {
+                    Serial.println("CLOUD,RESULT,ok=0,error=time_not_synced");
                 }
             } else {
-                const bool ok = client.assess(item.event, result);
+                bool ok = client.assess(item.event, result);
                 const unsigned long completedAt = millis();
+                if (ok && !isTestRequest && !cloudResponseMatchesActiveEvent(result.response_event_id)) {
+                    result.ok = false;
+                    copyEventId(result.error, sizeof(result.error), "active_event_mismatch");
+                    ok = false;
+                }
                 setCloudResult(result, completedAt);
                 if (ok) {
                     portENTER_CRITICAL(&dataMutex);
                     resetCloudFailureLogStateLocked();
                     portEXIT_CRITICAL(&dataMutex);
-                    applyCloudCommand(result, completedAt, item.event.event_id);
-                    if (strcmp(result.threat_level, "LOW") == 0) {
-                        restoreRuntimeEventThresholdIfNeeded(
-                            "THRESHOLD_AUTO_RESTORED",
-                            "threat_cleared",
-                            completedAt,
-                            item.event.event_id
-                        );
+                    if (isTestRequest) {
+                        portENTER_CRITICAL(&dataMutex);
+                        globalData.cloud_test_validated = true;
+                        setCloudCommandEffectLocked(false, "TEST_RESPONSE_VALIDATED");
+                        setCloudCommandAuditLocked(result.response_event_id, "cloud_test_no_apply", completedAt);
+                        syncActiveNodeRuntimeCacheLocked();
+                        portEXIT_CRITICAL(&dataMutex);
+                        emitCloudTestValidationLine(result);
+                    } else {
+                        applyCloudCommand(result, completedAt, result.response_event_id);
+                        if (strcmp(result.threat_level, "LOW") == 0) {
+                            restoreRuntimeEventThresholdIfNeeded(
+                                "THRESHOLD_AUTO_RESTORED",
+                                "threat_cleared",
+                                completedAt,
+                                result.response_event_id
+                            );
+                        }
                     }
                 } else {
+                    const char *auditResponseEventId =
+                        result.response_event_id[0] != '\0' ? result.response_event_id : "NONE";
                     portENTER_CRITICAL(&dataMutex);
                     setCloudCommandEffectLocked(false, "CLOUD_FAILED_LOCAL_FALLBACK");
-                    setCloudCommandAuditLocked(item.event.event_id, result.error, completedAt);
+                    setCloudCommandAuditLocked(auditResponseEventId, result.error, completedAt);
                     syncActiveNodeRuntimeCacheLocked();
                     portEXIT_CRITICAL(&dataMutex);
-                    Serial.print("CLOUD,DEGRADED,reason=assess_failed,error=");
-                    Serial.println(result.error[0] != '\0' ? result.error : "unknown");
+                    emitCloudDegradedLine(result);
                 }
-                if (!ok || debugOutput.enabled) {
-                    Serial.print("CLOUD,RESULT,ok=");
-                    Serial.print(ok ? 1 : 0);
-                    Serial.print(",source=");
-                    Serial.print(item.source[0] != '\0' ? item.source : "UNKNOWN");
-                    Serial.print(",event_id=");
-                    Serial.print(item.event.event_id[0] != '\0' ? item.event.event_id : "NONE");
-                    Serial.print(",http_status=");
-                    Serial.print(result.http_status);
-                    Serial.print(",threat_level=");
-                    Serial.print(result.threat_level[0] != '\0' ? result.threat_level : "NONE");
-                    Serial.print(",alert_text=");
-                    Serial.print(result.alert_text[0] != '\0' ? result.alert_text : "NONE");
-                    Serial.print(",action=");
-                    Serial.print(result.action[0] != '\0' ? result.action : "NONE");
-                    Serial.print(",command_type=");
-                    Serial.print(result.command_type[0] != '\0' ? result.command_type : "NONE");
-                    Serial.print(",command_mode=");
-                    Serial.print(result.command_mode[0] != '\0' ? result.command_mode : "STANDARD");
-                    Serial.print(",command_threshold=");
-                    Serial.print(result.command_threshold_value, 1);
-                    Serial.print(",error=");
-                    Serial.println(result.error[0] != '\0' ? result.error : "NONE");
-                }
+                emitCloudAssessmentResultLine(ok, item, result);
             }
 
             portENTER_CRITICAL(&dataMutex);
@@ -7938,6 +8277,7 @@ void AiCloudTask(void *pvParameters) {
 void setup() {
     Serial.begin(AppSerialConfig::MonitorBaudRate);
     delay(AppSerialConfig::StartupDelayMs);
+    initializeBootTelemetry();
     portENTER_CRITICAL(&dataMutex);
     copyEventId(globalData.node_id, sizeof(globalData.node_id), NodeConfig::NodeId);
     copyEventId(globalData.nodeb_status, sizeof(globalData.nodeb_status), "UNKNOWN");
@@ -7957,6 +8297,7 @@ void setup() {
     copyEventId(globalData.cloud_error, sizeof(globalData.cloud_error), "NONE");
     globalData.cloud_last_update_ms = 0;
     globalData.cloud_online = false;
+    globalData.cloud_test_validated = false;
     globalData.runtime_event_threshold = 0.0f;
     globalData.cloud_command_applied = false;
     copyEventId(globalData.cloud_command_effect, sizeof(globalData.cloud_command_effect), "NONE");
@@ -7980,6 +8321,7 @@ void setup() {
     Serial.println("NodeB identity-chain UART keeps LD2450 tracking path unchanged.");
     Serial.println("Monitor clean mode is the default. Use HELP, DEBUG,ON, or UPLINK,ON when needed.");
     Serial.println("========================================");
+    emitBootSession();
 
     initializeWatchdog();
     aiCloudQueue = xQueueCreate(CloudConfig::AiQueueLength, sizeof(AiCloudQueueItem));

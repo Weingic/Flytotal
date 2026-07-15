@@ -1,0 +1,145 @@
+{
+  "schema_version": "field_collection_preflight_v1",
+  "result": "GO",
+  "passed_count": 16,
+  "total_count": 16,
+  "failures": [],
+  "checks": [
+    {
+      "name": "vision_api_available",
+      "passed": true,
+      "detail": {
+        "available": 1
+      }
+    },
+    {
+      "name": "vision_runtime_fresh",
+      "passed": true,
+      "detail": {
+        "age_ms": 2,
+        "max_age_ms": 3000,
+        "source_ready": 1,
+        "vision_chain_ready": 1
+      }
+    },
+    {
+      "name": "physical_camera_source",
+      "passed": true,
+      "detail": {
+        "source": "0",
+        "capture_backend": "dshow"
+      }
+    },
+    {
+      "name": "vision_frame_quality",
+      "passed": true,
+      "detail": {
+        "frame_content_ready": 1,
+        "reason": "OK"
+      }
+    },
+    {
+      "name": "deployed_detector",
+      "passed": true,
+      "detail": {
+        "detector_ready": 1,
+        "model_label": "drone-v4b-hardneg-deployed",
+        "expected_model_label": "drone-v4b-hardneg-deployed",
+        "class_strategy": "0:drone"
+      }
+    },
+    {
+      "name": "deployed_model_hash",
+      "passed": true,
+      "detail": {
+        "path": "C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/models/yolov8n_drone.onnx",
+        "actual_sha256": "c33aba9e6e24ce24ae6147a538b46b0c1080093242f0ad1c59100c738121ac74",
+        "expected_sha256": "c33aba9e6e24ce24ae6147a538b46b0c1080093242f0ad1c59100c738121ac74",
+        "error": ""
+      }
+    },
+    {
+      "name": "node_online_fresh",
+      "passed": true,
+      "detail": {
+        "online": 1,
+        "age_ms": 179,
+        "max_age_ms": 3000
+      }
+    },
+    {
+      "name": "track_idle",
+      "passed": true,
+      "detail": {
+        "track_active": 0
+      }
+    },
+    {
+      "name": "event_idle",
+      "passed": true,
+      "detail": {
+        "event_active": 0,
+        "event_id": "NONE"
+      }
+    },
+    {
+      "name": "test_mode_disabled",
+      "passed": true,
+      "detail": {
+        "test_mode_enabled": 0
+      }
+    },
+    {
+      "name": "servo_disabled",
+      "passed": true,
+      "detail": {
+        "servo_enabled": 0
+      }
+    },
+    {
+      "name": "cloud_request_idle",
+      "passed": true,
+      "detail": {
+        "cloud_request_in_flight": 0
+      }
+    },
+    {
+      "name": "contracts_v2",
+      "passed": true,
+      "detail": {
+        "serial_bridge": 2,
+        "web_evidence": 2
+      }
+    },
+    {
+      "name": "output_writable",
+      "passed": true,
+      "detail": {
+        "path": "C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/captures/session_logs/field_trials",
+        "detail": "OK"
+      }
+    },
+    {
+      "name": "disk_free",
+      "passed": true,
+      "detail": {
+        "free_bytes": 52403679232,
+        "minimum_bytes": 2147483648
+      }
+    },
+    {
+      "name": "field_recorder_available",
+      "passed": true,
+      "detail": {
+        "path": "C:/Users/WZwai/Documents/PlatformIO/Projects/Flytotal/tools/field_trial_recorder.py"
+      }
+    }
+  ],
+  "read_only": true,
+  "serial_commands_sent": 0,
+  "cloud_api_calls_sent": 0,
+  "generated_ms": 1783947192278,
+  "mode": "distance",
+  "base_url": "http://127.0.0.1:8765",
+  "api_errors": []
+}

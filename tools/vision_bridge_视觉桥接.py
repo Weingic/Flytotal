@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import sys
 import threading
 import time
@@ -28,9 +29,17 @@ VISION_LOST = "VISION_LOST"
 
 WINDOW_NAME = "Flytotal Vision Bridge"
 CAPTURE_HINT_COOLDOWN_S = 1.2
-SUPPORTED_TRACKERS = ("csrt", "kcf")
+SUPPORTED_TRACKERS = ("csrt", "kcf", "mil")
 SUPPORTED_CAPTURE_BACKENDS = ("auto", "msmf", "dshow")
 ACTIVE_EVENT_MAX_AGE_MS_DEFAULT = 15000
+DEFAULT_FRAME_MIN_MEAN_LUMA = 5.0
+DEFAULT_FRAME_MAX_MEAN_LUMA = 250.0
+DEFAULT_FRAME_MIN_LUMA_STDDEV = 2.0
+DEFAULT_YOLO_SCORE_THRESHOLD = 0.45
+DEFAULT_YOLO_INTRA_OP_THREADS = 8
+DEFAULT_AUTO_LOCK_IOU_THRESHOLD = 0.25
+STATUS_REPLACE_RETRY_COUNT = 10
+STATUS_REPLACE_RETRY_DELAY_S = 0.05
 
 
 @dataclass
@@ -56,6 +65,28 @@ class VisionSnapshot:
     detector_model_label: str = "none"
     detector_class_strategy: str = "none"
     yolo_detections: list[dict[str, Any]] = field(default_factory=list)
+    lock_source: str = "NONE"
+    auto_lock_score: float = 0.0
+    auto_lock_class_name: str = "none"
+    frame_content_ready: bool = False
+    frame_mean_luma: float = 0.0
+    frame_luma_stddev: float = 0.0
+    frame_quality_reason: str = "UNMEASURED"
+
+
+@dataclass(frozen=True)
+class FrameQuality:
+    ready: bool
+    mean_luma: float
+    luma_stddev: float
+    reason: str
+
+
+@dataclass(frozen=True)
+class AutoLockDetection:
+    bbox: tuple[int, int, int, int]
+    score: float
+    class_name: str
 
 
 @dataclass
@@ -210,6 +241,8 @@ def tracker_available(cv: Any, tracker_name: str) -> bool:
         return hasattr(cv, "TrackerCSRT_create") or (hasattr(cv, "legacy") and hasattr(cv.legacy, "TrackerCSRT_create"))
     if tracker_name == "kcf":
         return hasattr(cv, "TrackerKCF_create") or (hasattr(cv, "legacy") and hasattr(cv.legacy, "TrackerKCF_create"))
+    if tracker_name == "mil":
+        return hasattr(cv, "TrackerMIL_create") or (hasattr(cv, "legacy") and hasattr(cv.legacy, "TrackerMIL_create"))
     return False
 
 
@@ -248,11 +281,149 @@ def create_tracker(cv: Any, tracker_name: str) -> Any:
             return cv.TrackerKCF_create()
         if hasattr(cv, "legacy") and hasattr(cv.legacy, "TrackerKCF_create"):
             return cv.legacy.TrackerKCF_create()
+    if tracker_name == "mil":
+        if hasattr(cv, "TrackerMIL_create"):
+            return cv.TrackerMIL_create()
+        if hasattr(cv, "legacy") and hasattr(cv.legacy, "TrackerMIL_create"):
+            return cv.legacy.TrackerMIL_create()
 
     raise RuntimeError(
         f"Tracker `{tracker_name}` is not available in this OpenCV build. "
         "Try another tracker or install opencv-contrib-python."
     )
+
+
+def evaluate_frame_quality(
+    cv: Any,
+    frame: Any,
+    min_mean_luma: float = DEFAULT_FRAME_MIN_MEAN_LUMA,
+    max_mean_luma: float = DEFAULT_FRAME_MAX_MEAN_LUMA,
+    min_luma_stddev: float = DEFAULT_FRAME_MIN_LUMA_STDDEV,
+) -> FrameQuality:
+    if frame is None:
+        return FrameQuality(False, 0.0, 0.0, "FRAME_MISSING")
+    try:
+        gray = frame if len(frame.shape) == 2 else cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+        mean_value, stddev_value = cv.meanStdDev(gray)
+        mean_luma = float(mean_value[0][0])
+        luma_stddev = float(stddev_value[0][0])
+    except Exception:
+        return FrameQuality(False, 0.0, 0.0, "FRAME_INVALID")
+
+    if mean_luma < max(0.0, float(min_mean_luma)):
+        reason = "FRAME_TOO_DARK"
+    elif mean_luma > min(255.0, float(max_mean_luma)):
+        reason = "FRAME_TOO_BRIGHT"
+    elif luma_stddev < max(0.0, float(min_luma_stddev)):
+        reason = "FRAME_TOO_FLAT"
+    else:
+        reason = "OK"
+    return FrameQuality(reason == "OK", round(mean_luma, 3), round(luma_stddev, 3), reason)
+
+
+def bbox_iou(
+    left: tuple[int, int, int, int],
+    right: tuple[int, int, int, int],
+) -> float:
+    lx, ly, lw, lh = left
+    rx, ry, rw, rh = right
+    left_x2 = lx + max(0, lw)
+    left_y2 = ly + max(0, lh)
+    right_x2 = rx + max(0, rw)
+    right_y2 = ry + max(0, rh)
+    intersection_w = max(0, min(left_x2, right_x2) - max(lx, rx))
+    intersection_h = max(0, min(left_y2, right_y2) - max(ly, ry))
+    intersection = float(intersection_w * intersection_h)
+    union = float(max(0, lw) * max(0, lh) + max(0, rw) * max(0, rh)) - intersection
+    return intersection / union if union > 0.0 else 0.0
+
+
+def expand_and_clamp_bbox(
+    bbox: tuple[int, int, int, int],
+    frame_width: int,
+    frame_height: int,
+    margin_ratio: float,
+) -> tuple[int, int, int, int]:
+    x, y, w, h = bbox
+    margin_x = int(round(max(0.0, float(margin_ratio)) * max(0, w)))
+    margin_y = int(round(max(0.0, float(margin_ratio)) * max(0, h)))
+    border_x = 1 if frame_width >= 3 else 0
+    border_y = 1 if frame_height >= 3 else 0
+    x1 = max(border_x, x - margin_x)
+    y1 = max(border_y, y - margin_y)
+    x2 = min(max(border_x, frame_width - border_x), x + max(0, w) + margin_x)
+    y2 = min(max(border_y, frame_height - border_y), y + max(0, h) + margin_y)
+    return x1, y1, max(0, x2 - x1), max(0, y2 - y1)
+
+
+def select_auto_lock_detection(
+    detections: list[dict[str, Any]],
+    frame_width: int,
+    frame_height: int,
+    min_score: float,
+    margin_ratio: float,
+) -> AutoLockDetection | None:
+    selected: AutoLockDetection | None = None
+    for item in detections:
+        try:
+            score = float(item.get("score", 0.0))
+            raw_bbox = (
+                int(item.get("bbox_x", 0)),
+                int(item.get("bbox_y", 0)),
+                int(item.get("bbox_w", 0)),
+                int(item.get("bbox_h", 0)),
+            )
+        except (TypeError, ValueError):
+            continue
+        if score < max(0.0, float(min_score)) or raw_bbox[2] < 8 or raw_bbox[3] < 8:
+            continue
+        bbox = expand_and_clamp_bbox(raw_bbox, frame_width, frame_height, margin_ratio)
+        if bbox[2] < 8 or bbox[3] < 8:
+            continue
+        candidate = AutoLockDetection(
+            bbox=bbox,
+            score=score,
+            class_name=str(item.get("class_name", "target") or "target"),
+        )
+        if selected is None or candidate.score > selected.score:
+            selected = candidate
+    return selected
+
+
+def update_auto_lock_candidate(
+    previous: AutoLockDetection | None,
+    previous_count: int,
+    current: AutoLockDetection | None,
+    iou_threshold: float,
+) -> tuple[AutoLockDetection | None, int]:
+    if current is None:
+        return None, 0
+    same_target = (
+        previous is not None
+        and previous.class_name == current.class_name
+        and bbox_iou(previous.bbox, current.bbox) >= max(0.0, min(1.0, float(iou_threshold)))
+    )
+    return current, (max(0, previous_count) + 1 if same_target else 1)
+
+
+def initialize_tracker_from_bbox(
+    cv: Any,
+    frame: Any,
+    tracker_name: str,
+    bbox: tuple[int, int, int, int],
+) -> tuple[Any | None, tuple[int, int, int, int] | None]:
+    normalized_bbox = normalize_bbox(bbox)
+    if normalized_bbox[2] <= 0 or normalized_bbox[3] <= 0:
+        return None, None
+    try:
+        tracker = create_tracker(cv, tracker_name)
+        initialized = tracker.init(frame, tuple(int(value) for value in normalized_bbox))
+    except Exception as exc:
+        print(f"Tracker initialization failed: {exc}", file=sys.stderr)
+        return None, None
+    if initialized is False:
+        return None, None
+    return tracker, normalized_bbox
 
 
 def resolve_capture_backend(cv: Any, backend: str) -> tuple[int, str]:
@@ -304,13 +475,30 @@ def capture_backend_candidates(requested_backend: str, fallback_mode: str) -> li
     return ordered
 
 
-def warmup_source_frame(cap: Any, warmup_frames: int) -> tuple[bool, Any | None, int]:
+def warmup_source_frame(
+    cv: Any,
+    cap: Any,
+    warmup_frames: int,
+    min_mean_luma: float,
+    max_mean_luma: float,
+    min_luma_stddev: float,
+) -> tuple[bool, Any | None, int, FrameQuality]:
     attempts = max(1, int(warmup_frames))
+    last_quality = FrameQuality(False, 0.0, 0.0, "FRAME_MISSING")
     for attempt in range(1, attempts + 1):
         ok, frame = cap.read()
-        if ok and frame is not None:
-            return True, frame, attempt
-    return False, None, attempts
+        if not ok or frame is None:
+            continue
+        last_quality = evaluate_frame_quality(
+            cv,
+            frame,
+            min_mean_luma=min_mean_luma,
+            max_mean_luma=max_mean_luma,
+            min_luma_stddev=min_luma_stddev,
+        )
+        if last_quality.ready:
+            return True, frame, attempt, last_quality
+    return False, None, attempts, last_quality
 
 
 def normalize_bbox(bbox: tuple[float, float, float, float]) -> tuple[int, int, int, int]:
@@ -326,6 +514,10 @@ def build_snapshot(
     tracker_name: str,
     frame_width: int = 0,
     frame_height: int = 0,
+    lock_source: str = "NONE",
+    auto_lock_score: float = 0.0,
+    auto_lock_class_name: str = "none",
+    frame_quality: FrameQuality | None = None,
 ) -> VisionSnapshot:
     timestamp_ms = int(time.time() * 1000)
     if bbox is None:
@@ -345,6 +537,7 @@ def build_snapshot(
         confidence = 0.25
     stability = confidence if locked else 0.0
 
+    quality = frame_quality or FrameQuality(False, 0.0, 0.0, "UNMEASURED")
     return VisionSnapshot(
         timestamp_ms=timestamp_ms,
         frame_index=frame_index,
@@ -362,6 +555,13 @@ def build_snapshot(
         vision_confidence=confidence,
         bbox_stability_score=stability,
         tracker_state="TRACKING" if locked else ("OCCLUDED" if state == VISION_LOST else "LOST"),
+        lock_source=lock_source,
+        auto_lock_score=max(0.0, float(auto_lock_score)),
+        auto_lock_class_name=auto_lock_class_name or "none",
+        frame_content_ready=quality.ready,
+        frame_mean_luma=quality.mean_luma,
+        frame_luma_stddev=quality.luma_stddev,
+        frame_quality_reason=quality.reason,
     )
 
 
@@ -375,7 +575,11 @@ def print_snapshot(snapshot: VisionSnapshot) -> None:
         f"bbox={snapshot.bbox_x},{snapshot.bbox_y},{snapshot.bbox_w},{snapshot.bbox_h},"
         f"cx={snapshot.center_x},"
         f"cy={snapshot.center_y},"
-        f"tracker={snapshot.tracker_name}"
+        f"tracker={snapshot.tracker_name},"
+        f"lock_source={snapshot.lock_source},"
+        f"auto_lock_score={snapshot.auto_lock_score:.3f},"
+        f"frame_content_ready={int(snapshot.frame_content_ready)},"
+        f"frame_quality={snapshot.frame_quality_reason}"
     )
 
 
@@ -415,12 +619,137 @@ def format_class_strategy(class_ids: list[int], class_names: dict[int, str]) -> 
     return ",".join(f"{class_id}:{class_names.get(class_id, f'class_{class_id}')}" for class_id in class_ids)
 
 
-class SidecarDetector:
-    """Non-blocking detector path for red confirmation boxes.
+def prepare_yolo_letterbox_input(
+    cv: Any,
+    np: Any,
+    frame: Any,
+    input_size: int,
+) -> tuple[Any, float, float, int, int]:
+    frame_height, frame_width = frame.shape[:2]
+    target_size = max(1, int(input_size))
+    if frame_width <= 0 or frame_height <= 0:
+        raise ValueError("YOLO input frame must have positive dimensions")
 
-    The CSRT/KCF tracker remains the primary close-range tracker. This sidecar
-    only writes visual evidence boxes for dashboard/demo use.
-    """
+    scale = min(target_size / frame_width, target_size / frame_height)
+    resized_width = max(1, min(target_size, int(round(frame_width * scale))))
+    resized_height = max(1, min(target_size, int(round(frame_height * scale))))
+    resized = cv.resize(frame, (resized_width, resized_height))
+
+    pad_width = target_size - resized_width
+    pad_height = target_size - resized_height
+    pad_left = pad_width // 2
+    pad_right = pad_width - pad_left
+    pad_top = pad_height // 2
+    pad_bottom = pad_height - pad_top
+    letterboxed = cv.copyMakeBorder(
+        resized,
+        pad_top,
+        pad_bottom,
+        pad_left,
+        pad_right,
+        cv.BORDER_CONSTANT,
+        value=(114, 114, 114),
+    )
+    rgb = cv.cvtColor(letterboxed, cv.COLOR_BGR2RGB)
+    blob = np.ascontiguousarray(np.transpose(rgb.astype("float32") / 255.0, (2, 0, 1))[None, ...])
+    return (
+        blob,
+        resized_width / frame_width,
+        resized_height / frame_height,
+        pad_left,
+        pad_top,
+    )
+
+
+def decode_yolo_predictions(
+    cv: Any,
+    np: Any,
+    raw_output: Any,
+    frame_width: int,
+    frame_height: int,
+    input_size: int,
+    class_ids: list[int],
+    class_names: dict[int, str],
+    score_threshold: float,
+    input_scale_x: float | None = None,
+    input_scale_y: float | None = None,
+    input_pad_x: float = 0.0,
+    input_pad_y: float = 0.0,
+) -> list[dict[str, Any]]:
+    predictions = np.asarray(raw_output).squeeze()
+    if predictions.ndim != 2:
+        return []
+
+    # Ultralytics exports [1, 4 + class_count, candidate_count]. A one-class
+    # model is therefore [1, 5, 8400], which must also be transposed.
+    if predictions.shape[0] < predictions.shape[1]:
+        predictions = predictions.T
+
+    accepted_class_ids = list(class_ids)
+    boxes: list[list[int]] = []
+    scores: list[float] = []
+    classes: list[int] = []
+    threshold = max(0.01, min(0.99, float(score_threshold)))
+    scale_x = float(input_scale_x) if input_scale_x is not None else input_size / max(1, frame_width)
+    scale_y = float(input_scale_y) if input_scale_y is not None else input_size / max(1, frame_height)
+    if scale_x <= 0.0 or scale_y <= 0.0:
+        return []
+    for row in predictions:
+        best_class = -1
+        best_score = 0.0
+        for class_id in accepted_class_ids:
+            score_index = 4 + class_id
+            if class_id < 0 or row.shape[0] <= score_index:
+                continue
+            score = float(row[score_index])
+            if score > best_score:
+                best_score = score
+                best_class = class_id
+        if best_class < 0 or best_score < threshold:
+            continue
+
+        cx, cy, bw, bh = [float(value) for value in row[:4]]
+        x1 = max(0.0, min(float(frame_width), (cx - bw / 2.0 - input_pad_x) / scale_x))
+        y1 = max(0.0, min(float(frame_height), (cy - bh / 2.0 - input_pad_y) / scale_y))
+        x2 = max(0.0, min(float(frame_width), (cx + bw / 2.0 - input_pad_x) / scale_x))
+        y2 = max(0.0, min(float(frame_height), (cy + bh / 2.0 - input_pad_y) / scale_y))
+        if x2 <= x1 or y2 <= y1:
+            continue
+        x = max(0, min(frame_width - 1, int(round(x1))))
+        y = max(0, min(frame_height - 1, int(round(y1))))
+        right = max(x + 1, min(frame_width, int(round(x2))))
+        bottom = max(y + 1, min(frame_height, int(round(y2))))
+        w = right - x
+        h = bottom - y
+        if w <= 0 or h <= 0:
+            continue
+        boxes.append([x, y, w, h])
+        scores.append(best_score)
+        classes.append(best_class)
+
+    keep = cv.dnn.NMSBoxes(boxes, scores, threshold, 0.45) if boxes else []
+    flattened_keep = np.asarray(keep).reshape(-1).tolist() if len(keep) else []
+    detections: list[dict[str, Any]] = []
+    for item_index in flattened_keep[:5]:
+        index = int(item_index)
+        x, y, w, h = boxes[index]
+        class_id = classes[index]
+        detections.append(
+            {
+                "bbox_x": x,
+                "bbox_y": y,
+                "bbox_w": w,
+                "bbox_h": h,
+                "score": round(float(scores[index]), 3),
+                "class_id": class_id,
+                "class_name": class_names.get(class_id, f"class_{class_id}"),
+            }
+        )
+    return detections
+
+
+class SidecarDetector:
+    """Non-blocking detector path used by overlays and automatic tracker lock."""
 
     def __init__(
         self,
@@ -432,6 +761,7 @@ class SidecarDetector:
         class_names: dict[int, str],
         model_label: str,
         score_threshold: float,
+        intra_op_threads: int = DEFAULT_YOLO_INTRA_OP_THREADS,
     ) -> None:
         self.cv = cv
         self.enabled = bool(enabled)
@@ -441,6 +771,8 @@ class SidecarDetector:
         self.class_names = dict(class_names)
         self.model_label = model_label or self.model_path.stem or "none"
         self.score_threshold = max(0.01, min(0.99, float(score_threshold)))
+        logical_cpu_count = max(1, int(os.cpu_count() or 1))
+        self.intra_op_threads = max(1, min(int(intra_op_threads), logical_cpu_count))
         self.class_strategy = format_class_strategy(self.class_ids, self.class_names)
         self.state = "DISABLED"
         self._session: Any | None = None
@@ -448,6 +780,7 @@ class SidecarDetector:
         self._lock = threading.Lock()
         self._busy = False
         self._latest: list[dict[str, Any]] = []
+        self._revision = 0
         self._last_gray: Any | None = None
 
         if not self.enabled:
@@ -458,7 +791,15 @@ class SidecarDetector:
         try:
             import onnxruntime as ort  # type: ignore
 
-            self._session = ort.InferenceSession(str(self.model_path), providers=["CPUExecutionProvider"])
+            session_options = ort.SessionOptions()
+            session_options.intra_op_num_threads = self.intra_op_threads
+            session_options.inter_op_num_threads = 1
+            session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+            self._session = ort.InferenceSession(
+                str(self.model_path),
+                sess_options=session_options,
+                providers=["CPUExecutionProvider"],
+            )
             self._input_name = self._session.get_inputs()[0].name
             self.state = "READY_ONNX"
         except Exception as exc:  # pragma: no cover - depends on local runtime
@@ -477,9 +818,9 @@ class SidecarDetector:
             self._busy = True
         threading.Thread(target=self._run_onnx, args=(frame.copy(),), daemon=True).start()
 
-    def latest(self) -> tuple[str, list[dict[str, Any]]]:
+    def latest(self) -> tuple[str, list[dict[str, Any]], int]:
         with self._lock:
-            return self.state, [dict(item) for item in self._latest]
+            return self.state, [dict(item) for item in self._latest], self._revision
 
     def metadata(self) -> tuple[str, str]:
         return self.model_label, self.class_strategy
@@ -488,6 +829,7 @@ class SidecarDetector:
         with self._lock:
             self.state = state
             self._latest = detections
+            self._revision += 1
             self._busy = False
 
     def _run_flow(self, frame: Any) -> None:
@@ -529,65 +871,28 @@ class SidecarDetector:
 
             height, width = frame.shape[:2]
             input_size = 640
-            resized = self.cv.resize(frame, (input_size, input_size))
-            rgb = self.cv.cvtColor(resized, self.cv.COLOR_BGR2RGB)
-            blob = rgb.astype("float32") / 255.0
-            blob = np.transpose(blob, (2, 0, 1))[None, ...]
+            blob, scale_x, scale_y, pad_x, pad_y = prepare_yolo_letterbox_input(
+                self.cv,
+                np,
+                frame,
+                input_size,
+            )
             outputs = self._session.run(None, {self._input_name: blob}) if self._session is not None else []
-            predictions = np.array(outputs[0]).squeeze() if outputs else np.empty((0, 0))
-            if predictions.ndim != 2:
-                self._set_latest("READY_ONNX", [])
-                return
-            if predictions.shape[0] < predictions.shape[1] and predictions.shape[0] >= 6:
-                predictions = predictions.T
-
-            boxes: list[list[int]] = []
-            scores: list[float] = []
-            classes: list[int] = []
-            for row in predictions:
-                best_class = -1
-                best_score = 0.0
-                for class_id in self.class_ids:
-                    if row.shape[0] <= class_id + 4:
-                        continue
-                    score = float(row[4 + class_id])
-                    if score > best_score:
-                        best_score = score
-                        best_class = class_id
-                if best_class < 0 or best_score < self.score_threshold:
-                    continue
-                cx, cy, bw, bh = [float(value) for value in row[:4]]
-                x = int((cx - bw / 2.0) * width / input_size)
-                y = int((cy - bh / 2.0) * height / input_size)
-                w = int(bw * width / input_size)
-                h = int(bh * height / input_size)
-                x = max(0, min(width - 1, x))
-                y = max(0, min(height - 1, y))
-                w = max(0, min(width - x, w))
-                h = max(0, min(height - y, h))
-                if w <= 0 or h <= 0:
-                    continue
-                boxes.append([x, y, w, h])
-                scores.append(best_score)
-                classes.append(best_class)
-
-            keep = self.cv.dnn.NMSBoxes(boxes, scores, self.score_threshold, 0.45) if boxes else []
-            detections: list[dict[str, Any]] = []
-            for index in list(keep)[:5]:
-                item_index = int(index[0] if isinstance(index, (list, tuple)) else index)
-                x, y, w, h = boxes[item_index]
-                class_id = classes[item_index]
-                detections.append(
-                    {
-                        "bbox_x": x,
-                        "bbox_y": y,
-                        "bbox_w": w,
-                        "bbox_h": h,
-                        "score": round(float(scores[item_index]), 3),
-                        "class_id": class_id,
-                        "class_name": self.class_names.get(class_id, f"class_{class_id}"),
-                    }
-                )
+            detections = decode_yolo_predictions(
+                cv=self.cv,
+                np=np,
+                raw_output=outputs[0] if outputs else np.empty((0, 0)),
+                frame_width=width,
+                frame_height=height,
+                input_size=input_size,
+                class_ids=self.class_ids,
+                class_names=self.class_names,
+                score_threshold=self.score_threshold,
+                input_scale_x=scale_x,
+                input_scale_y=scale_y,
+                input_pad_x=pad_x,
+                input_pad_y=pad_y,
+            )
             self._set_latest("READY_ONNX", detections)
         except Exception as exc:  # pragma: no cover - depends on local runtime/model
             print(f"YOLO sidecar failed, switching to fallback flow: {exc}", file=sys.stderr)
@@ -797,15 +1102,23 @@ def resolve_runtime_event_id(
     if manual:
         return manual, "manual"
 
-    payload = load_json_payload(node_status_file)
-    if isinstance(payload, dict):
-        for key in ("event_id", "current_event_id", "last_event_id"):
-            value = str(payload.get(key, "")).strip()
-            if value and value.upper() != "NONE":
-                return value, f"node_status.{key}"
-
     max_age_ms = max(0, safe_int(event_bind_max_age_ms, 0))
     now_ms = int(time.time() * 1000)
+    payload = load_json_payload(node_status_file)
+    if isinstance(payload, dict):
+        node_status_mtime_ms = int(node_status_file.stat().st_mtime * 1000) if node_status_file.exists() else 0
+        node_status_updated_ms = safe_int(payload.get("last_update_ms", payload.get("timestamp_ms", 0)), 0)
+        if node_status_updated_ms < 946684800000:
+            node_status_updated_ms = node_status_mtime_ms
+        node_status_fresh = (
+            max_age_ms <= 0
+            or (node_status_updated_ms > 0 and (now_ms - node_status_updated_ms) <= max_age_ms)
+        )
+        if node_status_fresh:
+            for key in ("event_id", "current_event_id", "last_event_id"):
+                value = str(payload.get(key, "")).strip()
+                if value and value.upper() != "NONE":
+                    return value, f"node_status.{key}"
 
     node_events_payload = load_json_payload(node_events_file)
     node_events_records = node_events_payload.get("records", []) if isinstance(node_events_payload, dict) else []
@@ -966,6 +1279,13 @@ def build_status_payload(
         "detector_model_label": snapshot.detector_model_label,
         "detector_class_strategy": snapshot.detector_class_strategy,
         "yolo_detections": snapshot.yolo_detections,
+        "lock_source": snapshot.lock_source,
+        "auto_lock_score": round(float(snapshot.auto_lock_score), 3),
+        "auto_lock_class_name": snapshot.auto_lock_class_name,
+        "frame_content_ready": int(snapshot.frame_content_ready),
+        "frame_mean_luma": round(float(snapshot.frame_mean_luma), 3),
+        "frame_luma_stddev": round(float(snapshot.frame_luma_stddev), 3),
+        "frame_quality_reason": snapshot.frame_quality_reason,
         "last_capture_reason": "",
         "last_capture_file": "",
         "last_capture_timestamp_ms": 0,
@@ -977,7 +1297,8 @@ def build_status_payload(
         "tracker_fallback_applied": int(tracker_fallback_applied),
         "available_trackers": [name.upper() for name in available_trackers],
         "tracker_ready": int(bool(active_tracker_name)),
-        "vision_chain_ready": int(bool(source_ready and active_tracker_name)),
+        "detector_ready": int(snapshot.detector_state == "READY_ONNX"),
+        "vision_chain_ready": int(bool(source_ready and active_tracker_name and snapshot.frame_content_ready)),
     }
     if last_capture is not None:
         payload["last_capture_reason"] = last_capture.capture_reason
@@ -986,14 +1307,28 @@ def build_status_payload(
     return payload
 
 
-def write_latest_status_json(path: Path, payload: dict[str, object]) -> None:
+def write_latest_status_json(
+    path: Path,
+    payload: dict[str, object],
+    *,
+    retry_count: int = STATUS_REPLACE_RETRY_COUNT,
+    retry_delay_s: float = STATUS_REPLACE_RETRY_DELAY_S,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_suffix(path.suffix + ".tmp")
     temp_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    temp_path.replace(path)
+    attempts = max(1, int(retry_count))
+    for attempt in range(1, attempts + 1):
+        try:
+            temp_path.replace(path)
+            return
+        except PermissionError:
+            if attempt >= attempts:
+                raise
+            time.sleep(max(0.0, float(retry_delay_s)))
 
 
 def capture_if_allowed(
@@ -1006,6 +1341,17 @@ def capture_if_allowed(
     capture_index: int,
     metadata_logger: CaptureMetadataLogger | None,
 ) -> CaptureRecord | None:
+    if not snapshot.frame_content_ready:
+        print(
+            "CAPTURE_REJECTED,"
+            f"reason={snapshot.frame_quality_reason},"
+            f"mean_luma={snapshot.frame_mean_luma:.3f},"
+            f"luma_stddev={snapshot.frame_luma_stddev:.3f},"
+            f"event_id={event_id or 'NONE'},"
+            f"capture_reason={capture_reason}",
+            file=sys.stderr,
+        )
+        return None
     record = save_capture(
         cv=cv,
         frame=frame,
@@ -1047,6 +1393,7 @@ def draw_overlay(
             dw = int(detection.get("bbox_w", 0))
             dh = int(detection.get("bbox_h", 0))
             score = float(detection.get("score", 0.0))
+            class_name = str(detection.get("class_name", "target") or "target")
         except (TypeError, ValueError):
             continue
         if dw <= 0 or dh <= 0:
@@ -1054,7 +1401,7 @@ def draw_overlay(
         cv.rectangle(frame, (dx, dy), (dx + dw, dy + dh), (0, 0, 255), 2)
         cv.putText(
             frame,
-            f"det {score:.2f}",
+            f"{class_name} {score:.2f}",
             (dx, max(18, dy - 6)),
             cv.FONT_HERSHEY_SIMPLEX,
             0.55,
@@ -1073,7 +1420,7 @@ def draw_overlay(
     )
     cv.putText(
         frame,
-        f"Locked: {int(snapshot.vision_locked)}  Tracker: {snapshot.tracker_name}",
+        f"Locked: {int(snapshot.vision_locked)}  Tracker: {snapshot.tracker_name}  Source: {snapshot.lock_source}",
         (12, 56),
         cv.FONT_HERSHEY_SIMPLEX,
         0.65,
@@ -1082,7 +1429,7 @@ def draw_overlay(
     )
     cv.putText(
         frame,
-        f"Center: ({snapshot.center_x}, {snapshot.center_y})  Frame: {snapshot.frame_index}",
+        f"Center: ({snapshot.center_x}, {snapshot.center_y})  Frame: {snapshot.frame_index}  Quality: {snapshot.frame_quality_reason}",
         (12, 84),
         cv.FONT_HERSHEY_SIMPLEX,
         0.6,
@@ -1172,35 +1519,13 @@ def select_target_roi(
         print("ROI selection cancelled.")
         return None, None
 
-    try:
-        tracker = create_tracker(cv, tracker_name)
-    except RuntimeError as exc:
-        print(f"Tracker initialization skipped: {exc}", file=sys.stderr)
-        print(
-            "Next step: run `python tools/usb_camera_readiness_check_USB摄像头就绪核对.py` "
-            "then relaunch vision_bridge with an available tracker (for example `--tracker kcf --tracker-fallback auto`).",
-            file=sys.stderr,
-        )
+    tracker, initialized_bbox = initialize_tracker_from_bbox(cv, frame, tracker_name, bbox)
+    if tracker is None or initialized_bbox is None:
+        print("Tracker initialization failed. Reselect a larger ROI or use another tracker.", file=sys.stderr)
         return None, None
 
-    # OpenCV 4.13 on Windows may reject float bbox for tracker.init.
-    # Keep bbox as integer tuple for cross-version compatibility.
-    try:
-        initialized = tracker.init(frame, tuple(int(value) for value in bbox))
-    except Exception as exc:
-        print(f"Tracker initialization failed: {exc}", file=sys.stderr)
-        print(
-            "Next step: reselect ROI with a larger box that fully contains the target. "
-            "If it still fails, relaunch with `--tracker kcf`.",
-            file=sys.stderr,
-        )
-        return None, None
-    if initialized is False:
-        print("Tracker initialization failed.", file=sys.stderr)
-        return None, None
-
-    print(f"Tracker initialized with ROI {bbox}.")
-    return tracker, bbox
+    print(f"Tracker initialized with ROI {initialized_bbox}.")
+    return tracker, initialized_bbox
 
 
 def main() -> int:
@@ -1232,6 +1557,9 @@ def main() -> int:
     parser.add_argument("--capture-dir", type=Path, default=Path("captures"), help="Directory used to store capture images")
     parser.add_argument("--capture-log-file", type=Path, help="Optional CSV output path for capture metadata. Defaults to <capture-dir>/capture_records.csv")
     parser.add_argument("--capture-cooldown", type=float, default=2.0, help="Minimum seconds between automatic captures")
+    parser.add_argument("--frame-min-mean-luma", type=float, default=DEFAULT_FRAME_MIN_MEAN_LUMA, help="Reject evidence frames darker than this mean luma")
+    parser.add_argument("--frame-max-mean-luma", type=float, default=DEFAULT_FRAME_MAX_MEAN_LUMA, help="Reject evidence frames brighter than this mean luma")
+    parser.add_argument("--frame-min-luma-stddev", type=float, default=DEFAULT_FRAME_MIN_LUMA_STDDEV, help="Reject evidence frames with less visual variation than this luma standard deviation")
     parser.add_argument(
         "--policy-capture-enable",
         action=argparse.BooleanOptionalAction,
@@ -1269,7 +1597,29 @@ def main() -> int:
     parser.add_argument("--yolo-class-ids", default="4,14", help="Comma-separated YOLO class ids to accept, for example `4,14` for COCO airplane/bird or `0` for a drone model")
     parser.add_argument("--yolo-class-names", default="4:airplane,14:bird", help="Comma-separated class mapping, for example `4:airplane,14:bird` or `0:drone`")
     parser.add_argument("--yolo-model-label", default="", help="Dashboard label for the active YOLO model")
-    parser.add_argument("--yolo-score-threshold", type=float, default=0.25, help="Minimum class score for YOLO sidecar detections")
+    parser.add_argument(
+        "--yolo-score-threshold",
+        type=float,
+        default=DEFAULT_YOLO_SCORE_THRESHOLD,
+        help="Minimum class score for YOLO sidecar detections",
+    )
+    parser.add_argument(
+        "--yolo-intra-op-threads",
+        type=int,
+        default=DEFAULT_YOLO_INTRA_OP_THREADS,
+        help="CPU threads used inside one ONNX inference",
+    )
+    parser.add_argument(
+        "--yolo-auto-lock",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Automatically initialize the tracker from stable YOLO detections",
+    )
+    parser.add_argument("--yolo-auto-lock-confirmations", type=int, default=2, help="Consecutive detector updates required before automatic lock")
+    parser.add_argument("--yolo-auto-lock-min-score", type=float, default=0.45, help="Minimum YOLO score allowed to start automatic tracking")
+    parser.add_argument("--yolo-auto-lock-iou", type=float, default=DEFAULT_AUTO_LOCK_IOU_THRESHOLD, help="Minimum overlap used to confirm the same target across detector updates")
+    parser.add_argument("--yolo-auto-lock-margin-ratio", type=float, default=0.12, help="Context margin added around the YOLO box before tracker initialization")
+    parser.add_argument("--yolo-auto-lock-cooldown-s", type=float, default=1.0, help="Delay before automatic relock after tracker loss or reset")
     parser.add_argument("--status-write-interval", type=float, default=0.25, help="Minimum seconds between two status JSON writes while state stays unchanged")
     parser.add_argument("--session-file", type=Path, default=Path("captures/latest_test_session.json"), help="JSON file written by track_injector with the current test session")
     parser.add_argument("--session-log-dir", type=Path, default=Path("captures/session_logs"), help="Directory used to store per-session JSONL timeline logs")
@@ -1320,6 +1670,8 @@ def main() -> int:
 
     cap: Any | None = None
     first_frame: Any | None = None
+    first_frame_quality = FrameQuality(False, 0.0, 0.0, "FRAME_MISSING")
+    last_probe_quality = first_frame_quality
     source_probe_attempts = 0
     active_backend = "auto"
     backend_candidates = capture_backend_candidates(args.backend, args.backend_fallback)
@@ -1328,10 +1680,19 @@ def main() -> int:
         if not candidate_cap.isOpened():
             candidate_cap.release()
             continue
-        source_ready, candidate_first_frame, candidate_attempts = warmup_source_frame(candidate_cap, args.source_warmup_frames)
+        source_ready, candidate_first_frame, candidate_attempts, candidate_quality = warmup_source_frame(
+            cv,
+            candidate_cap,
+            args.source_warmup_frames,
+            min_mean_luma=args.frame_min_mean_luma,
+            max_mean_luma=args.frame_max_mean_luma,
+            min_luma_stddev=args.frame_min_luma_stddev,
+        )
+        last_probe_quality = candidate_quality
         if source_ready and candidate_first_frame is not None:
             cap = candidate_cap
             first_frame = candidate_first_frame
+            first_frame_quality = candidate_quality
             source_probe_attempts = candidate_attempts
             active_backend = candidate_backend
             break
@@ -1340,7 +1701,11 @@ def main() -> int:
 
     if cap is None or first_frame is None:
         attempted_text = ", ".join(backend_candidates)
-        print(f"Failed to open/read video source `{args.source}`. attempted_backends={attempted_text}", file=sys.stderr)
+        print(
+            f"Failed to open/read a usable video source `{args.source}`. "
+            f"attempted_backends={attempted_text}, frame_quality={last_probe_quality.reason}",
+            file=sys.stderr,
+        )
         print(
             "Next step: run `python tools/usb_camera_readiness_check_USB摄像头就绪核对.py` "
             "and use its `recommended_command`.",
@@ -1366,6 +1731,14 @@ def main() -> int:
     last_capture_record: CaptureRecord | None = None
     last_vision_signature: tuple[str, int, int, int, int, int] | None = None
     last_capture_hint_time = 0.0
+    lock_source = "NONE"
+    auto_lock_score = 0.0
+    auto_lock_class_name = "none"
+    auto_lock_candidate: AutoLockDetection | None = None
+    auto_lock_candidate_count = 0
+    last_auto_lock_detector_revision = -1
+    last_auto_lock_attempt_time = 0.0
+    invalid_frame_streak = 0
     last_node_signals = load_node_runtime_signals(args.node_status_file)
     current_gimbal_signals = load_gimbal_signals(args.node_status_file)
     vision_reporter = VisionStateReporter(debounce_frames=3)
@@ -1378,6 +1751,7 @@ def main() -> int:
         class_names=parse_yolo_class_names(args.yolo_class_names),
         model_label=args.yolo_model_label or args.yolo_model.stem,
         score_threshold=args.yolo_score_threshold,
+        intra_op_threads=args.yolo_intra_op_threads,
     )
     pending_policy_captures: list[dict[str, object]] = []
 
@@ -1416,7 +1790,10 @@ def main() -> int:
         "Sidecar detector: "
         f"enabled={int(bool(args.yolo_enabled))}, state={sidecar_detector.state}, "
         f"model={sidecar_detector.model_label}, classes={sidecar_detector.class_strategy}, "
-        f"threshold={sidecar_detector.score_threshold:.2f}, every_n={max(1, int(args.yolo_every_n_frames))}"
+        f"threshold={sidecar_detector.score_threshold:.2f}, every_n={max(1, int(args.yolo_every_n_frames))}, "
+        f"intra_op_threads={sidecar_detector.intra_op_threads}, "
+        f"auto_lock={int(bool(args.yolo_auto_lock))}, auto_min_score={max(0.0, float(args.yolo_auto_lock_min_score)):.2f}, "
+        f"auto_confirmations={max(1, int(args.yolo_auto_lock_confirmations))}"
     )
     source_width = 0
     source_height = 0
@@ -1428,10 +1805,12 @@ def main() -> int:
     source_fps = float(cap.get(cv.CAP_PROP_FPS) or 0.0)
     print(
         f"Source probe: ready=1, source={args.source}, frame={source_width}x{source_height}, "
-        f"fps={source_fps:.2f}, warmup_attempts={source_probe_attempts}"
+        f"fps={source_fps:.2f}, warmup_attempts={source_probe_attempts}, "
+        f"mean_luma={first_frame_quality.mean_luma:.2f}, luma_stddev={first_frame_quality.luma_stddev:.2f}, "
+        f"frame_quality={first_frame_quality.reason}"
     )
     print(
-        "Press `s` or SPACE to select a target. Press `c` to capture when locked. "
+        "YOLO auto-lock runs when enabled. Press `s` or SPACE for manual fallback. Press `c` to capture when locked. "
         "Auto-capture runs on new lock. Press `r` to reset. Press `q` to quit."
     )
 
@@ -1449,9 +1828,21 @@ def main() -> int:
                 return 1
 
             frame_index += 1
-            sidecar_detector.submit(frame_index, frame)
+            now = time.time()
+            frame_quality = evaluate_frame_quality(
+                cv,
+                frame,
+                min_mean_luma=args.frame_min_mean_luma,
+                max_mean_luma=args.frame_max_mean_luma,
+                min_luma_stddev=args.frame_min_luma_stddev,
+            )
+            if frame_quality.ready:
+                invalid_frame_streak = 0
+                sidecar_detector.submit(frame_index, frame)
+            else:
+                invalid_frame_streak += 1
 
-            if tracker is not None:
+            if tracker is not None and frame_quality.ready:
                 success, raw_bbox = tracker.update(frame)
                 if success:
                     current_bbox = normalize_bbox(raw_bbox)
@@ -1461,10 +1852,103 @@ def main() -> int:
                         tracker = None
                         current_bbox = None
                         current_state = VISION_LOST
+                        lock_source = "NONE"
+                        auto_lock_score = 0.0
+                        auto_lock_class_name = "none"
+                        last_auto_lock_attempt_time = now
                 else:
                     tracker = None
                     current_bbox = None
                     current_state = VISION_LOST
+                    lock_source = "NONE"
+                    auto_lock_score = 0.0
+                    auto_lock_class_name = "none"
+                    last_auto_lock_attempt_time = now
+            elif tracker is not None and invalid_frame_streak >= 3:
+                tracker = None
+                current_bbox = None
+                current_state = VISION_LOST
+                lock_source = "NONE"
+                auto_lock_score = 0.0
+                auto_lock_class_name = "none"
+                last_auto_lock_attempt_time = now
+
+            detector_state, detector_detections, detector_revision = sidecar_detector.latest()
+            if tracker is not None:
+                auto_lock_candidate = None
+                auto_lock_candidate_count = 0
+                last_auto_lock_detector_revision = detector_revision
+            elif detector_revision != last_auto_lock_detector_revision:
+                last_auto_lock_detector_revision = detector_revision
+                selected_detection = None
+                if detector_state == "READY_ONNX" and frame_quality.ready:
+                    selected_detection = select_auto_lock_detection(
+                        detector_detections,
+                        frame_width=int(frame.shape[1]),
+                        frame_height=int(frame.shape[0]),
+                        min_score=args.yolo_auto_lock_min_score,
+                        margin_ratio=args.yolo_auto_lock_margin_ratio,
+                    )
+                auto_lock_candidate, auto_lock_candidate_count = update_auto_lock_candidate(
+                    auto_lock_candidate,
+                    auto_lock_candidate_count,
+                    selected_detection,
+                    args.yolo_auto_lock_iou,
+                )
+
+            auto_lock_ready = (
+                bool(args.yolo_enabled)
+                and bool(args.yolo_auto_lock)
+                and tracker is None
+                and frame_quality.ready
+                and detector_state == "READY_ONNX"
+                and auto_lock_candidate is not None
+                and auto_lock_candidate_count >= max(1, int(args.yolo_auto_lock_confirmations))
+                and (now - last_auto_lock_attempt_time) >= max(0.0, float(args.yolo_auto_lock_cooldown_s))
+            )
+            if auto_lock_ready and auto_lock_candidate is not None:
+                last_auto_lock_attempt_time = now
+                tracker, current_bbox = initialize_tracker_from_bbox(
+                    cv,
+                    frame,
+                    active_tracker_name,
+                    auto_lock_candidate.bbox,
+                )
+                if tracker is not None and current_bbox is not None:
+                    current_state = VISION_LOCKED
+                    lock_source = "YOLO_AUTO"
+                    auto_lock_score = auto_lock_candidate.score
+                    auto_lock_class_name = auto_lock_candidate.class_name
+                    print(
+                        "VISION_AUTO_LOCK,"
+                        f"frame={frame_index},class={auto_lock_class_name},score={auto_lock_score:.3f},"
+                        f"bbox={current_bbox[0]},{current_bbox[1]},{current_bbox[2]},{current_bbox[3]},"
+                        f"confirmations={auto_lock_candidate_count},tracker={active_tracker_name.upper()}"
+                    )
+                    append_session_event(
+                        load_json_payload(args.session_file),
+                        args.session_log_dir,
+                        source="vision_bridge",
+                        event_type="vision_auto_locked",
+                        payload={
+                            "frame_index": frame_index,
+                            "class_name": auto_lock_class_name,
+                            "score": round(auto_lock_score, 3),
+                            "bbox_x": current_bbox[0],
+                            "bbox_y": current_bbox[1],
+                            "bbox_w": current_bbox[2],
+                            "bbox_h": current_bbox[3],
+                            "tracker_name": active_tracker_name.upper(),
+                            "detector_revision": detector_revision,
+                        },
+                    )
+                else:
+                    current_state = VISION_SEARCHING
+                    lock_source = "NONE"
+                    auto_lock_score = 0.0
+                    auto_lock_class_name = "none"
+                auto_lock_candidate = None
+                auto_lock_candidate_count = 0
 
             snapshot = build_snapshot(
                 frame_index=frame_index,
@@ -1474,8 +1958,13 @@ def main() -> int:
                 tracker_name=active_tracker_name,
                 frame_width=int(frame.shape[1]),
                 frame_height=int(frame.shape[0]),
+                lock_source=lock_source,
+                auto_lock_score=auto_lock_score,
+                auto_lock_class_name=auto_lock_class_name,
+                frame_quality=frame_quality,
             )
-            snapshot.detector_state, snapshot.yolo_detections = sidecar_detector.latest()
+            snapshot.detector_state = detector_state
+            snapshot.yolo_detections = detector_detections
             snapshot.detector_model_label, snapshot.detector_class_strategy = sidecar_detector.metadata()
             runtime_event_id, runtime_event_id_source = resolve_runtime_event_id(
                 args.event_id,
@@ -1504,6 +1993,11 @@ def main() -> int:
                         "center_x": snapshot.center_x,
                         "center_y": snapshot.center_y,
                         "tracker_name": snapshot.tracker_name,
+                        "lock_source": snapshot.lock_source,
+                        "auto_lock_score": round(snapshot.auto_lock_score, 3),
+                        "auto_lock_class_name": snapshot.auto_lock_class_name,
+                        "frame_content_ready": int(snapshot.frame_content_ready),
+                        "frame_quality_reason": snapshot.frame_quality_reason,
                     },
                 )
                 last_vision_signature = current_vision_signature
@@ -1650,7 +2144,7 @@ def main() -> int:
                     metadata_logger=capture_metadata_logger,
                 )
                 if record is None:
-                    print("Policy capture failed: could not write image file.", file=sys.stderr)
+                    print("Policy capture rejected by frame-quality guard or image write failed.", file=sys.stderr)
                 else:
                     last_auto_capture_time = now
                     last_capture_record = record
@@ -1702,7 +2196,7 @@ def main() -> int:
                     metadata_logger=capture_metadata_logger,
                 )
                 if record is None:
-                    print("Auto capture failed: could not write image file.", file=sys.stderr)
+                    print("Auto capture rejected by frame-quality guard or image write failed.", file=sys.stderr)
                 else:
                     last_auto_capture_time = now
                     last_capture_record = record
@@ -1760,6 +2254,12 @@ def main() -> int:
                 tracker = None
                 current_bbox = None
                 current_state = VISION_IDLE
+                lock_source = "NONE"
+                auto_lock_score = 0.0
+                auto_lock_class_name = "none"
+                auto_lock_candidate = None
+                auto_lock_candidate_count = 0
+                last_auto_lock_attempt_time = now
                 last_state = current_state
                 continue
             if key in (ord("c"), ord("C")):
@@ -1784,7 +2284,7 @@ def main() -> int:
                     metadata_logger=capture_metadata_logger,
                 )
                 if record is None:
-                    print("Capture failed: could not write image file.", file=sys.stderr)
+                    print("Capture rejected by frame-quality guard or image write failed.", file=sys.stderr)
                 else:
                     last_capture_record = record
                     append_session_event(
@@ -1821,6 +2321,14 @@ def main() -> int:
                 last_state = current_state
                 continue
             if key in (ord("s"), ord("S"), 32):
+                if not frame_quality.ready:
+                    print(
+                        f"Manual lock ignored: frame_quality={frame_quality.reason}, "
+                        f"mean_luma={frame_quality.mean_luma:.3f}, luma_stddev={frame_quality.luma_stddev:.3f}",
+                        file=sys.stderr,
+                    )
+                    last_state = current_state
+                    continue
                 current_state = VISION_SEARCHING
                 snapshot = build_snapshot(
                     frame_index=frame_index,
@@ -1830,15 +2338,24 @@ def main() -> int:
                     tracker_name=active_tracker_name,
                     frame_width=int(frame.shape[1]),
                     frame_height=int(frame.shape[0]),
+                    lock_source="MANUAL_PENDING",
+                    frame_quality=frame_quality,
                 )
-                snapshot.detector_state, snapshot.yolo_detections = sidecar_detector.latest()
+                snapshot.detector_state, snapshot.yolo_detections, _ = sidecar_detector.latest()
                 snapshot.detector_model_label, snapshot.detector_class_strategy = sidecar_detector.metadata()
                 print_snapshot(snapshot)
                 tracker, current_bbox = select_target_roi(cv, frame, active_tracker_name)
                 if tracker is not None and current_bbox is not None:
                     current_state = VISION_LOCKED
+                    lock_source = "MANUAL_ROI"
                 else:
                     current_state = VISION_IDLE
+                    lock_source = "NONE"
+                auto_lock_score = 0.0
+                auto_lock_class_name = "none"
+                auto_lock_candidate = None
+                auto_lock_candidate_count = 0
+                last_auto_lock_attempt_time = now
                 last_print_signature = None
 
             last_state = current_state

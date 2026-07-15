@@ -211,6 +211,96 @@ def classify_input(input_path: Path, label_column: str) -> list[dict[str, object
     return [features_from_group(key, group, label_column) for key, group in group_rows(rows).items()]
 
 
+def resolve_input_rows(
+    *,
+    input_path: Path | None,
+    use_mock: bool,
+    label_column: str,
+) -> tuple[list[dict[str, object]], str, str]:
+    if use_mock:
+        return mock_rows(), "mock", ""
+    if input_path is None:
+        return [], "NONE", "input_required"
+
+    source = input_path.as_posix()
+    if not input_path.exists():
+        return [], source, "input_not_found"
+    rows = classify_input(input_path, label_column)
+    if not rows:
+        return [], source, "no_real_tracks"
+    return rows, source, ""
+
+
+def remove_stale_classifier_artifacts(output_dir: Path, json_path: Path) -> list[str]:
+    candidates = {
+        json_path.with_suffix(".csv"),
+        output_dir / "multirotor_features.png",
+        output_dir / "multirotor_confusion_matrix.png",
+        output_dir / "multirotor_needs_labels.json",
+        output_dir / "multirotor_tree.png",
+        output_dir / "multirotor_tree_rules.txt",
+        output_dir / "multirotor_confusion_real.png",
+        output_dir / "multirotor_roc_real.png",
+        output_dir / "multirotor_rule_vs_model.png",
+        output_dir / "multirotor_training_predictions.csv",
+    }
+    failures: list[str] = []
+    for path in candidates:
+        try:
+            if path.is_file():
+                path.unlink()
+        except OSError:
+            failures.append(path.as_posix())
+    return sorted(failures)
+
+
+def write_input_failure_summary(
+    *,
+    output_dir: Path,
+    output_path: Path | None,
+    source: str,
+    error: str,
+    label_column: str,
+    min_accuracy: float,
+    min_recall: float,
+) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    json_path = output_path or (output_dir / "multirotor_classifier_summary.json")
+    cleanup_failures = remove_stale_classifier_artifacts(output_dir, json_path)
+    warnings = [error]
+    if cleanup_failures:
+        warnings.append("stale_output_cleanup_failed")
+    payload = {
+        "ok": False,
+        "error": error,
+        "source": source,
+        "row_count": 0,
+        "has_labels": False,
+        "needs_labels": True,
+        "warnings": warnings,
+        "label_column": label_column,
+        "feature_columns": FEATURE_COLUMNS,
+        "rows": [],
+        "confusion_matrix": {},
+        "metrics": {},
+        "acceptance": {
+            "checked": True,
+            "passed": False,
+            "min_accuracy": min_accuracy,
+            "min_recall": min_recall,
+            "failures": [error],
+        },
+        "feature_plot": "",
+        "confusion_plot": "",
+        "training": {},
+        "cleanup_failures": cleanup_failures,
+        "note": "Real input contains no usable tracks. Synthetic data is available only with --mock.",
+    }
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return json_path
+
+
 def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
     if not rows:
         return
@@ -509,8 +599,9 @@ def train_model(rows: list[dict[str, object]], output_dir: Path, model_path: Pat
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Flytotal v5.2 multirotor feature classifier")
-    parser.add_argument("--mock", action="store_true")
-    parser.add_argument("--input", type=Path, default=None, help="CSV file or directory with timestamp_ms,x_mm,y_mm,vx_mm_s,vy_mm_s,label")
+    source_group = parser.add_mutually_exclusive_group(required=True)
+    source_group.add_argument("--mock", action="store_true", help="Use the synthetic classifier baseline explicitly")
+    source_group.add_argument("--input", type=Path, default=None, help="CSV file or directory with timestamp_ms,x_mm,y_mm,vx_mm_s,vy_mm_s,label")
     parser.add_argument("--label-column", default="label")
     parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
     parser.add_argument("--output", type=Path, default=None, help="Legacy JSON output path")
@@ -520,16 +611,24 @@ def main() -> int:
     parser.add_argument("--model-output", type=Path, default=Path("models/multirotor_tree.pkl"), help="Decision tree model output path")
     args = parser.parse_args()
 
-    if args.input and not args.mock:
-        rows = classify_input(args.input, args.label_column)
-        source = args.input.as_posix()
-    else:
-        rows = mock_rows()
-        source = "mock"
-
-    if not rows:
-        rows = mock_rows()
-        source = f"{source}:fallback_mock"
+    rows, source, input_error = resolve_input_rows(
+        input_path=args.input,
+        use_mock=args.mock,
+        label_column=args.label_column,
+    )
+    if input_error:
+        json_path = write_input_failure_summary(
+            output_dir=args.output_dir,
+            output_path=args.output,
+            source=source,
+            error=input_error,
+            label_column=args.label_column,
+            min_accuracy=float(args.min_accuracy),
+            min_recall=float(args.min_recall),
+        )
+        print(f"ERROR,{input_error},source={source}")
+        print(json_path.as_posix())
+        return 3
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     json_path = args.output or (args.output_dir / "multirotor_classifier_summary.json")
@@ -551,7 +650,7 @@ def main() -> int:
         confusion_plot = ""
 
     acceptance = build_acceptance(has_labels, metrics, float(args.min_accuracy), float(args.min_recall))
-    needs_labels = not has_labels or source.endswith("fallback_mock") or source == "mock"
+    needs_labels = not has_labels or source == "mock"
     warnings: list[str] = []
     if needs_labels:
         warnings.append("current_result_is_synthetic_or_unlabeled_baseline_true_model_needs_real_data")

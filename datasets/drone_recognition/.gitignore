@@ -1,6 +1,9 @@
 raw/
 videos/
 images/
+labels/
+drone.yaml
+dataset_summary.json
 real_tracks*.csv
 field_tracks*.csv
 *.mp4

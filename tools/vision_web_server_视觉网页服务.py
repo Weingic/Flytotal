@@ -16,6 +16,9 @@ from urllib.parse import parse_qs, quote, urlparse
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DASHBOARD_FILE = Path(__file__).with_name("vision_dashboard.html")
 MIN_REAL_EPOCH_MS = 946684800000  # 2000-01-01
+JSON_READ_RETRY_COUNT = 6
+JSON_READ_RETRY_DELAY_S = 0.03
+WEB_EVIDENCE_CONTRACT_VERSION = 2
 
 # ---------------------------------------------------------------------------
 # 证据链 hash（与 evidence_hash_证据链哈希.py 保持同步）
@@ -114,11 +117,26 @@ def load_capture_records(capture_log_file: Path, capture_dir: Path) -> list[dict
     return records
 
 
-def load_json_file(path: Path) -> dict[str, object]:
+def load_json_file(
+    path: Path,
+    *,
+    retry_count: int = JSON_READ_RETRY_COUNT,
+    retry_delay_s: float = JSON_READ_RETRY_DELAY_S,
+) -> dict[str, object]:
     if not path.exists():
         return {"ok": True, "available": False}
+    attempts = max(1, int(retry_count))
+    text = ""
+    for attempt in range(attempts):
+        try:
+            text = path.read_text(encoding="utf-8")
+            break
+        except (PermissionError, OSError):
+            if attempt >= attempts - 1:
+                return {"ok": False, "available": False, "error": "read_denied"}
+            time.sleep(max(0.0, float(retry_delay_s)))
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(text)
     except json.JSONDecodeError:
         return {"ok": False, "available": False, "error": "invalid_json"}
     payload["ok"] = True
@@ -154,6 +172,87 @@ def safe_float(value: object, default: float = 0.0) -> float:
         return float(value or 0.0)
     except (TypeError, ValueError):
         return default
+
+
+def refresh_vision_runtime_flags(
+    payload: dict[str, object],
+    offline_timeout_ms: int,
+) -> dict[str, object]:
+    normalized = dict(payload)
+    now_ms = int(time.time() * 1000)
+    timestamp_ms = safe_int(normalized.get("timestamp_ms", 0), 0)
+    stale_age_ms = max(0, now_ms - max(0, timestamp_ms)) if timestamp_ms > 0 else now_ms
+    available = bool(normalized.get("available", bool(normalized))) and bool(normalized.get("ok", True))
+    online = 1 if (
+        available
+        and timestamp_ms >= MIN_REAL_EPOCH_MS
+        and (max(0, offline_timeout_ms) <= 0 or stale_age_ms <= max(0, offline_timeout_ms))
+    ) else 0
+    normalized["vision_runtime_online"] = online
+    normalized["vision_status_stale_age_ms"] = stale_age_ms
+    normalized["vision_status_timestamp_ms"] = timestamp_ms
+    return normalized
+
+
+def merge_vision_runtime_fields(
+    node_payload: dict[str, object],
+    vision_payload: dict[str, object],
+    offline_timeout_ms: int = 5000,
+) -> dict[str, object]:
+    merged = dict(node_payload)
+    runtime = refresh_vision_runtime_flags(vision_payload, offline_timeout_ms)
+    vision_online = safe_int(runtime.get("vision_runtime_online", 0), 0)
+    merged["vision_runtime_online"] = vision_online
+    merged["vision_status_stale_age_ms"] = safe_int(runtime.get("vision_status_stale_age_ms", 0), 0)
+    merged["vision_status_timestamp_ms"] = safe_int(runtime.get("vision_status_timestamp_ms", 0), 0)
+    if vision_online != 1:
+        merged["detector_state"] = "OFFLINE"
+        merged["detector_ready"] = 0
+        merged["yolo_detections"] = []
+        merged["lock_source"] = "NONE"
+        merged["auto_lock_score"] = 0.0
+        merged["auto_lock_class_name"] = "none"
+        merged["frame_content_ready"] = 0
+        merged["frame_mean_luma"] = 0.0
+        merged["frame_luma_stddev"] = 0.0
+        merged["frame_quality_reason"] = "VISION_STATUS_STALE"
+        merged["source_ready"] = 0
+        merged["vision_chain_ready"] = 0
+        merged["active_tracker_name"] = "NONE"
+        merged["last_capture_reason"] = ""
+        merged["last_capture_file"] = ""
+        merged["last_capture_timestamp_ms"] = 0
+        merged["vision_event_id"] = "NONE"
+        merged["vision_event_id_source"] = "none"
+        return merged
+
+    vision_payload = runtime
+    merged["vision_state"] = str(vision_payload.get("vision_state", merged.get("vision_state", "NONE")) or "NONE")
+    merged["vision_locked"] = safe_int(vision_payload.get("vision_locked", merged.get("vision_locked", 0)), 0)
+    merged["vision_confidence"] = safe_float(vision_payload.get("vision_confidence", merged.get("vision_confidence", 0.0)), 0.0)
+    merged["bbox_stability_score"] = safe_float(vision_payload.get("bbox_stability_score", merged.get("bbox_stability_score", 0.0)), 0.0)
+    merged["tracker_state"] = str(vision_payload.get("tracker_state", merged.get("tracker_state", "LOST")) or "LOST")
+    merged["detector_state"] = str(vision_payload.get("detector_state", "DISABLED") or "DISABLED")
+    merged["detector_model_label"] = str(vision_payload.get("detector_model_label", "none") or "none")
+    merged["detector_class_strategy"] = str(vision_payload.get("detector_class_strategy", "none") or "none")
+    merged["detector_ready"] = safe_int(vision_payload.get("detector_ready", 0), 0)
+    merged["yolo_detections"] = vision_payload.get("yolo_detections", []) if isinstance(vision_payload.get("yolo_detections", []), list) else []
+    merged["lock_source"] = str(vision_payload.get("lock_source", "NONE") or "NONE")
+    merged["auto_lock_score"] = safe_float(vision_payload.get("auto_lock_score", 0.0), 0.0)
+    merged["auto_lock_class_name"] = str(vision_payload.get("auto_lock_class_name", "none") or "none")
+    merged["frame_content_ready"] = safe_int(vision_payload.get("frame_content_ready", 0), 0)
+    merged["frame_mean_luma"] = safe_float(vision_payload.get("frame_mean_luma", 0.0), 0.0)
+    merged["frame_luma_stddev"] = safe_float(vision_payload.get("frame_luma_stddev", 0.0), 0.0)
+    merged["frame_quality_reason"] = str(vision_payload.get("frame_quality_reason", "UNMEASURED") or "UNMEASURED")
+    merged["source_ready"] = safe_int(vision_payload.get("source_ready", 0), 0)
+    merged["vision_chain_ready"] = safe_int(vision_payload.get("vision_chain_ready", 0), 0)
+    merged["active_tracker_name"] = str(vision_payload.get("active_tracker_name", "NONE") or "NONE")
+    merged["last_capture_reason"] = str(vision_payload.get("last_capture_reason", "") or "")
+    merged["last_capture_file"] = str(vision_payload.get("last_capture_file", "") or "")
+    merged["last_capture_timestamp_ms"] = safe_int(vision_payload.get("last_capture_timestamp_ms", 0), 0)
+    merged["vision_event_id"] = normalize_event_id(vision_payload.get("event_id", "NONE")) or "NONE"
+    merged["vision_event_id_source"] = str(vision_payload.get("event_id_source", "none") or "none")
+    return merged
 
 
 def refresh_node_runtime_flags(payload: dict[str, object], offline_timeout_ms: int) -> dict[str, object]:
@@ -291,6 +390,22 @@ def build_node_brief_payload(
         "is_multirotor_like": safe_int(status_payload.get("is_multirotor_like", 0)),
         "multirotor_score": safe_float(status_payload.get("multirotor_score", 0.0), 0.0),
         "cloud_online": safe_int(status_payload.get("cloud_online", 0)),
+        "cloud_contract_version": safe_int(status_payload.get("cloud_contract_version", 0)),
+        "cloud_event_echo_required": safe_int(status_payload.get("cloud_event_echo_required", 0)),
+        "cloud_test_no_apply": safe_int(status_payload.get("cloud_test_no_apply", 0)),
+        "cloud_test_validated": safe_int(status_payload.get("cloud_test_validated", 0)),
+        "cloud_test_result_no_apply": safe_int(status_payload.get("cloud_test_result_no_apply", 0)),
+        "cloud_test_response_event_id": str(status_payload.get("cloud_test_response_event_id", "NONE") or "NONE"),
+        "cloud_result_ok": safe_int(status_payload.get("cloud_result_ok", 0)),
+        "cloud_result_source": str(status_payload.get("cloud_result_source", "NONE") or "NONE"),
+        "cloud_request_event_id": str(status_payload.get("cloud_request_event_id", "NONE") or "NONE"),
+        "cloud_expected_event_id": str(status_payload.get("cloud_expected_event_id", "NONE") or "NONE"),
+        "cloud_response_event_id": str(status_payload.get("cloud_response_event_id", "NONE") or "NONE"),
+        "cloud_result_http_status": safe_int(status_payload.get("cloud_result_http_status", 0)),
+        "cloud_result_esp_error": safe_int(status_payload.get("cloud_result_esp_error", 0)),
+        "cloud_result_latency_ms": safe_int(status_payload.get("cloud_result_latency_ms", 0)),
+        "cloud_result_error": str(status_payload.get("cloud_result_error", "NONE") or "NONE"),
+        "cloud_result_received_ms": safe_int(status_payload.get("cloud_result_received_ms", 0)),
         "cloud_threat_level": str(status_payload.get("cloud_threat_level", "NONE") or "NONE"),
         "cloud_alert_text": str(status_payload.get("cloud_alert_text", "NONE") or "NONE"),
         "cloud_action": str(status_payload.get("cloud_action", "NONE") or "NONE"),
@@ -456,12 +571,158 @@ def pick_capture_path(record: dict[str, object], captures: list[dict[str, object
     return "NONE"
 
 
+def _meaningful_field(value: object) -> bool:
+    text = str(value if value is not None else "").strip()
+    return bool(text) and text.upper() not in {"NONE", "NULL", "N/A"}
+
+
+def _event_cloud_field(
+    event_record: dict[str, object],
+    node_status: dict[str, object],
+    event_id: str,
+    key: str,
+    default: object = "NONE",
+) -> object:
+    value = event_record.get(key)
+    if _meaningful_field(value):
+        return value
+
+    status_source_event_id = normalize_event_id(node_status.get("cloud_command_source_event_id", ""))
+    if event_id != "NONE" and status_source_event_id == event_id:
+        status_value = node_status.get(key)
+        if _meaningful_field(status_value) or isinstance(default, (int, float)):
+            return status_value
+
+    return default
+
+
+def _canonical_capture_path(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return resolve_path(Path(text)).resolve().as_posix().casefold()
+    except (OSError, ValueError):
+        return ""
+
+
+def _capture_file_sha256(value: object) -> tuple[str, int]:
+    text = str(value or "").strip()
+    if not text:
+        return "", 0
+    try:
+        path = resolve_path(Path(text)).resolve()
+        if not path.is_file():
+            return "", 0
+        digest = hashlib.sha256()
+        with path.open("rb") as fp:
+            for block in iter(lambda: fp.read(65536), b""):
+                digest.update(block)
+        return digest.hexdigest(), path.stat().st_size
+    except OSError:
+        return "", 0
+
+
+def is_physical_camera_source(value: object) -> bool:
+    if isinstance(value, int):
+        return value >= 0
+    source = str(value if value is not None else "").strip()
+    return source.isdigit() and int(source) >= 0
+
+
+def build_vision_evidence_v1(
+    captures: list[dict[str, object]],
+    vision_status: dict[str, object] | None,
+) -> dict[str, object]:
+    capture = captures[0] if captures and isinstance(captures[0], dict) else {}
+    status = vision_status if isinstance(vision_status, dict) else {}
+    capture_path = str(capture.get("file_path", "") or "").strip()
+    capture_event_id = normalize_event_id(capture.get("event_id", "NONE")) or "NONE"
+    status_event_id = normalize_event_id(status.get("event_id", "NONE")) or "NONE"
+    path_match = bool(
+        capture_path
+        and _canonical_capture_path(capture_path)
+        and _canonical_capture_path(capture_path) == _canonical_capture_path(status.get("last_capture_file", ""))
+    )
+    event_match = (
+        capture_event_id == "NONE"
+        or status_event_id == "NONE"
+        or capture_event_id == status_event_id
+    )
+    status_match = path_match and event_match
+    capture_sha256, capture_bytes = _capture_file_sha256(capture_path)
+    declared_capture_hash = str(capture.get("capture_sha256", "") or "").strip().lower()
+    if len(declared_capture_hash) == 64 and all(ch in "0123456789abcdef" for ch in declared_capture_hash):
+        capture_sha256 = declared_capture_hash
+        capture_bytes = safe_int(capture.get("capture_bytes", capture_bytes), capture_bytes)
+
+    lock_source = str(status.get("lock_source", "UNKNOWN") or "UNKNOWN") if status_match else "UNKNOWN"
+    source = str(status.get("source", "") or "").strip() if status_match else ""
+    frame_content_ready = safe_int(status.get("frame_content_ready", 0), 0) if status_match else 0
+    frame_quality_reason = str(status.get("frame_quality_reason", "UNVERIFIED") or "UNVERIFIED") if status_match else "UNVERIFIED"
+    if not capture:
+        evidence_quality = "NO_CAPTURE"
+    elif not status_match:
+        evidence_quality = "CAPTURE_ONLY"
+    elif frame_content_ready == 1 and frame_quality_reason == "OK" and capture_sha256:
+        evidence_quality = "VALID"
+    else:
+        evidence_quality = "INVALID_FRAME_METADATA"
+
+    evidence: dict[str, object] = {
+        "schema_version": "vision_evidence_v1",
+        "available": int(bool(capture)),
+        "evidence_quality": evidence_quality,
+        "status_capture_match": int(status_match),
+        "capture_path": capture_path or "NONE",
+        "capture_sha256": capture_sha256 or "NONE",
+        "capture_bytes": capture_bytes,
+        "capture_timestamp_ms": safe_int(capture.get("timestamp_ms", 0), 0),
+        "capture_reason": str(capture.get("capture_reason", "NONE") or "NONE"),
+        "capture_event_id": capture_event_id,
+        "tracker_name": str(capture.get("tracker_name", "NONE") or "NONE"),
+        "bbox_x": safe_int(capture.get("bbox_x", 0), 0),
+        "bbox_y": safe_int(capture.get("bbox_y", 0), 0),
+        "bbox_w": safe_int(capture.get("bbox_w", 0), 0),
+        "bbox_h": safe_int(capture.get("bbox_h", 0), 0),
+        "lock_source": lock_source,
+        "automatic_lock": int(lock_source == "YOLO_AUTO"),
+        "auto_lock_score": round(safe_float(status.get("auto_lock_score", 0.0), 0.0), 3) if status_match else 0.0,
+        "auto_lock_class_name": str(status.get("auto_lock_class_name", "none") or "none") if status_match else "none",
+        "detector_state": str(status.get("detector_state", "UNVERIFIED") or "UNVERIFIED") if status_match else "UNVERIFIED",
+        "detector_model_label": str(status.get("detector_model_label", "none") or "none") if status_match else "none",
+        "source": source or "NONE",
+        "physical_camera_source": int(status_match and is_physical_camera_source(source)),
+        "capture_backend": str(status.get("capture_backend", "UNKNOWN") or "UNKNOWN") if status_match else "UNKNOWN",
+        "vision_confidence": round(safe_float(status.get("vision_confidence", 0.0), 0.0), 3) if status_match else 0.0,
+        "bbox_stability_score": round(safe_float(status.get("bbox_stability_score", 0.0), 0.0), 3) if status_match else 0.0,
+        "frame_width": safe_int(status.get("frame_width", 0), 0) if status_match else 0,
+        "frame_height": safe_int(status.get("frame_height", 0), 0) if status_match else 0,
+        "yolo_detections": status.get("yolo_detections", []) if status_match and isinstance(status.get("yolo_detections", []), list) else [],
+        "frame_content_ready": frame_content_ready,
+        "frame_mean_luma": round(safe_float(status.get("frame_mean_luma", 0.0), 0.0), 3) if status_match else 0.0,
+        "frame_luma_stddev": round(safe_float(status.get("frame_luma_stddev", 0.0), 0.0), 3) if status_match else 0.0,
+        "frame_quality_reason": frame_quality_reason,
+        "vision_event_id": status_event_id if status_match else "NONE",
+        "vision_event_id_source": str(status.get("event_id_source", "none") or "none") if status_match else "none",
+    }
+    hash_fields = list(evidence.keys())
+    canonical = json.dumps(evidence, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    evidence["vision_evidence_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    evidence["hash_fields"] = hash_fields
+    evidence["hash_algorithm"] = "sha256"
+    return evidence
+
+
 def build_event_object_v1(
     event_record: dict[str, object] | None,
     captures: list[dict[str, object]],
+    node_status: dict[str, object] | None = None,
+    vision_status: dict[str, object] | None = None,
 ) -> dict[str, object]:
     if not isinstance(event_record, dict):
         return {}
+    status_snapshot = node_status if isinstance(node_status, dict) else {}
     event_id = normalize_event_id(event_record.get("event_id", "")) or "NONE"
     node_id = str(event_record.get("node_id", event_record.get("source_node", "NONE")) or "NONE").strip() or "NONE"
     track_id = safe_int(event_record.get("track_id", 0), 0)
@@ -524,6 +785,76 @@ def build_event_object_v1(
     # 风险来源标志 + wl_status（用于证据 hash）
     reason_flags = str(event_record.get("reason_flags", trigger_flags) or "NONE").strip() or "NONE"
     wl_status = whitelist_status  # 对齐 evidence_hash 字段名
+    cloud_online = safe_int(_event_cloud_field(event_record, status_snapshot, event_id, "cloud_online", 0), 0)
+    cloud_contract_version = safe_int(
+        _event_cloud_field(event_record, status_snapshot, event_id, "cloud_contract_version", 0),
+        0,
+    )
+    cloud_event_echo_required = safe_int(
+        _event_cloud_field(event_record, status_snapshot, event_id, "cloud_event_echo_required", 0),
+        0,
+    )
+    cloud_test_no_apply = safe_int(
+        _event_cloud_field(event_record, status_snapshot, event_id, "cloud_test_no_apply", 0),
+        0,
+    )
+    cloud_test_validated = safe_int(
+        _event_cloud_field(event_record, status_snapshot, event_id, "cloud_test_validated", 0),
+        0,
+    )
+    cloud_test_result_no_apply = safe_int(
+        _event_cloud_field(event_record, status_snapshot, event_id, "cloud_test_result_no_apply", 0),
+        0,
+    )
+    cloud_test_response_event_id = normalize_event_id(
+        _event_cloud_field(event_record, status_snapshot, event_id, "cloud_test_response_event_id", "NONE")
+    ) or "NONE"
+    cloud_result_ok = safe_int(_event_cloud_field(event_record, status_snapshot, event_id, "cloud_result_ok", 0), 0)
+    cloud_result_source = str(
+        _event_cloud_field(event_record, status_snapshot, event_id, "cloud_result_source", "NONE") or "NONE"
+    ).strip() or "NONE"
+    cloud_request_event_id = normalize_event_id(
+        _event_cloud_field(event_record, status_snapshot, event_id, "cloud_request_event_id", "NONE")
+    ) or "NONE"
+    cloud_expected_event_id = normalize_event_id(
+        _event_cloud_field(event_record, status_snapshot, event_id, "cloud_expected_event_id", "NONE")
+    ) or "NONE"
+    cloud_response_event_id = normalize_event_id(
+        _event_cloud_field(event_record, status_snapshot, event_id, "cloud_response_event_id", "NONE")
+    ) or "NONE"
+    cloud_result_http_status = safe_int(
+        _event_cloud_field(event_record, status_snapshot, event_id, "cloud_result_http_status", 0),
+        0,
+    )
+    cloud_result_esp_error = safe_int(
+        _event_cloud_field(event_record, status_snapshot, event_id, "cloud_result_esp_error", 0),
+        0,
+    )
+    cloud_result_latency_ms = safe_int(
+        _event_cloud_field(event_record, status_snapshot, event_id, "cloud_result_latency_ms", 0),
+        0,
+    )
+    cloud_result_error = str(
+        _event_cloud_field(event_record, status_snapshot, event_id, "cloud_result_error", "NONE") or "NONE"
+    ).strip() or "NONE"
+    cloud_result_received_ms = safe_int(
+        _event_cloud_field(event_record, status_snapshot, event_id, "cloud_result_received_ms", 0),
+        0,
+    )
+    cloud_threat_level = str(_event_cloud_field(event_record, status_snapshot, event_id, "cloud_threat_level", "NONE") or "NONE").strip() or "NONE"
+    cloud_alert_text = str(_event_cloud_field(event_record, status_snapshot, event_id, "cloud_alert_text", "NONE") or "NONE").strip() or "NONE"
+    cloud_action = str(_event_cloud_field(event_record, status_snapshot, event_id, "cloud_action", "NONE") or "NONE").strip() or "NONE"
+    cloud_command_type = str(_event_cloud_field(event_record, status_snapshot, event_id, "cloud_command_type", "NONE") or "NONE").strip() or "NONE"
+    cloud_command_effect = str(_event_cloud_field(event_record, status_snapshot, event_id, "cloud_command_effect", "NONE") or "NONE").strip() or "NONE"
+    cloud_command_applied = safe_int(_event_cloud_field(event_record, status_snapshot, event_id, "cloud_command_applied", 0), 0)
+    cloud_command_source_event_id = normalize_event_id(
+        _event_cloud_field(event_record, status_snapshot, event_id, "cloud_command_source_event_id", "NONE")
+    ) or "NONE"
+    cloud_command_reason = str(_event_cloud_field(event_record, status_snapshot, event_id, "cloud_command_reason", "NONE") or "NONE").strip() or "NONE"
+    cloud_command_applied_ms = safe_int(_event_cloud_field(event_record, status_snapshot, event_id, "cloud_command_applied_ms", 0), 0)
+    cloud_error = str(_event_cloud_field(event_record, status_snapshot, event_id, "cloud_error", "NONE") or "NONE").strip() or "NONE"
+    cloud_last_update_ms = safe_int(_event_cloud_field(event_record, status_snapshot, event_id, "cloud_last_update_ms", 0), 0)
+    vision_evidence = build_vision_evidence_v1(captures, vision_status)
 
     return {
         "schema_version": "event_object_v1",
@@ -561,6 +892,74 @@ def build_event_object_v1(
         "y": round(y, 2),
         "capture_path": capture_path,
         "event_state": event_state,
+        "cloud_online": cloud_online,
+        "cloud_contract_version": cloud_contract_version,
+        "cloud_event_echo_required": cloud_event_echo_required,
+        "cloud_test_no_apply": cloud_test_no_apply,
+        "cloud_test_validated": cloud_test_validated,
+        "cloud_test_result_no_apply": cloud_test_result_no_apply,
+        "cloud_test_response_event_id": cloud_test_response_event_id,
+        "cloud_result_ok": cloud_result_ok,
+        "cloud_result_source": cloud_result_source,
+        "cloud_request_event_id": cloud_request_event_id,
+        "cloud_expected_event_id": cloud_expected_event_id,
+        "cloud_response_event_id": cloud_response_event_id,
+        "cloud_result_http_status": cloud_result_http_status,
+        "cloud_result_esp_error": cloud_result_esp_error,
+        "cloud_result_latency_ms": cloud_result_latency_ms,
+        "cloud_result_error": cloud_result_error,
+        "cloud_result_received_ms": cloud_result_received_ms,
+        "cloud_threat_level": cloud_threat_level,
+        "cloud_alert_text": cloud_alert_text,
+        "cloud_action": cloud_action,
+        "cloud_command_type": cloud_command_type,
+        "cloud_command_effect": cloud_command_effect,
+        "cloud_command_applied": cloud_command_applied,
+        "cloud_command_source_event_id": cloud_command_source_event_id,
+        "cloud_command_reason": cloud_command_reason,
+        "cloud_command_applied_ms": cloud_command_applied_ms,
+        "cloud_error": cloud_error,
+        "cloud_last_update_ms": cloud_last_update_ms,
+        "vision_lock_source": str(vision_evidence.get("lock_source", "UNKNOWN") or "UNKNOWN"),
+        "vision_automatic_lock": safe_int(vision_evidence.get("automatic_lock", 0), 0),
+        "vision_auto_lock_score": safe_float(vision_evidence.get("auto_lock_score", 0.0), 0.0),
+        "vision_auto_lock_class_name": str(vision_evidence.get("auto_lock_class_name", "none") or "none"),
+        "vision_frame_content_ready": safe_int(vision_evidence.get("frame_content_ready", 0), 0),
+        "vision_frame_quality_reason": str(vision_evidence.get("frame_quality_reason", "UNVERIFIED") or "UNVERIFIED"),
+        "vision_evidence_quality": str(vision_evidence.get("evidence_quality", "NO_CAPTURE") or "NO_CAPTURE"),
+        "vision_capture_sha256": str(vision_evidence.get("capture_sha256", "NONE") or "NONE"),
+        "vision_evidence_hash": str(vision_evidence.get("vision_evidence_hash", "NONE") or "NONE"),
+        "vision_evidence": vision_evidence,
+        "cloud_llm": {
+            "online": cloud_online,
+            "contract_version": cloud_contract_version,
+            "event_echo_required": cloud_event_echo_required,
+            "test_no_apply": cloud_test_no_apply,
+            "test_validated": cloud_test_validated,
+            "test_result_no_apply": cloud_test_result_no_apply,
+            "test_response_event_id": cloud_test_response_event_id,
+            "result_ok": cloud_result_ok,
+            "result_source": cloud_result_source,
+            "request_event_id": cloud_request_event_id,
+            "expected_event_id": cloud_expected_event_id,
+            "response_event_id": cloud_response_event_id,
+            "result_http_status": cloud_result_http_status,
+            "result_esp_error": cloud_result_esp_error,
+            "result_latency_ms": cloud_result_latency_ms,
+            "result_error": cloud_result_error,
+            "result_received_ms": cloud_result_received_ms,
+            "threat_level": cloud_threat_level,
+            "alert_text": cloud_alert_text,
+            "action": cloud_action,
+            "command_type": cloud_command_type,
+            "command_effect": cloud_command_effect,
+            "command_applied": cloud_command_applied,
+            "source_event_id": cloud_command_source_event_id,
+            "reason": cloud_command_reason,
+            "applied_ms": cloud_command_applied_ms,
+            "error": cloud_error,
+            "last_update_ms": cloud_last_update_ms,
+        },
     }
 
 
@@ -729,6 +1128,8 @@ def build_node_event_detail_payload(
     node_events_file: Path,
     capture_log_file: Path,
     capture_dir: Path,
+    node_status_file: Path | None = None,
+    vision_status_file: Path | None = None,
     event_id: str = "",
     capture_limit: int = 10,
     capture_fallback_window_ms: int = 8000,
@@ -783,7 +1184,9 @@ def build_node_event_detail_payload(
         capture_fallback_window_ms=capture_fallback_window_ms,
         capture_match_mode=capture_match_mode,
     )
-    event_object_v1 = build_event_object_v1(selected_event, captures)
+    node_status = load_json_file(node_status_file) if isinstance(node_status_file, Path) else {}
+    vision_status = load_json_file(vision_status_file) if isinstance(vision_status_file, Path) else {}
+    event_object_v1 = build_event_object_v1(selected_event, captures, node_status, vision_status)
 
     return {
         "ok": True,
@@ -792,6 +1195,8 @@ def build_node_event_detail_payload(
         "event_id": selected_event_id or "NONE",
         "event": selected_event,
         "event_object_v1": event_object_v1,
+        "node_status_snapshot": node_status,
+        "vision_status_snapshot": vision_status,
         "capture_binding_mode": capture_binding_mode,
         "capture_binding_note": capture_binding_note,
         "capture_fallback_window_ms": max(0, safe_int(capture_fallback_window_ms, 0)),
@@ -808,6 +1213,7 @@ def build_node_event_export_payload(
     capture_log_file: Path,
     capture_dir: Path,
     node_status_file: Path,
+    vision_status_file: Path,
     event_export_dir: Path,
     event_id: str = "",
     capture_limit: int = 20,
@@ -819,6 +1225,8 @@ def build_node_event_export_payload(
         node_events_file=node_events_file,
         capture_log_file=capture_log_file,
         capture_dir=capture_dir,
+        node_status_file=node_status_file,
+        vision_status_file=vision_status_file,
         event_id=event_id,
         capture_limit=capture_limit,
         capture_fallback_window_ms=capture_fallback_window_ms,
@@ -1609,7 +2017,7 @@ def build_mock_bundle() -> dict[str, object]:
     session_started_ms = now_ms - 95_000
     track_x_mm = 320.0
     track_y_mm = 1800.0
-    event_id = f"A1-{(now_ms // 10) % 10000000000:010d}-MOCK"
+    event_id = "A1-0000000001-MOCK"
     suite_checks = [
         ("idle_baseline", "BRIEF", True, "PASS", "复位后先确认系统回到空闲基线。"),
         ("event_open_brief", "BRIEF", True, "PASS", "确认模拟目标进入活跃、确认、事件开启状态。"),
@@ -1741,11 +2149,13 @@ def build_mock_bundle() -> dict[str, object]:
         "frame_index": 428,
         "vision_state": "VISION_LOCKED",
         "vision_locked": 1,
-        "tracker_name": "CSRT",
+        "tracker_name": "MIL",
         "event_id": event_id,
-        "capture_reason": "ALERT",
+        "capture_reason": "AUTO_LOCK",
         "file_path": "mock_capture.png",
         "image_url": MOCK_IMAGE_URL,
+        "capture_sha256": hashlib.sha256(MOCK_IMAGE_URL.encode("utf-8")).hexdigest(),
+        "capture_bytes": len(MOCK_IMAGE_URL.encode("utf-8")),
         "bbox_x": 258,
         "bbox_y": 132,
         "bbox_w": 420,
@@ -1889,7 +2299,9 @@ def build_mock_bundle() -> dict[str, object]:
             "timestamp_ms": now_ms - 350,
             "vision_state": "VISION_LOCKED",
             "vision_locked": 1,
-            "tracker_name": "CSRT",
+            "tracker_name": "MIL",
+            "event_id": event_id,
+            "event_id_source": "node_status.event_id",
             "frame_index": 428,
             "bbox_x": 258,
             "bbox_y": 132,
@@ -1897,24 +2309,37 @@ def build_mock_bundle() -> dict[str, object]:
             "bbox_h": 250,
             "center_x": 468,
             "center_y": 257,
-            "last_capture_reason": "ALERT",
+            "last_capture_reason": "AUTO_LOCK",
+            "last_capture_file": "mock_capture.png",
+            "last_capture_timestamp_ms": capture_ts,
             "frame_width": 960,
             "frame_height": 540,
             "vision_confidence": 0.82,
             "bbox_stability_score": 0.74,
             "tracker_state": "TRACKING",
-            "detector_state": "FALLBACK_FLOW",
-            "detector_model_label": "coco-yolov8n",
-            "detector_class_strategy": "4:airplane,14:bird",
+            "detector_state": "READY_ONNX",
+            "detector_model_label": "drone-yolov8n",
+            "detector_class_strategy": "0:drone",
+            "detector_ready": 1,
+            "lock_source": "YOLO_AUTO",
+            "auto_lock_score": 0.88,
+            "auto_lock_class_name": "drone",
+            "frame_content_ready": 1,
+            "frame_mean_luma": 112.4,
+            "frame_luma_stddev": 36.8,
+            "frame_quality_reason": "OK",
+            "source_ready": 1,
+            "vision_chain_ready": 1,
+            "active_tracker_name": "MIL",
             "yolo_detections": [
                 {
                     "bbox_x": 274,
                     "bbox_y": 148,
                     "bbox_w": 390,
                     "bbox_h": 220,
-                    "score": 0.68,
-                    "class_id": 4,
-                    "class_name": "airplane",
+                    "score": 0.88,
+                    "class_id": 0,
+                    "class_name": "drone",
                 }
             ],
             "data_source_mode": "mock",
@@ -1922,6 +2347,8 @@ def build_mock_bundle() -> dict[str, object]:
         "node_status": {
             "ok": True,
             "available": True,
+            "serial_bridge_contract_version": 2,
+            "web_evidence_contract_version": WEB_EVIDENCE_CONTRACT_VERSION,
             "online": 1,
             "stale_age_ms": 180,
             "node_id": "A1",
@@ -1968,6 +2395,38 @@ def build_mock_bundle() -> dict[str, object]:
             "tracker_state": "TRACKING",
             "is_multirotor_like": 1,
             "multirotor_score": 8.0,
+            "cloud_online": 1,
+            "cloud_contract_version": 2,
+            "cloud_event_echo_required": 1,
+            "cloud_test_no_apply": 1,
+            "cloud_test_validated": 1,
+            "cloud_test_result_no_apply": 1,
+            "cloud_test_response_event_id": "A1-CLOUD-TEST",
+            "cloud_test_result_received_ms": now_ms - 1700,
+            "cloud_result_ok": 1,
+            "cloud_result_source": "EVENT_OPENED",
+            "cloud_request_event_id": event_id,
+            "cloud_expected_event_id": event_id,
+            "cloud_response_event_id": event_id,
+            "cloud_result_http_status": 200,
+            "cloud_result_esp_error": 0,
+            "cloud_result_latency_ms": 684,
+            "cloud_result_threat_level": "HIGH",
+            "cloud_result_action": "加强监测，准备采取反制措施",
+            "cloud_result_command_type": "GENERATE_ALERT",
+            "cloud_result_error": "NONE",
+            "cloud_result_received_ms": now_ms - 900,
+            "cloud_threat_level": "HIGH",
+            "cloud_alert_text": "发现非合作无人机！",
+            "cloud_action": "加强监测，准备采取反制措施",
+            "cloud_command_type": "GENERATE_ALERT",
+            "cloud_command_effect": "ALERT_GENERATED",
+            "cloud_command_applied": 1,
+            "cloud_command_source_event_id": event_id,
+            "cloud_command_reason": "MOCK_CLOUD_ASSESSMENT",
+            "cloud_command_applied_ms": now_ms - 900,
+            "cloud_error": "NONE",
+            "cloud_last_update_ms": now_ms - 900,
             "track_id": 1,
             "track_active": 1,
             "track_confirmed": 1,
@@ -2284,6 +2743,14 @@ def build_mock_node_event_detail_payload(mock_bundle: dict[str, object], event_i
         capture_records = []
         capture_binding_mode = "no_capture"
         capture_binding_note = "mock 数据未命中事件抓拍。"
+    node_status_snapshot = mock_bundle.get("node_status", {"ok": True, "available": False})
+    vision_status_snapshot = mock_bundle.get("status", {"ok": True, "available": False})
+    event_object_v1 = build_event_object_v1(
+        selected_event,
+        capture_records,
+        node_status_snapshot if isinstance(node_status_snapshot, dict) else {},
+        vision_status_snapshot if isinstance(vision_status_snapshot, dict) else {},
+    )
 
     return {
         "ok": True,
@@ -2291,6 +2758,9 @@ def build_mock_node_event_detail_payload(mock_bundle: dict[str, object], event_i
         "requested_event_id": normalized_event_id,
         "event_id": selected_event_id or "NONE",
         "event": selected_event,
+        "event_object_v1": event_object_v1,
+        "node_status_snapshot": node_status_snapshot,
+        "vision_status_snapshot": vision_status_snapshot,
         "capture_binding_mode": capture_binding_mode,
         "capture_binding_note": capture_binding_note,
         "capture_fallback_window_ms": 8000,
@@ -2347,6 +2817,8 @@ def create_handler(
     capture_fallback_window_ms: int,
     node_offline_timeout_ms: int,
 ) -> type[BaseHTTPRequestHandler]:
+    mock_bundle_template = build_mock_bundle()
+
     class VisionDashboardHandler(BaseHTTPRequestHandler):
         server_version = "FlytotalVisionWeb/1.2"
 
@@ -2412,7 +2884,7 @@ def create_handler(
             parsed = urlparse(self.path)
             query = parse_qs(parsed.query)
             mock_mode = is_mock_mode(query)
-            mock_bundle = build_mock_bundle() if mock_mode else None
+            mock_bundle = mock_bundle_template if mock_mode else None
 
             if parsed.path in ("/", "/dashboard", "/vision_dashboard.html"):
                 self.serve_file(dashboard_file, "text/html; charset=utf-8")
@@ -2475,12 +2947,10 @@ def create_handler(
                     a2 = mock_bundle.get("node_a2_status", {"ok": True, "available": False, "node_id": "A2", "online": 0})
                     self.send_json({"ok": True, "nodes": [a1, a2]})
                     return
-                node_payload = load_json_file(node_status_file)
+                node_payload = refresh_node_runtime_flags(load_json_file(node_status_file), node_offline_timeout_ms)
                 vision_payload = load_json_file(status_file)
-                v_state = str(vision_payload.get("vision_state", "NONE") or "NONE").strip().upper() or "NONE"
-                node_payload["vision_confidence"] = safe_float(vision_payload.get("vision_confidence", node_payload.get("vision_confidence", 0.0)), 0.0)
-                node_payload["bbox_stability_score"] = safe_float(vision_payload.get("bbox_stability_score", node_payload.get("bbox_stability_score", 0.0)), 0.0)
-                node_payload["tracker_state"] = str(vision_payload.get("tracker_state", node_payload.get("tracker_state", "LOST")) or "LOST")
+                node_payload = merge_vision_runtime_fields(node_payload, vision_payload, node_offline_timeout_ms)
+                v_state = str(node_payload.get("vision_state", "NONE") or "NONE").strip().upper() or "NONE"
                 wl = str(node_payload.get("wl_status", node_payload.get("whitelist_status", "WL_UNKNOWN")) or "WL_UNKNOWN").strip().upper() or "WL_UNKNOWN"
                 node_payload["vision_state"] = v_state
                 node_payload["vision_contribution"] = compute_vision_contribution(v_state, wl)
@@ -2489,16 +2959,18 @@ def create_handler(
 
             if parsed.path == "/api/node-status":
                 if mock_mode and isinstance(mock_bundle, dict):
-                    self.send_json(mock_bundle.get("node_status", {"ok": True, "available": False}))
+                    mock_node_payload = dict(
+                        mock_bundle.get("node_status", {"ok": True, "available": False})
+                    )
+                    mock_node_payload["web_evidence_contract_version"] = WEB_EVIDENCE_CONTRACT_VERSION
+                    self.send_json(mock_node_payload)
                     return
                 node_payload = refresh_node_runtime_flags(load_json_file(node_status_file), node_offline_timeout_ms)
                 # 从 vision bridge 的 status 文件读取当前视觉状态，注入视觉贡献字段
                 # （供网页风险区显示；score_delta 由 compute_vision_contribution 计算）。
                 vision_payload = load_json_file(status_file)
-                v_state = str(vision_payload.get("vision_state", "NONE") or "NONE").strip().upper() or "NONE"
-                node_payload["vision_confidence"] = safe_float(vision_payload.get("vision_confidence", node_payload.get("vision_confidence", 0.0)), 0.0)
-                node_payload["bbox_stability_score"] = safe_float(vision_payload.get("bbox_stability_score", node_payload.get("bbox_stability_score", 0.0)), 0.0)
-                node_payload["tracker_state"] = str(vision_payload.get("tracker_state", node_payload.get("tracker_state", "LOST")) or "LOST")
+                node_payload = merge_vision_runtime_fields(node_payload, vision_payload, node_offline_timeout_ms)
+                v_state = str(node_payload.get("vision_state", "NONE") or "NONE").strip().upper() or "NONE"
                 wl = str(
                     node_payload.get("wl_status",
                         node_payload.get("whitelist_status", "WL_UNKNOWN"))
@@ -2506,6 +2978,7 @@ def create_handler(
                 ).strip().upper() or "WL_UNKNOWN"
                 node_payload["vision_state"] = v_state
                 node_payload["vision_contribution"] = compute_vision_contribution(v_state, wl)
+                node_payload["web_evidence_contract_version"] = WEB_EVIDENCE_CONTRACT_VERSION
                 self.send_json(node_payload)
                 return
             if parsed.path == "/api/node-fleet-status":
@@ -2741,6 +3214,8 @@ def create_handler(
                         node_events_file,
                         capture_log_file,
                         capture_dir,
+                        node_status_file,
+                        status_file,
                         event_id,
                         capture_limit=max(1, min(50, default_limit)),
                         capture_fallback_window_ms=capture_fallback_window_ms,
@@ -2761,6 +3236,7 @@ def create_handler(
                         capture_log_file,
                         capture_dir,
                         node_status_file,
+                        status_file,
                         event_export_dir,
                         event_id,
                         capture_limit=max(1, min(50, default_limit)),
